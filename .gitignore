@@ -1,0 +1,15 @@
+node_modules/
+.next/
+out/
+dist/
+*.db
+*.db-wal
+*.db-shm
+hq/app/hq.db*
+hq/app/__pycache__/
+__pycache__/
+.venv/
+.env
+.DS_Store
+field/public/sw.js
+field/public/workbox-*.js

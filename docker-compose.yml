@@ -1,0 +1,49 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg15
+    environment:
+      POSTGRES_USER: polaris
+      POSTGRES_PASSWORD: polaris
+      POSTGRES_DB: polaris
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U polaris"], interval: 5s, retries: 10 }
+
+  hq:
+    build: ./hq
+    ports: ["8000:8000"]
+    environment:
+      DATABASE_URL: postgresql://polaris:polaris@db:5432/polaris
+    depends_on: { db: { condition: service_healthy } }
+
+  gateway:
+    build:
+      context: ./sync-gateway
+      dockerfile: Dockerfile
+    ports: ["8787:8787"]
+    environment:
+      HQ_URL: http://hq:8000
+      PSK_HEX: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    depends_on: [hq]
+
+  field:
+    build:
+      context: ./field
+      dockerfile: Dockerfile
+    ports: ["3000:3000"]
+    environment:
+      NEXT_PUBLIC_GATEWAY_URL: ws://localhost:8787
+      NEXT_PUBLIC_HQ_URL: http://localhost:8000
+      NEXT_PUBLIC_PSK_HEX: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    depends_on: [gateway]
+
+  hq-dashboard:
+    build:
+      context: ./hq-dashboard
+      dockerfile: Dockerfile
+    ports: ["3001:3001"]
+    environment:
+      NEXT_PUBLIC_HQ_URL: http://hq:8000
+    depends_on: [hq]
+
+volumes: { pgdata: {} }

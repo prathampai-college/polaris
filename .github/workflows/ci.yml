@@ -1,0 +1,73 @@
+name: CI — POLARIS
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shared:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci --prefix shared || npm install --prefix shared
+      - run: npm --prefix shared test
+      - run: npx tsc -p shared/tsconfig.json --noEmit
+
+  gateway:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm ci --prefix sync-gateway || npm install --prefix sync-gateway
+      - run: npm --prefix sync-gateway test
+
+  field:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm ci --prefix field || npm install --prefix field --silent
+      - run: npx tsc -p field/tsconfig.json --noEmit
+
+  hq:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install -r hq/requirements.txt -r ai/training/requirements.txt
+      - run: pip install pytest httpx onnxruntime
+      - run: pytest hq/tests -v
+      - run: python -m py_compile hq/app/main.py hq/app/db.py
+      - name: Check budgets (ONNX <2MB, synthetic CSV exists)
+        run: |
+          test -f ai/thermo_residual.onnx
+          test $(stat -c%s ai/thermo_residual.onnx) -lt 2097152
+          test -f ai/training/weather_fuel_history.csv
+          echo "budgets OK"
+
+  chaos:
+    runs-on: ubuntu-latest
+    needs: [shared, gateway, hq]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: npm install --prefix shared --silent && npx tsc -p shared/tsconfig.json
+      - run: npm install --prefix sync-gateway --silent && npx tsc -p sync-gateway/tsconfig.json
+      - run: pip install -r hq/requirements.txt onnxruntime pytest httpx -q
+      - run: node scripts/m4_verify.mjs
+      - run: node scripts/m3_verify.mjs
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config
+      - run: docker compose build hq gateway
