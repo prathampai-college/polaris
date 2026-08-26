@@ -1,0 +1,23 @@
+{
+  "name": "polaris-sync-gateway",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/gateway.ts",
+    "start": "node dist/gateway.js",
+    "build": "tsc",
+    "test": "npm run build && node test/gateway.test.mjs"
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.0.0",
+    "ulid": "^2.3.0",
+    "ws": "^8.17.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0",
+    "@types/node": "^20.12.0"
+  }
+}

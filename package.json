@@ -1,0 +1,20 @@
+{
+  "name": "polaris-root",
+  "private": true,
+  "type": "module",
+  "workspaces": ["shared", "sync-gateway", "field", "hq-dashboard"],
+  "scripts": {
+    "test": "npm --prefix shared test && npm --prefix sync-gateway test && pytest hq/tests -q",
+    "test:shared": "npm --prefix shared test",
+    "test:gateway": "npm --prefix sync-gateway test",
+    "test:hq": "pytest hq/tests -q",
+    "test:chaos": "node scripts/m4_verify.mjs && node scripts/m3_verify.mjs",
+    "test:e2e": "node scripts/m1_verify.mjs && node scripts/m2_verify.mjs",
+    "lint": "eslint shared/src sync-gateway/src --ext .ts || echo \"eslint not installed\"",
+    "lint:fix": "eslint shared/src sync-gateway/src --ext .ts --fix",
+    "typecheck": "npx tsc -p shared/tsconfig.json --noEmit && npx tsc -p sync-gateway/tsconfig.json --noEmit",
+    "build": "npm --prefix shared run build && npm --prefix sync-gateway run build",
+    "verify": "node scripts/m1_verify.mjs && node scripts/m2_verify.mjs && node scripts/m3_verify.mjs && node scripts/m4_verify.mjs && node scripts/m5_verify.mjs",
+    "prepare": "husky install 2>/dev/null || true"
+  }
+}

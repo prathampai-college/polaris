@@ -1,0 +1,6 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+:root { color-scheme: dark; }
+body { @apply bg-polar-bg text-white antialiased; }
+.glove-btn { @apply min-h-[48px] min-w-[48px] px-6 py-3 text-lg font-semibold rounded-lg active:scale-95 transition; }
