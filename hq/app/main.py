@@ -223,6 +223,7 @@ class TelemetryIn(BaseModel):
     wind_speed: float
     pressure: float
     dg_load: float
+    acoustic_anomaly: float = 0.0 # Phase 4: acoustic prognostics score
 
 @app.post("/telemetry")
 def post_telemetry(t: TelemetryIn):
@@ -243,6 +244,11 @@ def post_telemetry(t: TelemetryIn):
 @app.get("/telemetry/latest")
 def latest_telemetry(station_id: str = "ST-BHARATI"):
     return _fetch_one("SELECT * FROM telemetry WHERE station_id=? ORDER BY ts DESC LIMIT 1", (station_id,)) or {}
+
+@app.get("/telemetry/history")
+def history_telemetry(station_id: str = "ST-BHARATI", days: int = 30):
+    # Phase 3: TimescaleDB trend history endpoint
+    return _fetch_all("SELECT date(ts) as day, AVG(temp_outside) as avg_temp, AVG(dg_load) as avg_load FROM telemetry WHERE station_id=? GROUP BY date(ts) ORDER BY day DESC LIMIT ?", (station_id, days))
 
 def check_and_escalate(station_id: str, tele):
     conn=get_conn()
@@ -275,6 +281,28 @@ def check_and_escalate(station_id: str, tele):
                 conn.execute("INSERT OR IGNORE INTO indents VALUES (?,?,?,?,?,?,?,?)", (iid, station_id, asset_id, 500, "CRITICAL", "DRAFT", "FORECAST_AUTO", now))
                 conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (iid, "FORECAST_AUTO", "INDENT_AUTO_CRITICAL", "indents", None, f"forecast {days:.1f}d", now))
                 conn.commit()
+
+    # Phase 4: Acoustic Prognostics Escalation
+    if getattr(tele, 'acoustic_anomaly', 0.0) > 0.90:
+        row = _fetch_one("SELECT id FROM assets WHERE sku='SPARE-BRG-6205-007' LIMIT 1")
+        if row:
+            brg_id = row["id"]
+            exists = _fetch_one("SELECT 1 as c FROM indents WHERE asset_id=? AND station_id=? AND status IN ('DRAFT','APPROVED','DISPATCHED')", (brg_id, station_id))
+            if not exists:
+                try:
+                    from ulid import ULID
+                    iid = str(ULID())
+                except:
+                    iid = str(uuid.uuid4())[:8]+"-ac"
+                if USE_PG:
+                    with conn:
+                        with conn.cursor() as cur:
+                            cur.execute(q("INSERT INTO indents VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, station_id, brg_id, 4, "CRITICAL", "DRAFT", "ACOUSTIC_AI", now))
+                            cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (iid, "ACOUSTIC_AI", "INDENT_ACOUSTIC_CRITICAL", "indents", None, "bearing whine > 90%", now))
+                else:
+                    conn.execute("INSERT OR IGNORE INTO indents VALUES (?,?,?,?,?,?,?,?)", (iid, station_id, brg_id, 4, "CRITICAL", "DRAFT", "ACOUSTIC_AI", now))
+                    conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (iid, "ACOUSTIC_AI", "INDENT_ACOUSTIC_CRITICAL", "indents", None, "bearing whine > 90%", now))
+                    conn.commit()
 
 @app.get("/forecast/{station_id}")
 def forecast(station_id: str, asset_sku: str = "FUEL-DIESEL-001"):

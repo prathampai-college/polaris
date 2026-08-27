@@ -6,6 +6,10 @@
 let _db: any = null;
 let _sqlite3: any = null;
 
+// Automerge CRDT state for offline merging (Phase 2)
+let _amDoc: any = null;
+
+
 const SCHEMA_SQL = `
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
@@ -47,6 +51,19 @@ export async function getDb(): Promise<any> {
   _db.exec(SCHEMA_SQL);
   // ensure WAL
   try { _db.exec('PRAGMA journal_mode=WAL;'); } catch {}
+
+  // Initialize Automerge Doc (Phase 2)
+  if (!_amDoc) {
+    const Automerge = await import('@automerge/automerge');
+    _amDoc = Automerge.init();
+    _amDoc = Automerge.change(_amDoc, (doc: any) => {
+      if (!doc.assets) doc.assets = {};
+      if (!doc.indents) doc.indents = {};
+    });
+    // attach Automerge to window/global for consumeAsset
+    (window as any).Automerge = Automerge;
+  }
+
   return _db;
 }
 
@@ -127,10 +144,21 @@ export async function consumeAsset(opts: { assetId: string; delta: number; type:
   try {
     db.exec({ sql: 'UPDATE assets SET qty=?, version=?, updated_at=? WHERE id=?', bind: [newQty, patch.version, patch.updated_at, opts.assetId] });
     db.exec({ sql: 'INSERT INTO transactions (id, asset_id, type, qty_delta, actor_id, ts, sync_status) VALUES (?,?,?,?,?,?,?)', bind: [id, opts.assetId, opts.type, opts.delta, opts.actorId, ts, 'PENDING'] });
-    db.exec({ sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)', bind: [ulid(), opts.actorId, auditAction, 'assets', JSON.stringify(asset), JSON.stringify({ ...asset, ...patch }), ts] });
-    db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, status) VALUES (?,?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'assets', opts.assetId, 'UPSERT', patchBytes, asset.version ?? 1, ts, 'PENDING'] });
+    db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at) VALUES (?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'assets', opts.assetId, opts.type, patchBytes, asset.version, ts] });
+    db.exec({ sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)', bind: [id, opts.actorId, auditAction, 'assets', JSON.stringify({ qty: asset.qty, version: asset.version }), JSON.stringify(patch), ts] });
+
+    // Phase 2: CRDT Automerge record
+    if (_amDoc) {
+      const Automerge = (window as any).Automerge;
+      _amDoc = Automerge.change(_amDoc, (doc: any) => {
+        doc.assets[opts.assetId] = patch;
+      });
+      // Optionally sync this binary to outbox instead of msgpack patch, skipped here to keep legacy API intact
+    }
+
     db.exec('COMMIT');
-  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  } catch (e) {
+ db.exec('ROLLBACK'); throw e; }
   return { newQty, outboxUlid, patch };
 }
 
