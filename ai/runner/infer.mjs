@@ -40,11 +40,12 @@ export async function init() {
   return { session, scaler };
 }
 
-// Physics: base_load * (1 + k1*(T_inside - T_out) + k2*wind) + k3*pressureDelta
-const T_INSIDE=18, BASE_LOAD=110, K1=0.012, K2=0.018, K3=0.08;
+// ponytail: physics single source is shared/physics.json
+const _physicsJson = JSON.parse(fs.readFileSync(path.resolve('shared/physics.json'), 'utf8'));
+const { T_INSIDE, BASE: BASE_LOAD, K1, K2, K3 } = _physicsJson;
 export function physicsOnly(temp_out, wind, pressure) {
-  const pd=(1013-pressure)/1013;
-  return BASE_LOAD * (1 + K1*(T_INSIDE - temp_out) + K2*wind) + K3*pd*BASE_LOAD;
+  const pd = (1013 - pressure) / 1013;
+  return BASE_LOAD * (1 + K1 * (T_INSIDE - temp_out) + K2 * wind) + K3 * pd * BASE_LOAD;
 }
 
 export async function predict({ temp_outside, wind_speed, pressure, crew_count, dg_load }) {

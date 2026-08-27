@@ -1,6 +1,6 @@
 # API — POLARIS HQ (FastAPI :8000)
 
-Base: `http://localhost:8000` (or `hq:8000` in Docker). All JSON. CORS `*` for field PWA.
+Base: `http://localhost:8000` (or `hq:8000` in Docker). All JSON. CORS via `ALLOWED_ORIGINS` env (default `*` in dev, restrict in prod).
 
 ## Health
 
@@ -12,7 +12,7 @@ Base: `http://localhost:8000` (or `hq:8000` in Docker). All JSON. CORS `*` for f
 
 ## Audit
 
-`GET /audit?limit=20` → `AuditLog[] {id, actor_id, action, entity, before, after, ts}` immutable append-only.
+`GET /audit?limit=20` → `AuditLog[] {id, actor_id, action, entity, before, after, ts}` immutable append-only. `limit` clamped 1–200.
 
 ## Indents (Indent Workflow §3.2)
 
