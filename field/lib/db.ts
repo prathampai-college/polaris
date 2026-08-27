@@ -53,7 +53,7 @@ export async function getDb(): Promise<any> {
   try { _db.exec('PRAGMA journal_mode=WAL;'); } catch {}
 
   // Initialize Automerge Doc (Phase 2)
-  if (!_amDoc) {
+  if (!_amDoc && typeof window !== 'undefined') {
     const Automerge = await import('@automerge/automerge');
     _amDoc = Automerge.init();
     _amDoc = Automerge.change(_amDoc, (doc: any) => {

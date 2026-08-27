@@ -1,6 +1,8 @@
 # Architecture — POLARIS
-
-Source of truth: `PLAN.md:2`. This doc expands the stage-ready diagram with data-flow, failure modes, and production path.
+ 
+## 3D Container X-Ray & Automerge CRDTs
+- **3D X-Ray Locator:** Interactive React Three Fiber (`@react-three/fiber` & `@react-three/drei`) visualizer rendering ISO-20ft containers and mapping coordinate-indexed crates (`{x,y}`) in 3D space on both field tablets and HQ dashboard.
+- **Automerge CRDT:** WASM-backed distributed CRDT layer (`@automerge/automerge`) running locally in browser memory with SQLite WAL fallback for local outbox sync.
 
 ## Data-Flow `write → outbox → wire → HQ`
 

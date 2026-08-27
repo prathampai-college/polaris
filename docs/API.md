@@ -39,9 +39,11 @@ Base: `http://localhost:8000` (or `hq:8000` in Docker). All JSON. CORS via `ALLO
 // blizzard tele -38,22,960 → days 18 ci[15,22] pure 18.4
 ```
 
-`POST /telemetry` body `TelemetryIn {ts,station_id,temp_outside,wind_speed,pressure,dg_load}` → `{ok:true}` + triggers `check_and_escalate` (if `qty/total ≤20` creates `CRITICAL` indent 500 units, `FORECAST_AUTO`, DRAFT).
+`POST /telemetry` body `TelemetryIn {ts,station_id,temp_outside,wind_speed,pressure,dg_load,acoustic_anomaly?}` → `{ok:true}` + triggers `check_and_escalate` (if `qty/total ≤20` creates `CRITICAL` diesel indent 500 units, `FORECAST_AUTO`; if `acoustic_anomaly > 0.90` creates `CRITICAL` bearing indent 4 pcs, `ACOUSTIC_AI`).
 
 `GET /telemetry/latest?station_id=ST-BHARATI` → last row or `{}`.
+
+`GET /telemetry/history?station_id=ST-BHARATI&days=30` → `[{day, avg_temp, avg_load}]` aggregated telemetry history for TimescaleDB trend visualization.
 
 ## Sync (PolarNet Micro-Gateway)
 
