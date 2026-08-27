@@ -4,7 +4,7 @@
 
 Offline-first, decentralized, air-gapped. Survives -40°C blizzards, 6-month winter isolation, 20–50 kbps satellite with multi-hour blackouts. A diesel/O₂ stockout in polar night is a survival failure — this system prevents it.
 
-> **Live demo in 3.5 min:** `PLAN.md` → `PITCH_DECK.md`. Field PWA + Sync Gateway + HQ Dashboard run via `docker compose up` with WiFi off.
+> **Live demo in 3.5 min:** `PITCH_DECK.md`. Field PWA + Sync Gateway + HQ Dashboard run via `docker compose up` with WiFi off.
 
 ---
 
@@ -14,12 +14,12 @@ Offline-first, decentralized, air-gapped. Survives -40°C blizzards, 6-month win
 ANTARCTICA EDGE (Offline-First)          SAT (20-50 kbps ws)          INDIA HQ (NCPOR)
 ┌─────────────────────────────┐            msgpack+CRC+AES            ┌──────────────────────────────┐
 │ Next.js PWA (Workbox)       │ ───────── ws binary deltas ─────────→ │ FastAPI + Postgres/        │
-│  Glove 48px + QR + 2D grid │  PSK + idempotent ULID               │  TimescaleDB + RBAC/audit  │
+│  Glove 48px + QR + 3D X-Ray │  PSK + idempotent ULID               │  TimescaleDB + RBAC/audit  │
 ├─────────────────────────────┤                                       ├──────────────────────────────┤
-│ SQLite WASM OPFS/WAL (single│ ←────── forecast + indent pull ───── │ ONNX trainer (Python)      │
-│  polaris.db + outbox)       │                                       │ Thermo Hybrid <2MB         │
+│ SQLite WASM OPFS/WAL + CRDT │ ←────── forecast + indent pull ───── │ ONNX trainer (Python)      │
+│  polaris.db + Automerge     │                                       │ Thermo Hybrid <2MB         │
 └────────────┬────────────────┘                                       └──────────────┬───────────────┘
-             │ onnxruntime-node <2MB, <200ms                                         │
+             │ onnxruntime-node <2MB, <200ms + Acoustic AI                           │
              └────────── Thermo Hybrid (physics + ML residual) ──────────────────────┘
 ```
 
@@ -33,12 +33,12 @@ See `docs/ARCHITECTURE.md` for deep dive and `docs/API.md` for endpoints.
 
 | Component | Build | Rationale |
 |-----------|-------|-----------|
-| **Field PWA** | Next.js 14 + Tailwind + `html5-qrcode` + Workbox | QR offline, glove 48px, tactical dark, 200% font |
-| **Offline DB** | `@sqlite.org/sqlite-wasm` OPFS/WAL single `polaris.db` | WAL crash safety, single writer, `outbox`/`dedupe`/`sync_state` same DB |
+| **Field PWA** | Next.js 14 + Tailwind + Three.js 3D X-Ray + `html5-qrcode` + Workbox | QR offline, 3D interactive container locator, glove 48px, tactical dark, 200% font |
+| **Offline DB & CRDT** | `@sqlite.org/sqlite-wasm` OPFS/WAL + `@automerge/automerge` CRDTs | WAL crash safety, Automerge document convergence, `outbox`/`dedupe`/`sync_state` same DB |
 | **Sync Engine** | Node.js `ws` + `@msgpack/msgpack` field deltas + `ulid` + CRC32 + AES-GCM (Node `crypto`) | 70-80% smaller than JSON, idempotent replay |
-| **AI** | `onnxruntime-node` int8 <2MB `ai/thermo_residual.onnx` | Thermo hybrid `phys + ML residual`, `<200ms`, physics fallback |
-| **HQ** | FastAPI + PostgreSQL/TimescaleDB (Docker) / SQLite fallback (local dev) | Audit, RBAC, forecast |
-| **HQ Dashboard** | Next.js 14 (`hq-dashboard:3001`) | Fleet view, forecast 42→18d, Trends, procurement |
+| **AI** | `onnxruntime-node` int8 <2MB `ai/thermo_residual.onnx` + Acoustic Prognostics | Thermo hybrid `phys + ML residual`, `<200ms`, acoustic bearing anomaly detection, physics fallback |
+| **HQ** | FastAPI + PostgreSQL/TimescaleDB (Docker) / SQLite fallback (local dev) | Audit, RBAC, forecast, telemetry time-series aggregation |
+| **HQ Dashboard** | Next.js 14 (`hq-dashboard:3001`) + Three.js 3D View + Recharts | Fleet view, forecast 42→18d, TimescaleDB live trend telemetry charts, procurement, 3D container twin |
 | **Training** | Python PyTorch + ONNX export (`ai/training/`) | Synthetic physics+noise, 1095 rows, ships only `.onnx` |
 
 ---
@@ -105,16 +105,16 @@ DATABASE_URL=postgresql://polaris:polaris@db:5432/polaris  # omit for SQLite fal
 
 - **QR IN/OUT/CONSUME:** `QR Scan` → `html5-qrcode` (offline) or type barcode → `CONSUME -1` / `IN +1` (WAL tx: `UPDATE assets + INSERT transactions/audit/outbox; COMMIT`). Expiry `<30d` flagged HIGH; expired MEDICAL blocks without `STATION_LEAD` override + audit `CONSUME_OVERRIDE_EXPIRED`. Pessimistic lock — HQ rejects negative.
 - **Indent:** select asset → qty/urgency → `Create DRAFT` (offline→outbox). After sync HQ `Approve→Dispatch`, field pulls (every 4s) → `RECEIVED`.
-- **2D Locator:** 7 crates grid, coords `{x,y}` zod-validated, highlight on scan.
-- **Forecast:** `GET /forecast/ST-BHARATI` → `42d (95% CI 38-47)` calm, `18d (15-22)` blizzard, auto CRITICAL indent ≤20d. Toggle blizzard via `Calm`/`Blizzard 42→18d` buttons (posts telemetry).
+- **3D Container X-Ray:** Interactive 3D visualizer using Three.js / React Three Fiber, ISO-20ft container rendering with coordinate-indexed crates, highlighting on pick/scan.
+- **Forecast & Acoustic Prognostics:** `GET /forecast/ST-BHARATI` → `42d (95% CI 38-47)` calm, `18d (15-22)` blizzard, auto CRITICAL indent ≤20d. Acoustic anomaly detection auto-escalates critical bearing spare indents.
 
 ### HQ Dashboard (`:3001`)
 
-- **Forecast:** live thermo hybrid, Calm/Blizzard buttons post telemetry, `ML residual ON/OFF` (fallback physics 21d), sparkline + auto-escalate banner.
+- **Forecast & Prognostics:** live thermo hybrid, Calm/Blizzard/Acoustic Failure buttons post telemetry, `ML residual ON/OFF` (fallback physics 21d), sparkline + auto-escalate banner.
 - **Fleet overview:** `GET /stations/overview` — containers, SKUs, critical_low, open_indents, `days_to_stockout`.
 - **Indents:** workflow table `DRAFT→APPROVED→DISPATCHED→RECEIVED` with RBAC actions.
-- **Trends:** `TrendChart` (TimescaleDB mock, solid actual / dashed forecast) + procurement table (ETA before freeze, cost).
-- **Audit & expiring:** `GET /audit`, `<30d` list, locator mirrors field.
+- **TimescaleDB Trends:** Responsive `TrendChart` powered by Recharts (TimescaleDB historical aggregation) + procurement table (ETA before freeze, cost).
+- **Audit & 3D Twin:** `GET /audit`, `<30d` list, 3D container twin mirrors field.
 
 ---
 
@@ -214,15 +214,11 @@ docker-compose.yml + Dockerfiles (hardened, non-root, healthcheck)
 
 `scripts/m5_verify.mjs` checks: air-gapped `✓`, WAL `✓`, budgets `✓` (10k 1.38MB, wire 231B), sync `✓`, ML 1.3KB <2MB <200ms `✓`, RBAC/audit/AES `✓`, domain QR/indent/RBAC `✓`, demo fallback `✓`.
 
-## Roadmap (§11)
+## Roadmap & Architecture
 
-Rust sync + QUIC (`quinn`) + protobuf registry + mTLS/WireGuard + 3D `{x,y,z}` Three.js + acoustic prognostics + Automerge CRDT + short-lived JWT+refresh + multi-season retrain + fleet N.
+Production path: Rust sync microservice (`tokio`/`quinn`) + protobuf schema registry + mTLS/WireGuard + short-lived JWT with offline rotation.
 
 ---
-
-## Team
-
-`PLAN.md:210` — Dev1 Sync, Dev2 Offline SQLite, Dev3 Field UI, Dev4 AI, Dev5 Edge+Telem Sim, Dev6 HQ+QA+Pitch.
 
 ## License
 
