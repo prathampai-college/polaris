@@ -21,6 +21,7 @@ export interface OutboxRow { ulid: string; device_id: string; entity: string; en
 export interface SyncState { device_id: string; last_acked_ulid: string | null; last_server_version: number; }
 
 export interface DeltaFrame {
+  type?: 'DELTA';
   ulid: string;
   device_id: string;
   entity: string;
@@ -31,4 +32,38 @@ export interface DeltaFrame {
   ts: string;
 }
 
-export interface AckFrame { ulid: string; status: 'APPLIED' | 'DEDUPED' | 'CONFLICT_CRITICAL'; server_version?: number; message?: string; }
+export interface AckFrame {
+  type?: 'ACK';
+  ulid: string;
+  status: 'APPLIED' | 'DEDUPED' | 'CONFLICT_CRITICAL' | 'FAILED';
+  server_version?: number;
+  message?: string;
+}
+
+export interface DownstreamDeltaFrame {
+  type: 'DOWNSTREAM_DELTA';
+  ulid: string;
+  station_id: string;
+  entity: 'indents' | 'assets' | 'telemetry';
+  entity_id: string;
+  op: 'UPSERT' | 'STATUS_CHANGE' | 'DELETE';
+  patch: Record<string, unknown>;
+  ts: string;
+}
+
+export interface SyncInitFrame {
+  type: 'SYNC_INIT';
+  device_id: string;
+  station_id: string;
+  last_acked_ulid?: string | null;
+}
+
+export interface SyncInitRespFrame {
+  type: 'SYNC_INIT_RESP';
+  station_id: string;
+  server_time: string;
+  indents: Indent[];
+}
+
+export type WireFrame = DeltaFrame | AckFrame | DownstreamDeltaFrame | SyncInitFrame | SyncInitRespFrame;
+

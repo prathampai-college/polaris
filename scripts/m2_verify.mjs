@@ -126,7 +126,8 @@ console.log('   indent exists?', !!fd2.prepare('SELECT 1 FROM indents WHERE id=?
 fd2.close();
 
 console.log('\n4) Start HQ + Gateway, drain outbox over ws (msgpack+CRC+AES)...');
-const hqProc=spawn('python',['-m','uvicorn','hq.app.main:app','--port',String(HQ_PORT),'--log-level','warning'],{cwd:process.cwd(),stdio:['ignore','pipe','pipe']});
+const hqProc=spawn('python',['-m','uvicorn','hq.app.main:app','--port',String(HQ_PORT),'--log-level','warning'],{env:{...process.env, GATEWAY_URL:`http://localhost:${GW_PORT}`, GATEWAY_INTERNAL_URL:`http://localhost:${GW_PORT}`}, cwd:process.cwd(),stdio:['ignore','pipe','pipe']});
+
 for(let i=0;i<30;i++){await sleep(300); try{const r=await fetch(`http://localhost:${HQ_PORT}/health`); if(r.ok){console.log('   HQ ready',await r.json()); break;}}catch{}}
 const gwProc=spawn('node',['sync-gateway/dist/gateway.js'],{env:{...process.env, HQ_URL:`http://localhost:${HQ_PORT}`, GATEWAY_PORT:String(GW_PORT), PSK_HEX}, stdio:['ignore','pipe','pipe']});
 gwProc.stdout.on('data',d=>process.stdout.write('[gw] '+d));
@@ -134,8 +135,33 @@ await sleep(800);
 const ws=new WebSocket(`ws://localhost:${GW_PORT}`);
 await new Promise((res,rej)=>{ ws.on('open',res); ws.on('error',rej); setTimeout(()=>rej(new Error('ws timeout')),5000);});
 console.log('   ws connected');
+
+// Send SYNC_INIT frame
+ws.send(toWire({ type: 'SYNC_INIT', device_id: deviceId, station_id: 'ST-BHARATI' }, PSK_HEX));
+await sleep(300);
+
 let acks=[];
-ws.on('message', d=>{ try{ const ack=fromWire(new Uint8Array(d),PSK_HEX); acks.push(ack); console.log(`   ← ACK ${ack.ulid.slice(0,8)} ${ack.status} v${ack.server_version??''}`);}catch(e){console.error(e.message);}});
+let downstreamPushes=[];
+ws.on('message', d=>{
+  try{
+    const frame=fromWire(new Uint8Array(d),PSK_HEX);
+    if(frame.type==='DOWNSTREAM_DELTA'){
+      downstreamPushes.push(frame);
+      console.log(`   ⚡ [DUPLEX PUSH] ${frame.entity}/${frame.entity_id} status=${frame.patch?.status}`);
+      const liveDb=new DatabaseSync(FIELD_DB);
+      if(frame.entity==='indents' && frame.patch?.status){
+        liveDb.prepare('UPDATE indents SET status=? WHERE id=?').run(frame.patch.status, frame.entity_id);
+      }
+      liveDb.close();
+    } else if(frame.type==='SYNC_INIT_RESP'){
+      console.log(`   ⚡ [SYNC_INIT] server_time=${frame.server_time} indents=${frame.indents?.length}`);
+    } else {
+      acks.push(frame);
+      console.log(`   ← ACK ${frame.ulid?.slice(0,8)} ${frame.status} v${frame.server_version??''}`);
+    }
+  } catch(e){ console.error(e.message); }
+});
+
 for(const f of hqFrames){ const wire=toWire(f,PSK_HEX); console.log(`   → ${f.entity}/${f.entity_id} ulid=${f.ulid.slice(0,8)} wire=${wire.length}B`); ws.send(wire); await sleep(120);}
 await sleep(1200);
 console.log(`   total ACKs ${acks.length}/${hqFrames.length} APPLIED=${acks.filter(a=>a.status==='APPLIED').length}`);
@@ -148,30 +174,36 @@ const hqIndents=await (await fetch(`http://localhost:${HQ_PORT}/indents`)).json(
 console.log(`   HQ indents ${hqIndents.length} DRAFT=${hqIndents.filter(i=>i.status==='DRAFT').length} expect 1 DRAFT ${hqIndents[0]?.id.slice(0,8)}`);
 if(!hqIndents.find(i=>i.id===indentId)) throw new Error('indent not synced to HQ');
 
-console.log('\n6) Indent lifecycle: HQ approve → dispatch → field pull → field receive → sync back...');
+console.log('\n6) Indent lifecycle: HQ approve → Duplex WS Push → field receive → sync back...');
 let res=await fetch(`http://localhost:${HQ_PORT}/indents/${indentId}`,{method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({status:'APPROVED', actor_id:'NCPOR_ADMIN'})});
 console.log('   HQ APPROVE', await res.json());
-// field pull (simulates SyncWorker.pullFromHQ)
-const pullDb=new DatabaseSync(FIELD_DB);
-let remote=await (await fetch(`http://localhost:${HQ_PORT}/indents`)).json();
-for(const rmt of remote){ const loc=pullDb.prepare('SELECT status FROM indents WHERE id=?').get(rmt.id); if(loc && loc.status!==rmt.status){ pullDb.prepare('UPDATE indents SET status=? WHERE id=?').run(rmt.status, rmt.id); console.log(`   field pull ${rmt.id.slice(0,8)} ${loc.status}→${rmt.status}`);} }
-console.log('   field indent after pull APPROVED?', pullDb.prepare('SELECT status FROM indents WHERE id=?').get(indentId).status);
+await sleep(400); // wait for duplex WS push to deliver
+
+const checkDb=new DatabaseSync(FIELD_DB);
+const fieldStatusAfterApprove=checkDb.prepare('SELECT status FROM indents WHERE id=?').get(indentId)?.status;
+console.log('   field indent status via Duplex WS push:', fieldStatusAfterApprove, '(expect APPROVED)');
+if(fieldStatusAfterApprove!=='APPROVED') throw new Error('duplex push for APPROVED failed');
+
 res=await fetch(`http://localhost:${HQ_PORT}/indents/${indentId}`,{method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({status:'DISPATCHED', actor_id:'NCPOR_ADMIN'})});
 console.log('   HQ DISPATCH', await res.json());
-remote=await (await fetch(`http://localhost:${HQ_PORT}/indents`)).json();
-for(const rmt of remote){ const loc=pullDb.prepare('SELECT status FROM indents WHERE id=?').get(rmt.id); if(loc && loc.status!==rmt.status) pullDb.prepare('UPDATE indents SET status=? WHERE id=?').run(rmt.status, rmt.id); }
-console.log('   field after 2nd pull', pullDb.prepare('SELECT status FROM indents WHERE id=?').get(indentId).status);
-// field marks RECEIVED and syncs
-const recvUlid=ulid(); const recvPatch={status:'RECEIVED', id:indentId}; ts=new Date().toISOString();
-pullDb.prepare('UPDATE indents SET status=? WHERE id=?').run('RECEIVED', indentId);
-pullDb.prepare('INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)').run(ulid(),'FIELD_OP_01','INDENT_RECEIVED','indents',JSON.stringify({status:'DISPATCHED'}),JSON.stringify({status:'RECEIVED'}),ts);
-pullDb.prepare('INSERT INTO outbox VALUES (?,?,?,?,?,?,?,?,?,?)').run(recvUlid,deviceId,'indents',indentId,'UPSERT',encode(recvPatch),0,0,ts,'PENDING');
-pullDb.close();
+await sleep(400); // wait for duplex WS push to deliver
+
+const fieldStatusAfterDispatch=checkDb.prepare('SELECT status FROM indents WHERE id=?').get(indentId)?.status;
+console.log('   field indent status via 2nd Duplex WS push:', fieldStatusAfterDispatch, '(expect DISPATCHED)');
+if(fieldStatusAfterDispatch!=='DISPATCHED') throw new Error('duplex push for DISPATCHED failed');
+
+// field marks RECEIVED and syncs back
+const recvUlid=ulid(); const recvPatch={status:'RECEIVED', id:indentId}; const tsRecv=new Date().toISOString();
+checkDb.prepare('UPDATE indents SET status=? WHERE id=?').run('RECEIVED', indentId);
+checkDb.prepare('INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)').run(ulid(),'FIELD_OP_01','INDENT_RECEIVED','indents',JSON.stringify({status:'DISPATCHED'}),JSON.stringify({status:'RECEIVED'}),tsRecv);
+checkDb.prepare('INSERT INTO outbox VALUES (?,?,?,?,?,?,?,?,?,?)').run(recvUlid,deviceId,'indents',indentId,'UPSERT',encode(recvPatch),0,0,tsRecv,'PENDING');
+checkDb.close();
 console.log('   field RECEIVED + outbox', recvUlid.slice(0,8));
-ws.send(toWire({ulid:recvUlid, device_id:deviceId, entity:'indents', entity_id:indentId, op:'UPSERT', patch:recvPatch, base_version:0, ts}, PSK_HEX));
+ws.send(toWire({ulid:recvUlid, device_id:deviceId, entity:'indents', entity_id:indentId, op:'UPSERT', patch:recvPatch, base_version:0, ts:tsRecv}, PSK_HEX));
 await sleep(800);
 const finalInd=await (await fetch(`http://localhost:${HQ_PORT}/indents`)).json();
 console.log(`   HQ indent final status=${finalInd.find(i=>i.id===indentId).status} expect RECEIVED`);
+
 
 console.log('\n7) HQ dashboard data checks...');
 const overview=await (await fetch(`http://localhost:${HQ_PORT}/stations/overview`)).json();

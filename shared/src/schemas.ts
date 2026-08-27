@@ -34,6 +34,26 @@ export const telemetrySchema = z.object({
   ts: z.string(), station_id: z.string(), temp_outside: z.number(), wind_speed: z.number(), pressure: z.number(), dg_load: z.number()
 });
 export const deltaFrameSchema = z.object({
+  type: z.literal('DELTA').optional(),
   ulid: z.string().length(26), device_id: z.string(), entity: z.string(), entity_id: z.string(),
   op: z.enum(['UPSERT','DELETE']), patch: z.record(z.unknown()), base_version: z.number().int().min(0), ts: z.string()
 });
+
+export const downstreamDeltaSchema = z.object({
+  type: z.literal('DOWNSTREAM_DELTA'),
+  ulid: z.string().length(26),
+  station_id: z.string(),
+  entity: z.enum(['indents', 'assets', 'telemetry']),
+  entity_id: z.string(),
+  op: z.enum(['UPSERT', 'STATUS_CHANGE', 'DELETE']),
+  patch: z.record(z.unknown()),
+  ts: z.string()
+});
+
+export const syncInitSchema = z.object({
+  type: z.literal('SYNC_INIT'),
+  device_id: z.string(),
+  station_id: z.string(),
+  last_acked_ulid: z.string().nullable().optional()
+});
+

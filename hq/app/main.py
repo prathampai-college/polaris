@@ -34,6 +34,27 @@ def check_rate_limit(key: str, limit: int = 120, window: int = 60) -> bool:
     _rate_store[key] = bucket
     return True
 
+GATEWAY_INTERNAL_URL = os.getenv("GATEWAY_INTERNAL_URL", os.getenv("GATEWAY_URL", "http://localhost:8787"))
+
+def notify_gateway(station_id: str, entity: str, entity_id: str, op: str, patch: dict):
+    """Notify Sync Gateway to broadcast a downstream delta frame to active station tablets."""
+    import urllib.request, json
+    try:
+        url = f"{GATEWAY_INTERNAL_URL}/internal/broadcast_delta"
+        data = json.dumps({
+            "station_id": station_id,
+            "entity": entity,
+            "entity_id": entity_id,
+            "op": op,
+            "patch": patch
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=1.0) as resp:
+            pass
+    except Exception as e:
+        logger.debug(f"Gateway downstream notification ignored: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -168,6 +189,16 @@ def create_indent(body: IndentCreate):
         conn.execute("INSERT OR IGNORE INTO indents VALUES (?,?,?,?,?,?,?,?)", (iid, body.station_id, body.asset_id, body.qty_requested, body.urgency, body.status, body.created_by, now))
         conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (iid, body.created_by, "INDENT_CREATE_HQ", "indents", None, str(body.model_dump()), now))
         conn.commit()
+    notify_gateway(body.station_id, "indents", iid, "UPSERT", {
+        "id": iid,
+        "station_id": body.station_id,
+        "asset_id": body.asset_id,
+        "qty_requested": body.qty_requested,
+        "urgency": body.urgency,
+        "status": body.status,
+        "created_by": body.created_by,
+        "created_at": now
+    })
     return {"id": iid, "status": body.status}
 
 class IndentPatch(BaseModel):
@@ -182,9 +213,10 @@ def patch_indent(indent_id: str, body: IndentPatch):
     except AttributeError:
         utc = datetime.timezone.utc
     now=datetime.datetime.now(utc).isoformat()
-    row=_fetch_one("SELECT status FROM indents WHERE id=?", (indent_id,))
+    row=_fetch_one("SELECT id, station_id, asset_id, status FROM indents WHERE id=?", (indent_id,))
     if not row: raise HTTPException(404, "indent not found")
     cur_status=row["status"]
+    station_id=row.get("station_id") or "ST-BHARATI"
     allowed = ALLOWED.get(cur_status, [])
     # allow DRAFT->RECEIVED for offline field demo (tolerant), otherwise enforce state machine
     is_offline_shortcut = (cur_status == "DRAFT" and body.status == "RECEIVED")
@@ -200,7 +232,13 @@ def patch_indent(indent_id: str, body: IndentPatch):
         conn.execute("UPDATE indents SET status=? WHERE id=?", (body.status, indent_id))
         conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (indent_id+body.status, body.actor_id, f"INDENT_{body.status}", "indents", str({"status":cur_status}), str({"status":body.status}), now))
         conn.commit()
+    notify_gateway(station_id, "indents", indent_id, "STATUS_CHANGE", {
+        "id": indent_id,
+        "status": body.status,
+        "updated_at": now
+    })
     return {"id": indent_id, "old": cur_status, "new": body.status}
+
 
 @app.get("/stations/overview")
 def stations_overview():
@@ -281,6 +319,16 @@ def check_and_escalate(station_id: str, tele):
                 conn.execute("INSERT OR IGNORE INTO indents VALUES (?,?,?,?,?,?,?,?)", (iid, station_id, asset_id, 500, "CRITICAL", "DRAFT", "FORECAST_AUTO", now))
                 conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (iid, "FORECAST_AUTO", "INDENT_AUTO_CRITICAL", "indents", None, f"forecast {days:.1f}d", now))
                 conn.commit()
+            notify_gateway(station_id, "indents", iid, "UPSERT", {
+                "id": iid,
+                "station_id": station_id,
+                "asset_id": asset_id,
+                "qty_requested": 500,
+                "urgency": "CRITICAL",
+                "status": "DRAFT",
+                "created_by": "FORECAST_AUTO",
+                "created_at": now
+            })
 
     # Phase 4: Acoustic Prognostics Escalation
     if getattr(tele, 'acoustic_anomaly', 0.0) > 0.90:
@@ -303,6 +351,17 @@ def check_and_escalate(station_id: str, tele):
                     conn.execute("INSERT OR IGNORE INTO indents VALUES (?,?,?,?,?,?,?,?)", (iid, station_id, brg_id, 4, "CRITICAL", "DRAFT", "ACOUSTIC_AI", now))
                     conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (iid, "ACOUSTIC_AI", "INDENT_ACOUSTIC_CRITICAL", "indents", None, "bearing whine > 90%", now))
                     conn.commit()
+                notify_gateway(station_id, "indents", iid, "UPSERT", {
+                    "id": iid,
+                    "station_id": station_id,
+                    "asset_id": brg_id,
+                    "qty_requested": 4,
+                    "urgency": "CRITICAL",
+                    "status": "DRAFT",
+                    "created_by": "ACOUSTIC_AI",
+                    "created_at": now
+                })
+
 
 @app.get("/forecast/{station_id}")
 def forecast(station_id: str, asset_sku: str = "FUEL-DIESEL-001"):
@@ -338,9 +397,9 @@ def sync_state(device_id: str):
 
 @app.post("/sync/ingest")
 def ingest(frame: DeltaFrame, request: Request):
-    if not check_rate_limit(f"ingest:{frame.device_id}", limit=120, window=60):
+    if not check_rate_limit(f"ingest:{frame.device_id}", limit=600, window=60):
         logger.warning(f"rate limited {frame.device_id}")
-        raise HTTPException(429, "rate limited: 120/min")
+        raise HTTPException(429, "rate limited: 600/min")
     # size guard: patch dict size approximation; wire budget already <2KB
     import json as _json
     try:
