@@ -1,21 +1,19 @@
 FROM node:20-alpine AS builder
-WORKDIR /app
-COPY package.json tsconfig.json next.config.mjs tailwind.config.ts postcss.config.mjs ./
-RUN npm ci --silent || npm install --silent
-COPY app ./app
-COPY lib ./lib
-COPY components ./components
-COPY public ./public
-RUN npm run build
+WORKDIR /workspace
+COPY shared ./shared
+RUN cd shared && npm ci --silent || npm install --silent && npx tsc
+COPY field ./field
+WORKDIR /workspace/field
+RUN npm ci --silent || npm install --silent && npm run build
 
 FROM node:20-alpine
 WORKDIR /app
 RUN apk add --no-cache curl
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/next.config.mjs ./next.config.mjs
+COPY --from=builder /workspace/field/package.json ./package.json
+COPY --from=builder /workspace/field/.next ./.next
+COPY --from=builder /workspace/field/public ./public
+COPY --from=builder /workspace/field/node_modules ./node_modules
+COPY --from=builder /workspace/field/next.config.mjs ./next.config.mjs
 EXPOSE 3000
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup && chown -R appuser:appgroup /app
 USER appuser

@@ -1,15 +1,3 @@
-import withPWA from 'next-pwa';
-
-const pwa = withPWA({
-  dest: 'public',
-  register: true,
-  skipWaiting: true,
-  disable: process.env.NODE_ENV === 'development',
-  runtimeCaching: [
-    { urlPattern: /^https:\/\/fonts\.(?:gstatic|googleapis)\.com\/.*/i, handler: 'CacheFirst', options: { cacheName: 'google-fonts', expiration: { maxEntries: 20 } } }
-  ]
-});
-
 const securityHeaders = [
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'X-Frame-Options', value: 'DENY' },
@@ -22,12 +10,14 @@ const securityHeaders = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  eslint: { ignoreDuringBuilds: true },
   experimental: { esmExternals: 'loose' },
   async headers() { return [{ source: '/(.*)', headers: securityHeaders }]; },
   webpack: (config) => {
     config.experiments = { ...config.experiments, asyncWebAssembly: true };
+    config.module.rules.push({ test: /\.sql$/, type: 'asset/source' });
     return config;
-  }
+  },
 };
 
-export default pwa(nextConfig);
+export default nextConfig;
