@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: npm, cache-dependency-path: shared/package-lock.json }
-      - run: npm ci --prefix shared
+      - run: npm i --legacy-peer-deps --prefix shared
       - run: npm --prefix shared test
       - run: npx tsc -p shared/tsconfig.json --noEmit
 
@@ -21,9 +21,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: npm, cache-dependency-path: sync-gateway/package-lock.json }
-      - run: npm ci --prefix shared
+      - run: npm i --legacy-peer-deps --prefix shared
       - run: npx tsc -p shared/tsconfig.json
-      - run: npm ci --prefix sync-gateway
+      - run: npm i --legacy-peer-deps --prefix sync-gateway
       - run: npm --prefix sync-gateway test
       - run: npx tsc -p sync-gateway/tsconfig.json --noEmit
 
@@ -33,9 +33,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: npm, cache-dependency-path: field/package-lock.json }
-      - run: npm ci --prefix shared
+      - run: npm i --legacy-peer-deps --prefix shared
       - run: npx tsc -p shared/tsconfig.json
-      - run: npm ci --prefix field
+      - run: npm i --legacy-peer-deps --prefix field
       - run: npx tsc -p field/tsconfig.json --noEmit
       - run: npm --prefix field run build
 
@@ -62,7 +62,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: npm, cache-dependency-path: hq-dashboard/package-lock.json }
-      - run: npm ci --prefix hq-dashboard
+      - run: npm i --legacy-peer-deps --prefix hq-dashboard
       - run: npx tsc -p hq-dashboard/tsconfig.json --noEmit
       - run: npm --prefix hq-dashboard run build
 
@@ -75,8 +75,8 @@ jobs:
         with: { node-version: 20 }
       - uses: actions/setup-python@v5
         with: { python-version: '3.11' }
-      - run: npm ci --prefix shared && npx tsc -p shared/tsconfig.json
-      - run: npm ci --prefix sync-gateway && npx tsc -p sync-gateway/tsconfig.json
+      - run: npm i --legacy-peer-deps --prefix shared && npx tsc -p shared/tsconfig.json
+      - run: npm i --legacy-peer-deps --prefix sync-gateway && npx tsc -p sync-gateway/tsconfig.json
       - run: pip install -r hq/requirements.txt -q
       - run: node scripts/m1_verify.mjs
       - run: node scripts/m2_verify.mjs
