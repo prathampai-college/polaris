@@ -56,10 +56,9 @@ See `docs/ARCHITECTURE.md` for deep dive and `docs/API.md` for endpoints.
 git clone <repo> polar-logistics; cd polar-logistics
 npm install --prefix shared; npx tsc -p shared/tsconfig.json
 npm install --prefix sync-gateway; npx tsc -p sync-gateway/tsconfig.json
-npm install --prefix field
+npm install --prefix field          # links @polaris/shared file:../shared
 npm install --prefix hq-dashboard
-pip install -r hq/requirements.txt
-pip install -r ai/training/requirements.txt  # for retrain only
+pip install -r hq/requirements.txt  # relaxes onnxruntime>=1.17 for py3.13 compat
 ```
 
 ### 2. Run without Docker (SQLite fallback — CI/no-Docker friendly)
