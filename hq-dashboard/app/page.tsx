@@ -10,28 +10,35 @@ export default function HQPage() {
   const [audit, setAudit] = useState<any[]>([]);
   const [forecast, setForecast] = useState<any>(null);
   const [tele, setTele] = useState<any>(null);
+  const [trend, setTrend] = useState<any[]>([]);
   const [mlOn, setMlOn] = useState(true);
   const [msg, setMsg] = useState('');
 
   async function load() {
     try {
-      const [s, a, ind, au, fc, tl] = await Promise.all([
+      const [s, a, ind, au, fc, tl, tr] = await Promise.all([
         fetch(`${HQ}/stations/overview`).then(r=>r.json()).catch(()=>[]),
         fetch(`${HQ}/assets`).then(r=>r.json()).catch(()=>[]),
         fetch(`${HQ}/indents`).then(r=>r.json()).catch(()=>[]),
         fetch(`${HQ}/audit?limit=20`).then(r=>r.json()).catch(()=>[]),
         fetch(`${HQ}/forecast/ST-BHARATI`).then(r=>r.json()).catch(()=>null),
         fetch(`${HQ}/telemetry/latest?station_id=ST-BHARATI`).then(r=>r.json()).catch(()=>null),
+        fetch(`${HQ}/telemetry/history?station_id=ST-BHARATI&days=7`).then(r=>r.json()).catch(()=>[]),
       ]);
-      setStations(s); setAssets(a); setIndents(ind); setAudit(au); setForecast(fc); setTele(tl?.temp_outside?tl:fc?.tele);
+      setStations(s); setAssets(a); setIndents(ind); setAudit(au); setForecast(fc); setTele(tl?.temp_outside?tl:fc?.tele); setTrend(tr.length ? tr : [
+            {day:'-6d', qty:4200, forecast:4200}, {day:'-5d', qty:4100, forecast:4080}, {day:'-4d', qty:3980, forecast:3950},
+            {day:'-3d', qty:3850, forecast:3800}, {day:'-2d', qty:3500, forecast:3400}, {day:'-1d', qty:3100, forecast:3000}, {day:'today', qty:2800, forecast:2600}
+          ]);
     } catch (e:any) { setMsg(e.message); }
   }
   useEffect(()=>{ load(); const t=setInterval(load, 3000); return ()=>clearInterval(t); },[]);
 
-  async function sendTelemetry(mode:'calm'|'blizzard'){
+  async function sendTelemetry(mode:'calm'|'blizzard'|'acoustic'){
     const payload = mode==='blizzard'
-      ? { ts: new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-38, wind_speed:22, pressure:960, dg_load:0.9 }
-      : { ts: new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-15, wind_speed:5, pressure:1013, dg_load:0.7 };
+      ? { ts: new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-38, wind_speed:22, pressure:960, dg_load:0.9, acoustic_anomaly:0.1 }
+      : mode==='acoustic'
+      ? { ts: new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-15, wind_speed:5, pressure:1013, dg_load:0.7, acoustic_anomaly:0.95 }
+      : { ts: new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-15, wind_speed:5, pressure:1013, dg_load:0.7, acoustic_anomaly:0.1 };
     await fetch(`${HQ}/telemetry`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
     setMsg(`telemetry ${mode} sent`);
     setTimeout(load, 500);
@@ -65,9 +72,10 @@ export default function HQPage() {
             <div>
               <h2 className="font-black text-lg">Stockout Forecast — Thermo Hybrid <span className="text-xs font-normal text-white/50">physics + ML residual ONNX {forecast.used_model?'int8 <2MB':'fallback'} • &lt;200ms</span></h2>
               <div className="flex gap-2 mt-2">
-                <button onClick={()=>sendTelemetry('calm')} className="bg-emerald-600 px-4 py-2 rounded text-sm">Calm baseline (−15°C, 5m/s)</button>
-                <button onClick={()=>sendTelemetry('blizzard')} className="bg-red-600 px-4 py-2 rounded text-sm animate-pulse">Blizzard (−38°C, 22m/s)</button>
-                <button onClick={()=>setMlOn(v=>!v)} className={`px-4 py-2 rounded text-sm ${mlOn?'bg-polar-accent':'bg-white/10'}`}>ML residual {mlOn?'ON':'OFF (physics only)'}</button>
+                <button onClick={()=>sendTelemetry('calm')} className="bg-emerald-600 px-4 py-2 rounded text-sm">Calm baseline</button>
+                <button onClick={()=>sendTelemetry('blizzard')} className="bg-red-600 px-4 py-2 rounded text-sm animate-pulse">Blizzard</button>
+                <button onClick={()=>sendTelemetry('acoustic')} className="bg-purple-600 px-4 py-2 rounded text-sm">Acoustic Failure</button>
+                <button onClick={()=>setMlOn(v=>!v)} className={`px-4 py-2 rounded text-sm ${mlOn?'bg-polar-accent':'bg-white/10'}`}>ML residual {mlOn?'ON':'OFF'}</button>
               </div>
               <div className="text-xs text-white/50 mt-1">Telemetry: {tele?.temp_outside}°C • {tele?.wind_speed} m/s • {tele?.pressure} hPa • dg {tele?.dg_load} • via AWS/simulator (PLAN §4)</div>
             </div>
@@ -163,10 +171,7 @@ export default function HQPage() {
       <section className="bg-polar-card rounded-xl p-3 border border-white/10">
         <h3 className="font-bold text-sm">TimescaleDB Trend • Procurement Forecast (M5)</h3>
         <div className="grid md:grid-cols-2 gap-3 mt-2">
-          <TrendChart data={[
-            {day:'-6d', qty:4200, forecast:4200}, {day:'-5d', qty:4100, forecast:4080}, {day:'-4d', qty:3980, forecast:3950},
-            {day:'-3d', qty:3850, forecast:3800}, {day:'-2d', qty:3500, forecast:3400}, {day:'-1d', qty:3100, forecast:3000}, {day:'today', qty:2800, forecast:2600}
-          ]} />
+          <TrendChart data={trend} />
           <div>
             <ProcurementTable rows={[
               {sku:'FUEL-DIESEL-001', name:'Diesel Winter', need:500, unit:'L', eta:'18d before freeze', cost:'₹1.2L'},

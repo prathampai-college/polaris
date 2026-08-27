@@ -9,14 +9,15 @@
     "test": "npm run build && node test/gateway.test.mjs"
   },
   "dependencies": {
-    "@polaris/shared": "file:../shared",
+    "@automerge/automerge": "^3.4.1",
     "@msgpack/msgpack": "^3.0.0",
+    "@polaris/shared": "file:../shared",
     "ws": "^8.17.0"
   },
   "devDependencies": {
+    "@types/node": "^20.12.0",
     "@types/ws": "^8.5.0",
     "tsx": "^4.16.0",
-    "typescript": "^5.5.0",
-    "@types/node": "^20.12.0"
+    "typescript": "^5.5.0"
   }
 }

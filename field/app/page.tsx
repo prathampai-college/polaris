@@ -103,8 +103,9 @@ export default function FieldPage() {
             <div className="text-xs text-white/60">{forecast.qty}L diesel • {forecast.tele.temp_outside}°C {forecast.tele.wind_speed}m/s • {forecast.days_to_stockout<=20?'⚠ CRITICAL indent auto-created':''}</div>
           </div>
           <div className="flex gap-2 items-center">
-            <button onClick={async()=>{ await fetch(`${HQ_URL}/telemetry`,{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ts:new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-15, wind_speed:5, pressure:1013, dg_load:0.7})}); refresh(); }} className="bg-emerald-600 px-3 py-2 rounded text-xs">Calm</button>
-            <button onClick={async()=>{ await fetch(`${HQ_URL}/telemetry`,{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ts:new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-38, wind_speed:22, pressure:960, dg_load:0.9})}); refresh(); }} className="bg-red-600 px-3 py-2 rounded text-xs">Blizzard 42→18d</button>
+            <button onClick={async()=>{ await fetch(`${HQ_URL}/telemetry`,{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ts:new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-15, wind_speed:5, pressure:1013, dg_load:0.7, acoustic_anomaly:0.1})}); refresh(); }} className="bg-emerald-600 px-3 py-2 rounded text-xs">Calm</button>
+            <button onClick={async()=>{ await fetch(`${HQ_URL}/telemetry`,{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ts:new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-38, wind_speed:22, pressure:960, dg_load:0.9, acoustic_anomaly:0.1})}); refresh(); }} className="bg-red-600 px-3 py-2 rounded text-xs">Blizzard 42→18d</button>
+            <button onClick={async()=>{ await fetch(`${HQ_URL}/telemetry`,{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ts:new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-15, wind_speed:5, pressure:1013, dg_load:0.7, acoustic_anomaly:0.95})}); refresh(); }} className="bg-purple-600 px-3 py-2 rounded text-xs">Simulate Bearing Failure</button>
           </div>
         </div>
       )}
