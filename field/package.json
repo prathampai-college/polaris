@@ -10,13 +10,17 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@polaris/shared": "file:../shared",
     "@msgpack/msgpack": "^3.0.0",
+    "@polaris/shared": "file:../shared",
+    "@react-three/drei": "^9.122.0",
+    "@react-three/fiber": "^8.18.0",
     "@sqlite.org/sqlite-wasm": "^3.53.0-build1",
+    "@types/three": "^0.185.4",
     "html5-qrcode": "^2.3.8",
     "next": "14.2.5",
     "react": "18.3.1",
     "react-dom": "18.3.1",
+    "three": "^0.185.1",
     "ulid": "^2.3.0",
     "zod": "^3.23.0"
   },

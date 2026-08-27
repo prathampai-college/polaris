@@ -144,7 +144,7 @@ export default function FieldPage() {
 
           <div className="bg-polar-card rounded-xl p-4 border border-white/10">
             <h3 className="font-bold mb-2">2D Grid Locator — tap asset to highlight</h3>
-            <Locator assets={assets} highlight={highlightCrate} onPick={setHighlightCrate} />
+            <LocatorWrap assets={assets} highlight={highlightCrate} onPick={setHighlightCrate} />
             <p className="text-xs text-white/30 mt-2">Coords {`{x,y}`} validated by zod at write time • out-of-bounds rejected.</p>
           </div>
         </div>
@@ -214,23 +214,10 @@ function QrWrap({ onScan, onClose }: { onScan:(t:string)=>void; onClose:()=>void
   return <Comp onScan={onScan} onClose={onClose} />;
 }
 
-function Locator({ assets, highlight, onPick }: { assets:any[]; highlight:string|null; onPick:(id:string)=>void }) {
-  const crates = ['C1-K1','C1-K2','C2-K1','C2-K2','C2-K3','C3-K1','C3-K2'];
-  const byId = new Map(assets.map((a:any)=>[a.crate_id, a]));
-  return (
-    <div className="grid grid-cols-3 gap-2">
-      {crates.map(id=>{
-        const a = byId.get(id) as any;
-        const coords = a?.coords ? JSON.parse(a.coords) : {x:'?',y:'?'};
-        const isHL = highlight===id;
-        return (
-          <button key={id} onClick={()=>onPick(id)} className={`rounded-lg p-2 border text-center transition ${isHL?'bg-amber-500 text-black border-amber-600 scale-105':a?'bg-emerald-600/20 border-emerald-500/30':'bg-white/5 border-white/10'}`}>
-            <div className="font-mono text-xs font-bold">{id} <span className="font-normal text-[10px]">{a?.container_id||''}</span></div>
-            <div className="text-[10px] opacity-60">{coords.x},{coords.y} • {a?.container_type||''}</div>
-            <div className="text-xs truncate">{a?`${a.sku.split('-')[0]} ${a.qty}`:'∅'}</div>
-          </button>
-        );
-      })}
-    </div>
-  );
+function LocatorWrap({ assets, highlight, onPick }: { assets:any[]; highlight:string|null; onPick:(id:string)=>void }) {
+  const [Comp, setComp]=useState<any>(null);
+  useEffect(()=>{ import('../components/Container3D').then(m=>setComp(()=>m.Container3D)); },[]);
+  if(!Comp) return <div className="text-xs text-white/30 h-64 flex items-center justify-center bg-black/40 rounded-xl">Loading 3D X-Ray...</div>;
+  return <Comp assets={assets} highlight={highlight} onPick={onPick} />;
 }
+
