@@ -10,26 +10,30 @@ services:
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U polaris"], interval: 5s, retries: 10 }
 
   hq:
-    build: ./hq
+    build:
+      context: .
+      dockerfile: hq/Dockerfile
     ports: ["8000:8000"]
     environment:
       DATABASE_URL: postgresql://polaris:polaris@db:5432/polaris
     depends_on: { db: { condition: service_healthy } }
+    healthcheck: { test: ["CMD", "curl", "-f", "http://localhost:8000/health"], interval: 10s, timeout: 3s, retries: 5 }
 
   gateway:
     build:
-      context: ./sync-gateway
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: sync-gateway/Dockerfile
     ports: ["8787:8787"]
     environment:
       HQ_URL: http://hq:8000
       PSK_HEX: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    depends_on: [hq]
+    depends_on:
+      hq: { condition: service_healthy }
 
   field:
     build:
-      context: ./field
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: field/Dockerfile
     ports: ["3000:3000"]
     environment:
       NEXT_PUBLIC_GATEWAY_URL: ws://localhost:8787
@@ -39,11 +43,12 @@ services:
 
   hq-dashboard:
     build:
-      context: ./hq-dashboard
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: hq-dashboard/Dockerfile
     ports: ["3001:3001"]
     environment:
       NEXT_PUBLIC_HQ_URL: http://hq:8000
-    depends_on: [hq]
+    depends_on:
+      hq: { condition: service_healthy }
 
 volumes: { pgdata: {} }
