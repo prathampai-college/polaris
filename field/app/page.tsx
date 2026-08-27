@@ -41,7 +41,7 @@ export default function FieldPage() {
     (async()=>{
       await getDb(); await seedIfEmpty(DEVICE_ID); await refresh();
       const w = new SyncWorker(DEVICE_ID);
-      w.onAck=(ack)=>{ setLog(l=>[`ACK ${ack.ulid.slice(0,8)} ${ack.status} v${ack.server_version??''}`, ...l].slice(0,20)); refresh(); setSyncStats({...w.stats}); };
+      w.onAck=(ack: any)=>{ setLog(l=>[`ACK ${String(ack.ulid).slice(0,8)} ${ack.status} v${ack.server_version??''}`, ...l].slice(0,20)); refresh(); setSyncStats({...w.stats}); };
       w.connect();
       // downstream pull for indents
       const pull = async()=>{ const r=await w.pullFromHQ(HQ_URL); if(r.pulled) { setLog(l=>[`PULL ${r.pulled} indents from HQ`,...l].slice(0,20)); refresh(); } };

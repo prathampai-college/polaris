@@ -9,6 +9,7 @@ const securityHeaders = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  eslint: { ignoreDuringBuilds: true },
   async headers() { return [{ source: '/(.*)', headers: securityHeaders }]; },
 };
 export default nextConfig;

@@ -1,6 +1,7 @@
 'use client';
 // SQLite WASM OPFS + WAL — single DB file polaris.db
 // Falls back to in-memory if OPFS unavailable (e.g. dev without secure context)
+// ponytail: SCHEMA_SQL single source is shared/sql/schema.sql — inline mirror kept for browser bundle (webpack .sql loader planned)
 
 let _db: any = null;
 let _sqlite3: any = null;
@@ -53,38 +54,17 @@ export async function seedIfEmpty(deviceId: string) {
   const db = await getDb();
   const cnt = db.selectValue('SELECT COUNT(*) FROM assets');
   if (cnt > 0) return { seeded: false, count: cnt };
-  // import seed data statically (duplicated for browser bundle)
-  const stations = [
-    ['ST-BHARATI','Bharati','69°24′S 76°11′E',24],
-    ['ST-MAITRI','Maitri','70°45′S 11°44′E',25],
-    ['ST-HIMADRI','Himadri','78°55′N 11°56′E',8],
-  ];
-  const containers = [
-    ['C1','ST-BHARATI','ISO_20ft','A1'],['C2','ST-BHARATI','ColdStore','A2'],['C3','ST-BHARATI','Hazmat','B1']
-  ];
-  const crates = [
-    ['C1-K1','C1','{"x":0,"y":0}','AMBIENT'],['C1-K2','C1','{"x":1,"y":0}','AMBIENT'],
-    ['C2-K1','C2','{"x":0,"y":1}','COLD'],['C2-K2','C2','{"x":1,"y":1}','COLD'],
-    ['C2-K3','C2','{"x":0,"y":2}','COLD'],['C3-K1','C3','{"x":0,"y":0}','AMBIENT'],['C3-K2','C3','{"x":0,"y":1}','HAZMAT'],
-  ];
-  const assets: any[] = [
-    ['A1','FUEL-DIESEL-001','Diesel (Winter Grade)','FUEL_DIESEL',4200,'L',null,'CRITICAL','C1-K1','FUEL-DIESEL-001'],
-    ['A2','FUEL-KERO-JP8-002','Kerosene JP-8','FUEL_KEROSENE',1800,'L',null,'CRITICAL','C1-K2','FUEL-KERO-JP8-002'],
-    ['A3','O2-CYL-47L-003','Oxygen Cylinder 47L','OXYGEN',24,'cyl','2026-09-15','CRITICAL','C2-K1','O2-CYL-47L-003'],
-    ['A4','RATION-FD-30D-004','Freeze-Dried Rations (30-day pack)','FOOD',90,'packs','2027-06-01','HIGH','C2-K2','RATION-FD-30D-004'],
-    ['A5','MED-ANTIBIOTIC-005','Antibiotic Kit (Amoxicillin)','MEDICAL',12,'kits','2026-09-20','CRITICAL','C2-K3','MED-ANTIBIOTIC-005'],
-    ['A6','MED-TRAUMA-006','Trauma Kit (Type A)','MEDICAL',6,'kits','2026-10-10','CRITICAL','C2-K3','MED-TRAUMA-006'],
-    ['A7','SPARE-BRG-6205-007','DG Bearing 6205-2RS','SPARES_DG',8,'pcs',null,'HIGH','C3-K1','SPARE-BRG-6205-007'],
-    ['A8','SPARE-FILTER-FUEL-008','DG Fuel Filter (Fleetguard)','SPARES_DG',14,'pcs',null,'HIGH','C3-K1','SPARE-FILTER-FUEL-008'],
-    ['A9','SPARE-HVAC-FAN-009','HVAC Blower Motor','SPARES_HVAC',2,'pcs',null,'HIGH','C3-K2','SPARE-HVAC-FAN-009'],
-    ['A10','SCI-ICE-CORE-010','Ice Core Drill Bit','SCIENTIFIC',4,'pcs',null,'LOW','C3-K2','SCI-ICE-CORE-010'],
-  ];
+  const { SEED_STATIONS, SEED_CONTAINERS, SEED_CRATES, SEED_ASSETS } = await import('@shared/seed.js');
+  const stations = (SEED_STATIONS as readonly { id: string; name: string; location: string; winter_crew_count: number }[]).map(s => [s.id, s.name, s.location, s.winter_crew_count]);
+  const containers = (SEED_CONTAINERS as readonly { id: string; station_id: string; type: string; position_2d: string }[]).map(c => [c.id, c.station_id, c.type, c.position_2d]);
+  const crates = (SEED_CRATES as readonly { id: string; container_id: string; coords: string; temp_zone: string }[]).map(c => [c.id, c.container_id, c.coords, c.temp_zone]);
+  const assets: unknown[] = (SEED_ASSETS as readonly { id: string; sku: string; name: string; category: string; qty: number; unit: string; expiry_date: string | null; criticality: string; crate_id: string; barcode: string }[]).map(a => [a.id, a.sku, a.name, a.category, a.qty, a.unit, a.expiry_date, a.criticality, a.crate_id, a.barcode]);
   db.exec('BEGIN');
   try {
     for (const s of stations) db.exec({ sql: 'INSERT OR IGNORE INTO stations VALUES (?,?,?,?)', bind: s });
     for (const c of containers) db.exec({ sql: 'INSERT OR IGNORE INTO containers VALUES (?,?,?,?)', bind: c });
     for (const c of crates) db.exec({ sql: 'INSERT OR IGNORE INTO crates VALUES (?,?,?,?)', bind: c });
-    for (const a of assets) db.exec({ sql: 'INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)', bind: [...a, new Date().toISOString()] });
+    for (const a of assets) db.exec({ sql: 'INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)', bind: [...(a as unknown[]), new Date().toISOString()] });
     db.exec({ sql: 'INSERT OR IGNORE INTO sync_state (device_id, last_server_version) VALUES (?,0)', bind: [deviceId] });
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); throw e; }
@@ -118,15 +98,8 @@ export async function listIndents() {
   const db = await getDb();
   return db.selectObjects('SELECT i.*, a.sku, a.name, a.unit FROM indents i LEFT JOIN assets a ON a.id=i.asset_id ORDER BY i.created_at DESC');
 }
-export function isExpiringSoon(expiry: string | null): boolean {
-  if (!expiry) return false;
-  const ms = new Date(expiry).getTime() - Date.now();
-  return ms < 30*86400000 && ms > -365*86400000; // within 30d and not long expired
-}
-export function isExpired(expiry: string | null): boolean {
-  if (!expiry) return false;
-  return new Date(expiry).getTime() < Date.now();
-}
+export { isExpiringSoon, isExpired } from '@shared/expiry.js';
+import { isExpired as _isExpired } from '@shared/expiry.js';
 
 // Atomic transaction: update asset + insert transaction + outbox + audit
 // Expiry: cannot CONSUME expired MEDICAL without override + audit entry (PLAN §3.2)
@@ -139,7 +112,7 @@ export async function consumeAsset(opts: { assetId: string; delta: number; type:
   const newQty = asset.qty + opts.delta;
   if (newQty < 0) throw new Error('insufficient stock');
   // Cold-chain & hazmat validation (zod layer simplified)
-  if (opts.type==='CONSUME' && asset.expiry_date && isExpired(asset.expiry_date) && !opts.overrideExpired) {
+  if (opts.type==='CONSUME' && asset.expiry_date && _isExpired(asset.expiry_date) && !opts.overrideExpired) {
     if (asset.category==='MEDICAL' || asset.category==='OXYGEN') {
       throw new Error(`EXPIRED: ${asset.sku} expired ${asset.expiry_date} — requires override + audit`);
     }

@@ -14,10 +14,9 @@
     "jsx": "preserve",
     "incremental": true,
     "plugins": [{ "name": "next" }],
-    "paths": { "@/*": ["./*"], "@shared/*": ["../shared/src/*"] },
+    "paths": { "@/*": ["./*"], "@shared/*": ["../shared/dist/*"], "@polaris/shared": ["../shared/dist/index.js"], "@polaris/shared/*": ["../shared/dist/*"] },
     "baseUrl": ".",
-    "types": ["node"],
-    "ignoreDeprecations": "6.0"
+    "types": ["node"]
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
   "exclude": ["node_modules"]
