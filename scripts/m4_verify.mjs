@@ -3,6 +3,8 @@
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { encode } from '@msgpack/msgpack';
 import { ulid } from 'ulid';
@@ -10,8 +12,8 @@ import WebSocket from 'ws';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 
 const PSK='a'.repeat(64), HQ_PORT=8771, GW_PORT=8791;
-const FIELD_DB='C:\\Users\\prath\\AppData\\Local\\Temp\\polaris-m4.db';
-const HQ_DB='C:\\Users\\prath\\OneDrive\\Desktop\\SIH\\polar-logistics\\hq\\app\\hq.db';
+const FIELD_DB = path.join(os.tmpdir(), 'polaris-m4.db');
+const HQ_DB = path.resolve('hq/app/hq.db');
 for(const f of [FIELD_DB,HQ_DB,HQ_DB+'-wal',HQ_DB+'-shm']) try{fs.unlinkSync(f);}catch{}
 function crc32(b){const t=new Uint32Array(256);for(let i=0;i<256;i++){let c=i;for(let k=0;k<8;k++)c=(c&1)?0xEDB88320^(c>>>1):c>>>1;t[i]=c;}let crc=0xFFFFFFFF;for(let i=0;i<b.length;i++)crc=t[(crc^b[i])&0xFF]^(crc>>>8);return (crc^0xFFFFFFFF)>>>0;}
 function enc(p,k){const key=Buffer.from(k,'hex');const n=randomBytes(12);const c=createCipheriv('aes-256-gcm',key,n);const e=Buffer.concat([c.update(p),c.final()]);return Buffer.concat([n,e,c.getAuthTag()]);}
@@ -59,7 +61,7 @@ console.log('\n[Test 2] Bandwidth & size budgets (CI asserts)');
 const dbsize=fs.statSync(FIELD_DB).size;
 console.log(`  polaris.db ${dbsize} bytes ${(dbsize/1024).toFixed(1)}KB budget <5MB: ${dbsize<5*1024*1024?'PASS':'FAIL'}`);
 // 10k txn size test (simulate)
-const tmpDB='C:\\Users\\prath\\AppData\\Local\\Temp\\polaris-10k.db'; try{fs.unlinkSync(tmpDB);}catch{}
+const tmpDB = path.join(os.tmpdir(), 'polaris-10k.db'); try{fs.unlinkSync(tmpDB);}catch{}
 const tdb=new DatabaseSync(tmpDB); tdb.exec(schema);
 tdb.prepare('INSERT OR IGNORE INTO stations VALUES (?,?,?,?,?)'.replace('VALUES (?,?,?,?,?)','VALUES (\'ST-BHARATI\',\'Bharati\',\'a\',24)')).run?.() ; // fallback
 try{ tdb.exec(`INSERT OR IGNORE INTO stations VALUES ('ST-BHARATI','Bharati','a',24)`);}catch{}

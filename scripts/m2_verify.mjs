@@ -3,6 +3,8 @@
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { encode, decode } from '@msgpack/msgpack';
 import { ulid } from 'ulid';
@@ -12,8 +14,8 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 const PSK_HEX='a'.repeat(64);
 const HQ_PORT=8766;
 const GW_PORT=8788;
-const FIELD_DB='C:\\Users\\prath\\AppData\\Local\\Temp\\polaris-field-m2.db';
-const HQ_DB='C:\\Users\\prath\\OneDrive\\Desktop\\SIH\\polar-logistics\\hq\\app\\hq.db';
+const FIELD_DB = path.join(os.tmpdir(), 'polaris-field-m2.db');
+const HQ_DB = path.resolve('hq/app/hq.db');
 for(const f of [FIELD_DB, HQ_DB, HQ_DB+'-wal', HQ_DB+'-shm']) try{fs.unlinkSync(f);}catch{}
 function crc32(buf){const t=new Uint32Array(256);for(let i=0;i<256;i++){let c=i;for(let k=0;k<8;k++)c=(c&1)?0xEDB88320^(c>>>1):c>>>1;t[i]=c;}let crc=0xFFFFFFFF;for(let i=0;i<buf.length;i++)crc=t[(crc^buf[i])&0xFF]^(crc>>>8);return (crc^0xFFFFFFFF)>>>0;}
 function encrypt(p,k){const key=Buffer.from(k,'hex');const n=randomBytes(12);const c=createCipheriv('aes-256-gcm',key,n);const e=Buffer.concat([c.update(p),c.final()]);return Buffer.concat([n,e,c.getAuthTag()]);}

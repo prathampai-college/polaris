@@ -3,8 +3,9 @@
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import fs from 'node:fs';
+import path from 'node:path';
 const HQ_PORT=8772;
-const HQ_DB='C:\\Users\\prath\\OneDrive\\Desktop\\SIH\\polar-logistics\\hq\\app\\hq.db';
+const HQ_DB=path.resolve('hq/app/hq.db');
 for(const f of [HQ_DB,HQ_DB+'-wal',HQ_DB+'-shm']) try{fs.unlinkSync(f);}catch{}
 console.log('=== M3 VERIFY: Thermo Hybrid ===');
 const onnxSize=fs.statSync('ai/thermo_residual.onnx').size;

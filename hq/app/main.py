@@ -18,10 +18,15 @@ ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 if os.getenv("DATABASE_URL") and ALLOWED_ORIGINS == ["*"]:
     logger.warning("CORS allow * in production – set ALLOWED_ORIGINS")
 
-# ponytail: in-memory rate limiter, per-process; use Redis if multi-worker throughput matters
+# in-memory bounded rate limiter
 _rate_store: dict = {}
 def check_rate_limit(key: str, limit: int = 120, window: int = 60) -> bool:
     now = time.time()
+    if len(_rate_store) > 1000:
+        for k in list(_rate_store.keys()):
+            _rate_store[k] = [t for t in _rate_store[k] if now - t < window]
+            if not _rate_store[k]:
+                _rate_store.pop(k, None)
     bucket = [t for t in _rate_store.get(key, []) if now - t < window]
     if len(bucket) >= limit:
         return False
@@ -49,7 +54,9 @@ async def add_security_headers_and_logging(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Cache-Control"] = "no-store"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none';"
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     response.headers["X-Request-ID"] = req_id
     logger.info(f"[{req_id}] {response.status_code} {time.time()-start:.3f}s")
     return response
@@ -314,13 +321,12 @@ def ingest(frame: DeltaFrame, request: Request):
         patch_bytes_len = 0
     if patch_bytes_len > 2048:
         raise HTTPException(413, "patch too large >2KB")
-    if len(frame.ulid) != 26:
-        # allow 20-30 for compat but warn if not 26
-        if len(frame.ulid) < 20 or len(frame.ulid) > 30:
-            raise HTTPException(400, "ulid must be 26 chars")
-    if frame.entity not in ["assets","indents","telemetry"] and frame.entity not in ["assets","indents"]:
-        # allow future entities but validate base
-        pass
+    if len(frame.ulid) < 20 or len(frame.ulid) > 30:
+        raise HTTPException(400, "ulid must be 26 chars")
+    if frame.entity not in ["assets", "indents", "telemetry", "stations", "containers", "crates"]:
+        raise HTTPException(400, f"unsupported entity {frame.entity}")
+    if frame.op not in ["UPSERT", "DELETE", "CONSUME", "IN", "ADJUST"]:
+        raise HTTPException(400, f"unsupported op {frame.op}")
     conn=get_conn()
     ulid=frame.ulid
     try:

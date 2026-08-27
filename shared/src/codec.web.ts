@@ -39,6 +39,7 @@ export async function toWire(frame: unknown, keyHex: string): Promise<Uint8Array
 }
 
 export async function fromWire(wire: Uint8Array, keyHex: string): Promise<unknown> {
+  if (wire.length < 4 + 12 + 16) throw new Error('wire too short');
   const crcExpected = new DataView(wire.buffer, wire.byteOffset, 4).getUint32(0, false);
   const enc = wire.subarray(4);
   const crcActual = crc32(enc);

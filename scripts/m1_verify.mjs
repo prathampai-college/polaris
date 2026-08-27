@@ -3,6 +3,7 @@
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { encode, decode } from '@msgpack/msgpack';
@@ -13,8 +14,8 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 const PSK_HEX = 'a'.repeat(64);
 const HQ_PORT = 8765;
 const GW_PORT = 8787;
-const FIELD_DB = 'C:\\Users\\prath\\AppData\\Local\\Temp\\polaris-field-test.db';
-const HQ_DB = 'C:\\Users\\prath\\OneDrive\\Desktop\\SIH\\polar-logistics\\hq\\app\\hq.db';
+const FIELD_DB = path.join(os.tmpdir(), 'polaris-field-test.db');
+const HQ_DB = path.resolve('hq/app/hq.db');
 
 // clean previous
 try { fs.unlinkSync(FIELD_DB); } catch {}
