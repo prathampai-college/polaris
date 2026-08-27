@@ -7,10 +7,12 @@ Generates weather_fuel_history.csv across 3 stations, 365 days each.
 """
 import csv, random, math, pathlib, numpy as np
 
+import json as _json
+_ph = _json.loads(pathlib.Path(__file__).parent.parent.parent.joinpath("shared/physics.json").read_text()) if pathlib.Path(__file__).parent.parent.parent.joinpath("shared/physics.json").exists() else {"T_INSIDE":18,"BASE":110,"K1":0.012,"K2":0.018,"K3":0.08}
 random.seed(42); np.random.seed(42)
-T_INSIDE = 18.0
-BASE_LOAD = 110.0  # L/day at calm 0C
-K1, K2, K3 = 0.012, 0.018, 0.08
+T_INSIDE = float(_ph["T_INSIDE"])
+BASE_LOAD = float(_ph["BASE"])
+K1, K2, K3 = float(_ph["K1"]), float(_ph["K2"]), float(_ph["K3"])
 OUT = pathlib.Path(__file__).parent / "weather_fuel_history.csv"
 OUT.parent.mkdir(parents=True, exist_ok=True)
 
