@@ -10,33 +10,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm, cache-dependency-path: shared/package-lock.json }
+        with: { node-version: 22, cache: npm, cache-dependency-path: shared/package-lock.json }
       - run: npm i --legacy-peer-deps --prefix shared
       - run: npm --prefix shared test
-      - run: npx tsc -p shared/tsconfig.json --noEmit
+      - run: npx --prefix shared tsc -p shared/tsconfig.json --noEmit
 
   gateway:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm, cache-dependency-path: sync-gateway/package-lock.json }
+        with: { node-version: 22, cache: npm, cache-dependency-path: sync-gateway/package-lock.json }
       - run: npm i --legacy-peer-deps --prefix shared
-      - run: npx tsc -p shared/tsconfig.json
+      - run: npm --prefix shared run build
       - run: npm i --legacy-peer-deps --prefix sync-gateway
       - run: npm --prefix sync-gateway test
-      - run: npx tsc -p sync-gateway/tsconfig.json --noEmit
+      - run: npx --prefix sync-gateway tsc -p sync-gateway/tsconfig.json --noEmit
 
   field:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm, cache-dependency-path: field/package-lock.json }
+        with: { node-version: 22, cache: npm, cache-dependency-path: field/package-lock.json }
       - run: npm i --legacy-peer-deps --prefix shared
-      - run: npx tsc -p shared/tsconfig.json
+      - run: npm --prefix shared run build
       - run: npm i --legacy-peer-deps --prefix field
-      - run: npx tsc -p field/tsconfig.json --noEmit
+      - run: npx --prefix field tsc -p field/tsconfig.json --noEmit
       - run: npm --prefix field run build
 
   hq:
@@ -61,10 +61,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm, cache-dependency-path: hq-dashboard/package-lock.json }
+        with: { node-version: 22, cache: npm, cache-dependency-path: hq-dashboard/package-lock.json }
       - run: npm i --legacy-peer-deps --prefix hq-dashboard
-      - run: npx tsc -p hq-dashboard/tsconfig.json --noEmit
+      - run: npx --prefix hq-dashboard tsc -p hq-dashboard/tsconfig.json --noEmit
       - run: npm --prefix hq-dashboard run build
+
 
   chaos:
     runs-on: ubuntu-latest
@@ -72,11 +73,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        with: { node-version: 22 }
       - uses: actions/setup-python@v5
         with: { python-version: '3.11' }
-      - run: npm i --legacy-peer-deps --prefix shared && npx tsc -p shared/tsconfig.json
-      - run: npm i --legacy-peer-deps --prefix sync-gateway && npx tsc -p sync-gateway/tsconfig.json
+      - run: npm i --legacy-peer-deps
+      - run: npm --prefix shared run build
+      - run: npm --prefix sync-gateway run build
       - run: pip install -r hq/requirements.txt -q
       - run: node scripts/m1_verify.mjs
       - run: node scripts/m2_verify.mjs
@@ -97,4 +99,5 @@ jobs:
       - run: curl -f http://localhost:3000/api/health || curl -f http://localhost:3000
       - run: curl -f http://localhost:3001/api/health || curl -f http://localhost:3001
       - run: docker compose down -v
+
 

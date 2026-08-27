@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "tsx watch src/gateway.ts",
     "start": "node dist/gateway.js",
-    "build": "tsc",
+    "build": "npm --prefix ../shared run build && tsc",
     "test": "npm run build && node test/gateway.test.mjs"
   },
   "dependencies": {

@@ -32,7 +32,8 @@ Gateway ← ACK (toWire ACK) ← HQ
 Field ← onmessage fromWire → UPDATE outbox SET ACKED, sync_state
 ```
 
-Downstream (HQ→Field) is polling: `field/lib/db.ts:197 pullIndentsFromHQ` every 4s `field/app/page.tsx:27` + `field/lib/sync.ts:76`. `KEY_ROTATE` delivered as outbox `op=KEY_ROTATE` on next window (old key retained one window for in-flight frames).
+Downstream (HQ→Field) is full-duplex WebSocket push: HQ triggers Gateway `/internal/broadcast_delta` on indent status changes (`APPROVED`, `DISPATCHED`), auto-critical forecast escalations, or asset mutations. Gateway broadcasts encrypted `DOWNSTREAM_DELTA` wire frames (<50ms) to connected tablets matching `station_id`. Initial handshake catch-up sync is performed via `SYNC_INIT` / `SYNC_INIT_RESP` binary frames without raw HTTP polling. `KEY_ROTATE` delivered as outbox `op=KEY_ROTATE` on next window (old key retained one window for in-flight frames).
+
 
 ## Offline-First Invariants
 

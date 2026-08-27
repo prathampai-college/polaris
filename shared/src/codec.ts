@@ -1,17 +1,17 @@
 import { encode, decode } from '@msgpack/msgpack';
-import type { DeltaFrame } from './types.js';
+import type { DeltaFrame, WireFrame } from './types.js';
 import { crc32 } from './crc.js';
 export { crc32 };
 
-export function encodeFrame(frame: DeltaFrame): Uint8Array {
+export function encodeFrame(frame: unknown): Uint8Array {
   return encode(frame);
 }
-export function decodeFrame(buf: Uint8Array): DeltaFrame {
-  return decode(buf) as DeltaFrame;
+export function decodeFrame<T = WireFrame>(buf: Uint8Array): T {
+  return decode(buf) as T;
 }
 
 /** Size comparison helper for CI logging */
-export function sizeReport(frame: DeltaFrame): { jsonBytes: number; msgpackBytes: number; savingPct: number } {
+export function sizeReport(frame: unknown): { jsonBytes: number; msgpackBytes: number; savingPct: number } {
   const jsonBytes = Buffer.byteLength(JSON.stringify(frame), 'utf8');
   const msgpackBytes = encode(frame).length;
   const savingPct = ((jsonBytes - msgpackBytes) / jsonBytes) * 100;
@@ -42,7 +42,7 @@ export function decryptFrame(frame: Uint8Array, keyHex: string): Uint8Array {
 }
 
 /** Wrap encode + encrypt + crc into wire bytes: [4B crc32 BE][encrypted msgpack]  */
-export function toWire(frame: DeltaFrame, keyHex: string): Uint8Array {
+export function toWire(frame: unknown, keyHex: string): Uint8Array {
   const msgpack = encode(frame);
   const encrypted = encryptFrame(msgpack, keyHex);
   const crc = crc32(encrypted);
@@ -52,12 +52,13 @@ export function toWire(frame: DeltaFrame, keyHex: string): Uint8Array {
   return out;
 }
 
-export function fromWire(wire: Uint8Array, keyHex: string): DeltaFrame {
+export function fromWire<T = WireFrame>(wire: Uint8Array, keyHex: string): T {
   if (wire.length < 4 + 12 + 16) throw new Error('wire too short');
   const crcExpected = new DataView(wire.buffer, wire.byteOffset, 4).getUint32(0, false);
   const encrypted = wire.subarray(4);
   const crcActual = crc32(encrypted);
   if (crcActual !== crcExpected) throw new Error(`CRC mismatch: expected ${crcExpected.toString(16)} got ${crcActual.toString(16)}`);
   const msgpack = decryptFrame(encrypted, keyHex);
-  return decode(msgpack) as DeltaFrame;
+  return decode(msgpack) as T;
 }
+

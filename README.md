@@ -12,20 +12,21 @@ Offline-first, decentralized, air-gapped. Survives -40°C blizzards, 6-month win
 
 ```
 ANTARCTICA EDGE (Offline-First)          SAT (20-50 kbps ws)          INDIA HQ (NCPOR)
-┌─────────────────────────────┐            msgpack+CRC+AES            ┌──────────────────────────────┐
-│ Next.js PWA (Workbox)       │ ───────── ws binary deltas ─────────→ │ FastAPI + Postgres/        │
-│  Glove 48px + QR + 3D X-Ray │  PSK + idempotent ULID               │  TimescaleDB + RBAC/audit  │
-├─────────────────────────────┤                                       ├──────────────────────────────┤
-│ SQLite WASM OPFS/WAL + CRDT │ ←────── forecast + indent pull ───── │ ONNX trainer (Python)      │
-│  polaris.db + Automerge     │                                       │ Thermo Hybrid <2MB         │
-└────────────┬────────────────┘                                       └──────────────┬───────────────┘
-             │ onnxruntime-node <2MB, <200ms + Acoustic AI                           │
+┌─────────────────────────────┐         msgpack+CRC+AES-GCM           ┌──────────────────────────────┐
+│ Next.js PWA (Workbox)       │ ◄══════ FULL-DUPLEX WEBSOCKET ══════► │ FastAPI + Postgres/        │
+│  Glove 48px + QR + 3D X-Ray │ ── Upstream Deltas + SYNC_INIT ────► │  TimescaleDB + RBAC/audit  │
+├─────────────────────────────┤ ◄── Downstream Push (<50ms) ──────── │                               │
+│ SQLite WASM OPFS/WAL + CRDT │                                       ├──────────────────────────────┤
+│  polaris.db + Automerge     │ ◄── Real-Time Indent & Asset Push ─── │ ONNX Trainer (Python)      │
+└────────────┬────────────────┘                                       │ Thermo Hybrid <2MB         │
+             │ onnxruntime-node <2MB, <200ms + Acoustic AI            └──────────────┬───────────────┘
              └────────── Thermo Hybrid (physics + ML residual) ──────────────────────┘
 ```
 
 **One language on field live path:** TypeScript/Node (`field` + `sync-gateway` + ONNX runner) — zero cross-FFI at the edge. HQ and training stay Python where they belong. Rust is the planned production hardening (`tokio`/`ort`), not this round.
 
 See `docs/ARCHITECTURE.md` for deep dive and `docs/API.md` for endpoints.
+
 
 ---
 
@@ -104,7 +105,7 @@ DATABASE_URL=postgresql://polaris:polaris@db:5432/polaris  # omit for SQLite fal
 ### Field (Bharati tablet)
 
 - **QR IN/OUT/CONSUME:** `QR Scan` → `html5-qrcode` (offline) or type barcode → `CONSUME -1` / `IN +1` (WAL tx: `UPDATE assets + INSERT transactions/audit/outbox; COMMIT`). Expiry `<30d` flagged HIGH; expired MEDICAL blocks without `STATION_LEAD` override + audit `CONSUME_OVERRIDE_EXPIRED`. Pessimistic lock — HQ rejects negative.
-- **Indent:** select asset → qty/urgency → `Create DRAFT` (offline→outbox). After sync HQ `Approve→Dispatch`, field pulls (every 4s) → `RECEIVED`.
+- **Indent:** select asset → qty/urgency → `Create DRAFT` (offline→outbox). Once HQ approves/dispatches, status is pushed instantly (<50ms) over the encrypted WebSocket without HTTP polling → `RECEIVED`.
 - **3D Container X-Ray:** Interactive 3D visualizer using Three.js / React Three Fiber, ISO-20ft container rendering with coordinate-indexed crates, highlighting on pick/scan.
 - **Forecast & Acoustic Prognostics:** `GET /forecast/ST-BHARATI` → `42d (95% CI 38-47)` calm, `18d (15-22)` blizzard, auto CRITICAL indent ≤20d. Acoustic anomaly detection auto-escalates critical bearing spare indents.
 
@@ -112,7 +113,7 @@ DATABASE_URL=postgresql://polaris:polaris@db:5432/polaris  # omit for SQLite fal
 
 - **Forecast & Prognostics:** live thermo hybrid, Calm/Blizzard/Acoustic Failure buttons post telemetry, `ML residual ON/OFF` (fallback physics 21d), sparkline + auto-escalate banner.
 - **Fleet overview:** `GET /stations/overview` — containers, SKUs, critical_low, open_indents, `days_to_stockout`.
-- **Indents:** workflow table `DRAFT→APPROVED→DISPATCHED→RECEIVED` with RBAC actions.
+- **Indents:** workflow table `DRAFT→APPROVED→DISPATCHED→RECEIVED` with RBAC actions and real-time satellite push broadcast.
 - **TimescaleDB Trends:** Responsive `TrendChart` powered by Recharts (TimescaleDB historical aggregation) + procurement table (ETA before freeze, cost).
 - **Audit & 3D Twin:** `GET /audit`, `<30d` list, 3D container twin mirrors field.
 
@@ -126,17 +127,19 @@ DATABASE_URL=postgresql://polaris:polaris@db:5432/polaris  # omit for SQLite fal
 | `GET` | `/assets` | list 10 SKUs + version |
 | `GET` | `/audit?limit=20` | immutable tail |
 | `GET` | `/indents?station_id=` | |
-| `POST` | `/indents` | `{station_id,asset_id,qty,urgency,created_by}` |
-| `PATCH` | `/indents/{id}` | `{status,actor_id}` enforces `ALLOWED` |
+| `POST` | `/indents` | `{station_id,asset_id,qty,urgency,created_by}` (broadcasts downstream push) |
+| `PATCH` | `/indents/{id}` | `{status,actor_id}` enforces `ALLOWED` (broadcasts downstream push) |
 | `GET` | `/stations/overview` | aggregates + canned 42d forecast |
 | `GET` | `/forecast/{station}` | thermo hybrid `{days_to_stockout, ci, physics, residual, used_model, pure_physics_days}` |
 | `POST` | `/telemetry` | `{ts,station_id,temp_outside,wind_speed,pressure,dg_load}` triggers `check_and_escalate` |
 | `GET` | `/telemetry/latest?station_id=` | |
 | `POST` | `/sync/ingest` | `DeltaFrame {ulid,device_id,entity,entity_id,op,patch,base_version,ts}` dedupe+version, `CONFLICT_CRITICAL` if negative |
+| `POST` | `/internal/broadcast_delta` | Gateway internal endpoint for HQ-triggered downstream push |
 | `GET` | `/sync/state/{device_id}` | |
 | `GET` | `/rbac/me` | `FIELD_OP/STATION_LEAD/NCPOR_ADMIN` |
 
-Full spec `docs/API.md`. Wire: `toWire(frame, PSK)` → `[4B CRC][12B nonce||ciphertext||16B tag]` msgpack+AES-GCM. Field `SyncWorker` drains `outbox PENDING` every 2s, logs `json vs mp saving`, `PING/PONG` keepalive.
+Full spec `docs/API.md`. Wire: `toWire(frame, PSK)` → `[4B CRC][12B nonce||ciphertext||16B tag]` msgpack+AES-GCM. Field `SyncWorker` maintains full-duplex socket, drains `outbox PENDING` every 2s, handles instant downstream push, logs `json vs mp saving`, `PING/PONG` keepalive.
+
 
 ---
 

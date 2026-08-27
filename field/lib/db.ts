@@ -205,7 +205,93 @@ export async function updateIndentLocal(opts: { indentId: string; status: string
   return { outboxUlid };
 }
 
-// Pull indents from HQ (downstream sync) — merges by LWW
+// Downstream Delta Handlers (Full-Duplex Encrypted WebSocket push)
+export async function applyDownstreamIndent(indentId: string, patch: Record<string, any>) {
+  const db = await getDb();
+  const { ulid } = await import('ulid');
+  const now = new Date().toISOString();
+  const existing = db.selectObjects('SELECT * FROM indents WHERE id=?', [indentId])[0];
+  db.exec('BEGIN');
+  try {
+    if (!existing) {
+      db.exec({
+        sql: 'INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at) VALUES (?,?,?,?,?,?,?,?)',
+        bind: [indentId, patch.station_id || 'ST-BHARATI', patch.asset_id || 'A1', patch.qty_requested || 1, patch.urgency || 'MEDIUM', patch.status || 'DRAFT', patch.created_by || 'HQ', patch.created_at || now]
+      });
+      db.exec({
+        sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)',
+        bind: [ulid(), 'HQ_PUSH', 'DOWNSTREAM_INDENT_INSERT', 'indents', null, JSON.stringify(patch), now]
+      });
+    } else if (patch.status && existing.status !== patch.status) {
+      db.exec({
+        sql: 'UPDATE indents SET status=? WHERE id=?',
+        bind: [patch.status, indentId]
+      });
+      db.exec({
+        sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)',
+        bind: [ulid(), 'HQ_PUSH', `DOWNSTREAM_INDENT_${patch.status}`, 'indents', JSON.stringify(existing), JSON.stringify({ ...existing, ...patch }), now]
+      });
+    }
+    db.exec('COMMIT');
+    return { applied: true, id: indentId };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+export async function applyDownstreamSyncInit(indents: any[]) {
+  const db = await getDb();
+  if (!Array.isArray(indents) || indents.length === 0) return { reconciled: 0 };
+  let count = 0;
+  db.exec('BEGIN');
+  try {
+    for (const r of indents) {
+      const local = db.selectObjects('SELECT * FROM indents WHERE id=?', [r.id])[0];
+      if (!local) {
+        db.exec({
+          sql: 'INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at) VALUES (?,?,?,?,?,?,?,?)',
+          bind: [r.id, r.station_id, r.asset_id, r.qty_requested, r.urgency, r.status, r.created_by, r.created_at]
+        });
+        count++;
+      } else if (local.status !== r.status) {
+        db.exec({
+          sql: 'UPDATE indents SET status=? WHERE id=?',
+          bind: [r.status, r.id]
+        });
+        count++;
+      }
+    }
+    db.exec('COMMIT');
+    return { reconciled: count };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+export async function applyDownstreamAsset(assetId: string, patch: Record<string, any>) {
+  const db = await getDb();
+  const now = new Date().toISOString();
+  const existing = db.selectObjects('SELECT * FROM assets WHERE id=?', [assetId])[0];
+  if (!existing) return { applied: false };
+  db.exec('BEGIN');
+  try {
+    const newQty = patch.qty !== undefined ? patch.qty : existing.qty;
+    const newVer = patch.version !== undefined ? patch.version : (existing.version || 1) + 1;
+    db.exec({
+      sql: 'UPDATE assets SET qty=?, version=?, updated_at=? WHERE id=?',
+      bind: [newQty, newVer, now, assetId]
+    });
+    db.exec('COMMIT');
+    return { applied: true, assetId, qty: newQty };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+// Pull indents from HQ (fallback legacy sync)
 export async function pullIndentsFromHQ(hqUrl: string) {
   const db = await getDb();
   try {
@@ -231,3 +317,4 @@ export async function listCratesWithAssets() {
   const db = await getDb();
   return db.selectObjects('SELECT crates.id as crate_id, crates.coords, crates.container_id, containers.position_2d, assets.sku, assets.name, assets.qty, assets.unit FROM crates LEFT JOIN assets ON assets.crate_id=crates.id LEFT JOIN containers ON containers.id=crates.container_id ORDER BY crates.id');
 }
+

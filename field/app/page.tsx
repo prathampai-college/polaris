@@ -40,18 +40,35 @@ export default function FieldPage() {
   useEffect(()=>{
     (async()=>{
       await getDb(); await seedIfEmpty(DEVICE_ID); await refresh();
-      const w = new SyncWorker(DEVICE_ID);
-      w.onAck=(ack: any)=>{ setLog(l=>[`ACK ${String(ack.ulid).slice(0,8)} ${ack.status} v${ack.server_version??''}`, ...l].slice(0,20)); refresh(); setSyncStats({...w.stats}); };
+      const w = new SyncWorker(DEVICE_ID, STATION_ID);
+      w.onAck = (ack: any) => {
+        setLog(l=>[`ACK ${String(ack.ulid).slice(0,8)} ${ack.status} v${ack.server_version??''}`, ...l].slice(0,20));
+        refresh();
+        setSyncStats({...w.stats});
+      };
+      w.onDownstreamDelta = (delta: any) => {
+        if (delta.type === 'DOWNSTREAM_DELTA') {
+          setLog(l=>[`⚡ PUSH ${delta.entity}/${delta.entity_id} (${delta.patch?.status || delta.op})`, ...l].slice(0,20));
+        } else if (delta.type === 'SYNC_INIT_RESP') {
+          setLog(l=>[`⚡ SYNC_INIT ${delta.indents?.length || 0} indents reconciled`, ...l].slice(0,20));
+        }
+        refresh();
+        setSyncStats({...w.stats});
+      };
       w.connect();
-      // downstream pull for indents
-      const pull = async()=>{ const r=await w.pullFromHQ(HQ_URL); if(r.pulled) { setLog(l=>[`PULL ${r.pulled} indents from HQ`,...l].slice(0,20)); refresh(); } };
-      setInterval(refresh, 2000);
-      setInterval(()=>setSyncStats({...w.stats}), 1000);
-      setInterval(pull, 4000);
+
+      const refreshTimer = setInterval(refresh, 2000);
+      const statsTimer = setInterval(()=>setSyncStats({...w.stats}), 1000);
       (window as any).__polaris_drain = ()=>w.drain();
-      (window as any).__polaris_pull = pull;
+
+      return () => {
+        clearInterval(refreshTimer);
+        clearInterval(statsTimer);
+        w.disconnect();
+      };
     })();
   },[]);
+
 
   async function doConsume(assetId: string) {
     const delta = txType==='CONSUME' ? -Math.abs(qtyDelta) : txType==='IN' ? Math.abs(qtyDelta) : txType==='OUT' ? -Math.abs(qtyDelta) : qtyDelta;
@@ -92,9 +109,10 @@ export default function FieldPage() {
           <div className="bg-polar-card rounded p-2 border border-white/10">Sent: {syncStats.sent}<br/>Acked: {syncStats.acked??0}</div>
           <div className="bg-polar-card rounded p-2 border border-white/10">Deduped: {syncStats.deduped??0}<br/>Pending: {syncStats.pending??0}</div>
           <div className="bg-polar-card rounded p-2 border border-white/10">Saving: {syncStats.savingPct?.toFixed(1)??'—'}%<br/>Wire CRC+AES-GCM</div>
-          <div className="bg-polar-card rounded p-2 border border-white/10">DB: OPFS/WAL • HQ {HQ_URL}<br/>Pull every 4s</div>
+          <div className="bg-polar-card rounded p-2 border border-white/10">Duplex: Push &lt;50ms<br/>Recv: {syncStats.receivedDeltas??0} deltas</div>
         </div>
       )}
+
       {forecast && (
         <div className="mt-3 bg-gradient-to-r from-polar-card to-black/20 rounded-xl p-3 border border-polar-accent/30 flex flex-wrap justify-between gap-2">
           <div>

@@ -8,49 +8,99 @@ const PSK_HEX = process.env.NEXT_PUBLIC_PSK_HEX || 'a'.repeat(64);
 export const toWire = (frame: unknown, keyHex = PSK_HEX) => toWireWeb(frame, keyHex);
 export const fromWire = (wire: Uint8Array, keyHex = PSK_HEX) => fromWireWeb(wire, keyHex);
 
-export type SyncStats = { sent: number; acked: number; deduped: number; pending: number; savingPct?: number };
+export type SyncStats = { sent: number; acked: number; deduped: number; pending: number; receivedDeltas: number; savingPct?: number };
 
 export class SyncWorker {
   ws: WebSocket | null = null;
   deviceId: string;
+  stationId: string;
   onAck?: (ack: unknown) => void;
-  stats: SyncStats = { sent: 0, acked: 0, deduped: 0, pending: 0 };
+  onDownstreamDelta?: (delta: unknown) => void;
+  stats: SyncStats = { sent: 0, acked: 0, deduped: 0, pending: 0, receivedDeltas: 0 };
   private timer: ReturnType<typeof setInterval> | null = null;
-  constructor(deviceId: string) {
+
+  constructor(deviceId: string, stationId = 'ST-BHARATI') {
     this.deviceId = deviceId;
+    this.stationId = stationId;
   }
+
   connect() {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
     const ws = new WebSocket(GATEWAY_URL);
     ws.binaryType = 'arraybuffer';
-    ws.onopen = () => {
-      console.log('[sync] connected');
+
+    ws.onopen = async () => {
+      console.log('[sync] connected, sending SYNC_INIT');
+      try {
+        const initFrame = {
+          type: 'SYNC_INIT',
+          device_id: this.deviceId,
+          station_id: this.stationId,
+        };
+        const wireInit = await toWire(initFrame);
+        ws.send(wireInit);
+      } catch (e) {
+        console.error('[sync] SYNC_INIT failed', e);
+      }
       void this.drain();
     };
+
     ws.onmessage = async (ev: MessageEvent) => {
       const data = new Uint8Array(ev.data as ArrayBuffer);
       try {
-        const ack = (await fromWire(data)) as Record<string, unknown>;
+        const frame = (await fromWire(data)) as Record<string, unknown>;
+
+        // 1. Handle downstream real-time delta pushes (HQ -> Field via Gateway)
+        if (frame.type === 'DOWNSTREAM_DELTA') {
+          this.stats.receivedDeltas++;
+          const { applyDownstreamIndent, applyDownstreamAsset } = await import('./db');
+          if (frame.entity === 'indents') {
+            await applyDownstreamIndent(String(frame.entity_id), frame.patch as Record<string, unknown>);
+          } else if (frame.entity === 'assets') {
+            await applyDownstreamAsset(String(frame.entity_id), frame.patch as Record<string, unknown>);
+          }
+          this.onDownstreamDelta?.(frame);
+          return;
+        }
+
+        // 2. Handle initial catch-up sync handshake response
+        if (frame.type === 'SYNC_INIT_RESP') {
+          const { applyDownstreamSyncInit } = await import('./db');
+          if (Array.isArray(frame.indents)) {
+            await applyDownstreamSyncInit(frame.indents);
+          }
+          this.onDownstreamDelta?.(frame);
+          return;
+        }
+
+        // 3. Handle upstream ACK
         this.stats.acked++;
-        if (ack.status === 'DEDUPED') this.stats.deduped++;
+        if (frame.status === 'DEDUPED') this.stats.deduped++;
         const { getDb } = await import('./db');
         const db = await getDb();
-        if (ack.ulid) db.exec({ sql: "UPDATE outbox SET status='ACKED' WHERE ulid=?", bind: [ack.ulid] });
-        if (ack.server_version !== undefined)
-          db.exec({ sql: 'UPDATE sync_state SET last_acked_ulid=?, last_server_version=? WHERE device_id=?', bind: [ack.ulid, ack.server_version, this.deviceId] });
-        this.onAck?.(ack);
+        if (frame.ulid) db.exec({ sql: "UPDATE outbox SET status='ACKED' WHERE ulid=?", bind: [frame.ulid] });
+        if (frame.server_version !== undefined) {
+          db.exec({
+            sql: 'UPDATE sync_state SET last_acked_ulid=?, last_server_version=? WHERE device_id=?',
+            bind: [frame.ulid, frame.server_version, this.deviceId],
+          });
+        }
+        this.onAck?.(frame);
       } catch (e) {
-        console.error('[sync] ack decode fail', e);
+        console.error('[sync] message decode fail', e);
       }
     };
+
     ws.onclose = () => {
       console.log('[sync] closed, retry in 3s');
       setTimeout(() => this.connect(), 3000);
     };
+
     ws.onerror = (e: Event) => console.error('[sync] ws error', e);
     this.ws = ws;
     if (!this.timer) this.timer = setInterval(() => void this.drain(), 2000);
   }
+
   async drain() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const { getDb } = await import('./db');
@@ -71,16 +121,10 @@ export class SyncWorker {
       db.exec({ sql: "UPDATE outbox SET status='SENT' WHERE ulid=?", bind: [r.ulid] });
     }
   }
-  async pullFromHQ(hqUrl: string) {
-    try {
-      const { pullIndentsFromHQ } = await import('./db');
-      return await pullIndentsFromHQ(hqUrl);
-    } catch (e: unknown) {
-      return { pulled: 0, error: (e as Error).message };
-    }
-  }
+
   disconnect() {
     if (this.timer) clearInterval(this.timer);
     this.ws?.close();
   }
 }
+
