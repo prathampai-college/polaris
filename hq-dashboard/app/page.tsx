@@ -179,19 +179,19 @@ export default function HQPage() {
       </section>
 
       <section className="bg-polar-card rounded-xl p-3 border border-white/10">
-        <h3 className="font-bold text-sm">2D Container/Crate Locator — HQ view mirrors field</h3>
-        <div className="grid grid-cols-7 gap-1 mt-2 text-xs">
-          {assets.slice(0,7).map((a:any)=>(
-            <div key={a.id} className="bg-white/5 rounded p-2 text-center border border-white/10">
-              <div className="font-mono text-[10px]">{a.crate_id}</div>
-              <div className="truncate">{a.sku.split('-').slice(0,2).join('-')}</div>
-              <div className="text-white/60">{a.qty} {a.unit}</div>
-            </div>
-          ))}
-        </div>
+        <h3 className="font-bold text-sm">3D Container X-Ray Locator — HQ view mirrors field</h3>
+        <LocatorWrap assets={assets} highlight={null} />
       </section>
 
       <footer className="text-xs text-white/30 text-center">RBAC: NCPOR_ADMIN &gt; STATION_LEAD &gt; FIELD_OP &gt; VIEWER • JWT 30d offline, roster revocation on next sync window</footer>
     </div>
   );
 }
+
+function LocatorWrap({ assets, highlight }: { assets:any[]; highlight:string|null; }) {
+  const [Comp, setComp]=useState<any>(null);
+  useEffect(()=>{ import('../components/Container3D').then(m=>setComp(()=>m.Container3D)); },[]);
+  if(!Comp) return <div className="text-xs text-white/30 h-64 flex items-center justify-center bg-black/40 rounded-xl">Loading 3D X-Ray...</div>;
+  return <Comp assets={assets} highlight={highlight} />;
+}
+
