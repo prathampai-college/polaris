@@ -10,8 +10,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm }
-      - run: npm ci --prefix shared || npm install --prefix shared
+        with: { node-version: 20, cache: npm, cache-dependency-path: shared/package-lock.json }
+      - run: npm ci --prefix shared
       - run: npm --prefix shared test
       - run: npx tsc -p shared/tsconfig.json --noEmit
 
@@ -20,9 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npm ci --prefix shared || npm install --prefix shared
-      - run: npm ci --prefix sync-gateway || npm install --prefix sync-gateway
+        with: { node-version: 20, cache: npm, cache-dependency-path: sync-gateway/package-lock.json }
+      - run: npm ci --prefix shared
+      - run: npx tsc -p shared/tsconfig.json
+      - run: npm ci --prefix sync-gateway
       - run: npm --prefix sync-gateway test
       - run: npx tsc -p sync-gateway/tsconfig.json --noEmit
 
@@ -31,11 +32,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npm ci --prefix shared || npm install --prefix shared
+        with: { node-version: 20, cache: npm, cache-dependency-path: field/package-lock.json }
+      - run: npm ci --prefix shared
       - run: npx tsc -p shared/tsconfig.json
-      - run: npm ci --prefix field || npm install --prefix field --silent
+      - run: npm ci --prefix field
       - run: npx tsc -p field/tsconfig.json --noEmit
+      - run: npm --prefix field run build
 
   hq:
     runs-on: ubuntu-latest
@@ -44,14 +46,14 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.11' }
       - run: pip install -r hq/requirements.txt
-      - run: pip install pytest httpx
       - run: pytest hq/tests -v
-      - run: python -m py_compile hq/app/main.py hq/app/db.py hq/app/forecast.py
+      - run: python -m py_compile hq/app/main.py hq/app/db.py hq/app/forecast.py hq/app/config.py
       - name: Check budgets (ONNX <2MB, synthetic CSV exists)
         run: |
           test -f ai/thermo_residual.onnx
           test $(stat -c%s ai/thermo_residual.onnx) -lt 2097152
           test -f ai/training/weather_fuel_history.csv
+          test -f ai/scaler.json
           echo "budgets OK"
 
   hq-dashboard:
@@ -59,9 +61,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npm ci --prefix hq-dashboard || npm install --prefix hq-dashboard --silent
+        with: { node-version: 20, cache: npm, cache-dependency-path: hq-dashboard/package-lock.json }
+      - run: npm ci --prefix hq-dashboard
       - run: npx tsc -p hq-dashboard/tsconfig.json --noEmit
+      - run: npm --prefix hq-dashboard run build
 
   chaos:
     runs-on: ubuntu-latest
@@ -72,15 +75,26 @@ jobs:
         with: { node-version: 20 }
       - uses: actions/setup-python@v5
         with: { python-version: '3.11' }
-      - run: npm install --prefix shared --silent && npx tsc -p shared/tsconfig.json
-      - run: npm install --prefix sync-gateway --silent && npx tsc -p sync-gateway/tsconfig.json
+      - run: npm ci --prefix shared && npx tsc -p shared/tsconfig.json
+      - run: npm ci --prefix sync-gateway && npx tsc -p sync-gateway/tsconfig.json
       - run: pip install -r hq/requirements.txt -q
-      - run: node scripts/m4_verify.mjs
+      - run: node scripts/m1_verify.mjs
+      - run: node scripts/m2_verify.mjs
       - run: node scripts/m3_verify.mjs
+      - run: node scripts/m4_verify.mjs
+      - run: node scripts/m5_verify.mjs
 
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: docker compose config
-      - run: docker compose build hq gateway field hq-dashboard
+      - run: docker compose build
+      - run: docker compose up -d --wait --wait-timeout 120
+      - run: docker compose ps
+      - run: curl -f http://localhost:8000/health
+      - run: curl -f http://localhost:8787/health
+      - run: curl -f http://localhost:3000/api/health || curl -f http://localhost:3000
+      - run: curl -f http://localhost:3001/api/health || curl -f http://localhost:3001
+      - run: docker compose down -v
+

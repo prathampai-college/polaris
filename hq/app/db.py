@@ -41,8 +41,11 @@ def get_sqlite():
 _sqlite_conn = None
 
 def _pg_schema_sql():
-    # strip PRAGMA lines which are SQLite-only
-    return "\n".join(l for l in SCHEMA_SQL.splitlines() if not l.strip().upper().startswith("PRAGMA"))
+    # strip PRAGMA lines which are SQLite-only and convert SQLite types to PG
+    sql = "\n".join(l for l in SCHEMA_SQL.splitlines() if not l.strip().upper().startswith("PRAGMA"))
+    # SQLite BLOB -> PG BYTEA
+    sql = sql.replace(" BLOB", " BYTEA").replace("\tBLOB", "\tBYTEA")
+    return sql
 
 def init_db():
     global _sqlite_conn
@@ -51,8 +54,15 @@ def init_db():
         with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
             with conn.cursor() as cur:
                 try: cur.execute("CREATE EXTENSION IF NOT EXISTS timescaledb;")
-                except: pass
-                cur.execute(_pg_schema_sql())
+                except Exception: pass
+                # psycopg may not allow multi-statement execute; split and run one by one
+                for stmt in [s.strip() for s in _pg_schema_sql().split(";") if s.strip()]:
+                    try:
+                        cur.execute(stmt)
+                    except Exception as e:
+                        # ignore "already exists" but raise others
+                        if "already exists" not in str(e).lower():
+                            raise
                 cur.execute("SELECT COUNT(*) FROM stations")
                 if cur.fetchone()[0] == 0:
                     seed(cur)

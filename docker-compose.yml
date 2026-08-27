@@ -1,54 +1,146 @@
 services:
   db:
     image: timescale/timescaledb:latest-pg15
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       POSTGRES_USER: polaris
       POSTGRES_PASSWORD: polaris
       POSTGRES_DB: polaris
     ports: ["5432:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data"]
-    healthcheck: { test: ["CMD-SHELL", "pg_isready -U polaris"], interval: 5s, retries: 10 }
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U polaris"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - polaris-net
 
   hq:
     build:
       context: .
       dockerfile: hq/Dockerfile
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports: ["8000:8000"]
     environment:
       DATABASE_URL: postgresql://polaris:polaris@db:5432/polaris
-    depends_on: { db: { condition: service_healthy } }
-    healthcheck: { test: ["CMD", "curl", "-f", "http://localhost:8000/health"], interval: 10s, timeout: 3s, retries: 5 }
+      ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3001}"
+      PSK_HEX: "${PSK_HEX:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - polaris-net
 
   gateway:
     build:
       context: .
       dockerfile: sync-gateway/Dockerfile
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports: ["8787:8787"]
     environment:
       HQ_URL: http://hq:8000
-      PSK_HEX: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      PSK_HEX: "${PSK_HEX:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
     depends_on:
-      hq: { condition: service_healthy }
+      hq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8787/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - polaris-net
 
   field:
     build:
       context: .
       dockerfile: field/Dockerfile
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports: ["3000:3000"]
     environment:
-      NEXT_PUBLIC_GATEWAY_URL: ws://localhost:8787
-      NEXT_PUBLIC_HQ_URL: http://localhost:8000
-      NEXT_PUBLIC_PSK_HEX: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    depends_on: [gateway]
+      NEXT_PUBLIC_GATEWAY_URL: "${NEXT_PUBLIC_GATEWAY_URL:-ws://localhost:8787}"
+      NEXT_PUBLIC_HQ_URL: "${NEXT_PUBLIC_HQ_URL:-http://localhost:8000}"
+      NEXT_PUBLIC_PSK_HEX: "${NEXT_PUBLIC_PSK_HEX:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    networks:
+      - polaris-net
 
   hq-dashboard:
     build:
       context: .
       dockerfile: hq-dashboard/Dockerfile
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports: ["3001:3001"]
     environment:
-      NEXT_PUBLIC_HQ_URL: http://hq:8000
+      NEXT_PUBLIC_HQ_URL: "${NEXT_PUBLIC_HQ_URL:-http://hq:8000}"
     depends_on:
-      hq: { condition: service_healthy }
+      hq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    networks:
+      - polaris-net
 
-volumes: { pgdata: {} }
+networks:
+  polaris-net:
+    driver: bridge
+
+volumes:
+  pgdata: {}
+
