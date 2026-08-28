@@ -13,6 +13,7 @@ export default function HQPage() {
   const [trend, setTrend] = useState<any[]>([]);
   const [mlOn, setMlOn] = useState(true);
   const [msg, setMsg] = useState('');
+  const [sseStatus, setSseStatus] = useState<'connecting'|'live'|'polling'>('connecting');
 
   async function load() {
     try {
@@ -25,13 +26,32 @@ export default function HQPage() {
         fetch(`${HQ}/telemetry/latest?station_id=ST-BHARATI`).then(r=>r.json()).catch(()=>null),
         fetch(`${HQ}/telemetry/history?station_id=ST-BHARATI&days=7`).then(r=>r.json()).catch(()=>[]),
       ]);
-      setStations(s); setAssets(a); setIndents(ind); setAudit(au); setForecast(fc); setTele(tl?.temp_outside?tl:fc?.tele); setTrend(tr.length ? tr : [
-            {day:'-6d', qty:4200, forecast:4200}, {day:'-5d', qty:4100, forecast:4080}, {day:'-4d', qty:3980, forecast:3950},
-            {day:'-3d', qty:3850, forecast:3800}, {day:'-2d', qty:3500, forecast:3400}, {day:'-1d', qty:3100, forecast:3000}, {day:'today', qty:2800, forecast:2600}
-          ]);
+      setStations(s); setAssets(a); setIndents(ind); setAudit(au); setForecast(fc); setTele(tl?.temp_outside?tl:fc?.tele);
+      if (tr.length) setTrend(tr);
     } catch (e:any) { setMsg(e.message); }
   }
-  useEffect(()=>{ load(); const t=setInterval(load, 3000); return ()=>clearInterval(t); },[]);
+
+  useEffect(()=>{
+    load();
+    const poll = setInterval(load, 10000);
+    let evtSource: EventSource | null = null;
+    try {
+      evtSource = new EventSource(`${HQ}/telemetry/stream`);
+      evtSource.onopen = () => setSseStatus('live');
+      evtSource.addEventListener('telemetry', ((ev: MessageEvent) => {
+        try {
+          const t = JSON.parse(ev.data);
+          setTele(t);
+          setTrend(prev => {
+            const next = [...prev, { day: t.ts?.slice(5,10) || 'live', qty: t.qty || prev[prev.length-1]?.qty || 0, forecast: t.forecast }];
+            return next.length > 14 ? next.slice(-14) : next;
+          });
+        } catch {}
+      }) as EventListener);
+      evtSource.onerror = () => { setSseStatus('polling'); evtSource?.close(); };
+    } catch { setSseStatus('polling'); }
+    return ()=>{ clearInterval(poll); evtSource?.close(); };
+  },[]);
 
   async function sendTelemetry(mode:'calm'|'blizzard'|'acoustic'){
     const payload = mode==='blizzard'
@@ -61,7 +81,7 @@ export default function HQPage() {
           <p className="text-xs text-white/50">Fleet view • Indent workflow • Audit • Thermo hybrid forecast (ONNX int8 &lt;2MB, &lt;200ms)</p>
         </div>
         <div className="flex gap-2">
-          <span className="text-xs bg-emerald-600 px-3 py-1 rounded">HQ: {HQ}</span>
+          <span className={`text-xs px-3 py-1 rounded ${sseStatus==='live'?'bg-emerald-600':sseStatus==='connecting'?'bg-amber-600':'bg-white/20'}`}>{sseStatus==='live'?'LIVE SSE':sseStatus==='connecting'?'CONNECTING':'POLLING 10s'}</span>
           <span className="text-xs bg-polar-accent px-3 py-1 rounded">FIELD live TS • HQ Python</span>
         </div>
       </header>
