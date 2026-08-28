@@ -1,63 +1,279 @@
 'use client';
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Text } from '@react-three/drei';
 
-const cratePositions: Record<string, [number, number, number]> = {
-  'C1-K1': [-1, -0.5, -1],
-  'C1-K2': [1, -0.5, -1],
-  'C2-K1': [-1, 0.5, -1],
-  'C2-K2': [1, 0.5, -1],
-  'C2-K3': [0, 1.5, -1],
-  'C3-K1': [-1, -0.5, 1],
-  'C3-K2': [1, -0.5, 1],
+export interface AssetRow {
+  id: string;
+  sku: string;
+  name: string;
+  category: string;
+  qty: number;
+  unit: string;
+  expiry_date?: string | null;
+  criticality: string;
+  crate_id: string;
+  barcode?: string;
+  version?: number;
+}
+
+const CONTAINER_SPECS: Record<string, { name: string; type: string; tempZone: string; color: string; crates: string[] }> = {
+  'ALL': { name: 'All Fleet Containers', type: 'Fleet View', tempZone: 'Multi-Zone Overview', color: '#38BDF8', crates: ['C1-K1','C1-K2','C2-K1','C2-K2','C2-K3','C3-K1','C3-K2','C4-K1','C4-K2','C5-K1','C5-K2','C6-K1'] },
+  'C1': { name: 'C1 — Bharati ISO 20ft Ambient', type: 'ISO_20ft', tempZone: 'AMBIENT (+15°C)', color: '#3B82F6', crates: ['C1-K1', 'C1-K2'] },
+  'C2': { name: 'C2 — Bharati ColdStore Medical/Food', type: 'ColdStore', tempZone: 'CRYOGENIC (-20°C)', color: '#06B6D4', crates: ['C2-K1', 'C2-K2', 'C2-K3'] },
+  'C3': { name: 'C3 — Bharati Hazmat & Spares', type: 'Hazmat', tempZone: 'HAZMAT / VENTILATED', color: '#F59E0B', crates: ['C3-K1', 'C3-K2'] },
+  'C4': { name: 'C4 — Maitri Ambient ISO-20ft', type: 'ISO_20ft', tempZone: 'AMBIENT (+10°C)', color: '#3B82F6', crates: ['C4-K1', 'C4-K2'] },
+  'C5': { name: 'C5 — Maitri ColdStore', type: 'ColdStore', tempZone: 'CRYOGENIC (-20°C)', color: '#06B6D4', crates: ['C5-K1', 'C5-K2'] },
+  'C6': { name: 'C6 — Himadri Arctic Supply Bay', type: 'ISO_20ft', tempZone: 'AMBIENT (+5°C)', color: '#8B5CF6', crates: ['C6-K1'] },
 };
 
-function Crate({ id, position, asset, isHL, onClick }: { id: string, position: [number, number, number], asset: any, isHL: boolean, onClick: (id: string) => void }) {
-  const color = isHL ? '#f59e0b' : asset ? '#059669' : '#333333';
+const CRATE_COORDS: Record<string, [number, number, number]> = {
+  'C1-K1': [-1.1, -0.4, -0.6],
+  'C1-K2': [1.1, -0.4, -0.6],
+  'C2-K1': [-1.1, 0.6, -0.6],
+  'C2-K2': [1.1, 0.6, -0.6],
+  'C2-K3': [0.0, 0.6, 0.7],
+  'C3-K1': [-1.1, -0.4, 0.7],
+  'C3-K2': [1.1, -0.4, 0.7],
+  'C4-K1': [-1.0, -0.3, 0],
+  'C4-K2': [1.0, -0.3, 0],
+  'C5-K1': [-1.0, 0.5, 0],
+  'C5-K2': [1.0, 0.5, 0],
+  'C6-K1': [0.0, 0.0, 0],
+};
+
+function CrateMesh({
+  id,
+  position,
+  assets,
+  isHL,
+  onClick,
+}: {
+  id: string;
+  position: [number, number, number];
+  assets: AssetRow[];
+  isHL: boolean;
+  onClick: (id: string) => void;
+}) {
+  const primaryAsset = assets[0];
+  const hasCritical = assets.some(a => a.criticality === 'CRITICAL' && a.qty <= 5);
+  const hasLow = assets.some(a => a.qty <= 3);
+
+  let color = '#334155'; // empty
+  if (isHL) color = '#F59E0B'; // highlighted gold
+  else if (hasCritical) color = '#EF4444'; // critical red
+  else if (hasLow) color = '#F97316'; // low orange
+  else if (assets.length > 0) color = '#10B981'; // stocked emerald
+
   return (
     <group position={position} onClick={(e) => { e.stopPropagation(); onClick(id); }}>
-      <mesh>
-        <boxGeometry args={[0.9, 0.9, 0.9]} />
-        <meshStandardMaterial color={color} opacity={0.9} transparent />
+      <mesh castShadow receiveShadow>
+        <boxGeometry args={[0.95, 0.85, 0.95]} />
+        <meshStandardMaterial
+          color={color}
+          roughness={0.3}
+          metalness={0.2}
+          opacity={isHL ? 1.0 : 0.88}
+          transparent
+        />
       </mesh>
-      <Text position={[0, 0, 0.51]} fontSize={0.2} color="white" anchorX="center" anchorY="middle">
+
+      <mesh>
+        <boxGeometry args={[0.96, 0.86, 0.96]} />
+        <meshBasicMaterial color={isHL ? '#FFFFFF' : '#000000'} wireframe opacity={0.35} transparent />
+      </mesh>
+
+      <Text position={[0, 0.12, 0.5]} fontSize={0.16} color="#FFFFFF" anchorX="center" anchorY="middle">
         {id}
       </Text>
-      {asset && (
-        <Text position={[0, -0.2, 0.51]} fontSize={0.1} color="white" anchorX="center" anchorY="middle">
-          {`${asset.qty} ${asset.unit}`}
+
+      {primaryAsset && (
+        <Text position={[0, -0.15, 0.5]} fontSize={0.095} color="#E2E8F0" anchorX="center" anchorY="middle">
+          {assets.length > 1 ? `${assets.length} SKUs (${primaryAsset.sku})` : `${primaryAsset.qty} ${primaryAsset.unit}`}
         </Text>
       )}
     </group>
   );
 }
 
-export function Container3D({ assets, highlight, onPick }: { assets: any[]; highlight: string | null; onPick?: (id: string) => void }) {
-  const byId = new Map(assets.map(a => [a.crate_id, a]));
+export function Container3D({
+  assets = [],
+  highlight = null,
+  onPick,
+  onSelectAsset,
+}: {
+  assets: AssetRow[];
+  highlight?: string | null;
+  onPick?: (id: string) => void;
+  onSelectAsset?: (asset: AssetRow) => void;
+}) {
+  const [activeContainer, setActiveContainer] = useState<string>('ALL');
+  const [selectedCrateId, setSelectedCrateId] = useState<string | null>(highlight || null);
+
+  const cratesMap = useMemo(() => {
+    const map = new Map<string, AssetRow[]>();
+    for (const a of assets) {
+      const cid = a.crate_id || 'UNKNOWN';
+      if (!map.has(cid)) map.set(cid, []);
+      map.get(cid)!.push(a);
+    }
+    return map;
+  }, [assets]);
+
+  React.useEffect(() => {
+    if (highlight) {
+      setSelectedCrateId(highlight);
+      const containerPrefix = highlight.split('-')[0];
+      if (CONTAINER_SPECS[containerPrefix]) {
+        setActiveContainer(containerPrefix);
+      }
+    }
+  }, [highlight]);
+
+  const cratesToRender = useMemo(() => {
+    if (activeContainer === 'ALL') {
+      return Object.entries(CRATE_COORDS);
+    }
+    const spec = CONTAINER_SPECS[activeContainer];
+    if (!spec) return Object.entries(CRATE_COORDS);
+    return Object.entries(CRATE_COORDS).filter(([id]) => spec.crates.includes(id));
+  }, [activeContainer]);
+
+  const selectedCrateAssets = selectedCrateId ? cratesMap.get(selectedCrateId) || [] : [];
+  const activeSpec = CONTAINER_SPECS[activeContainer] || CONTAINER_SPECS['ALL'];
+
+  const handleCrateClick = (id: string) => {
+    setSelectedCrateId(id);
+    onPick?.(id);
+  };
+
   return (
-    <div className="w-full h-64 bg-black/40 rounded-xl overflow-hidden relative border border-white/10">
-      <div className="absolute top-2 left-2 z-10 text-[10px] text-white/50 pointer-events-none">Interactive 3D X-Ray (Drag to rotate)</div>
-      <Canvas camera={{ position: [0, 2, 6], fov: 50 }}>
-        <ambientLight intensity={0.6} />
-        <pointLight position={[10, 10, 10]} intensity={0.8} />
-        <OrbitControls enableZoom={true} />
-        {/* ISO-20 Container Outline */}
-        <mesh position={[0, 0.5, 0]}>
-          <boxGeometry args={[3.2, 3.2, 3.2]} />
-          <meshBasicMaterial color="#ffffff" wireframe opacity={0.15} transparent />
-        </mesh>
-        {Object.entries(cratePositions).map(([id, pos]) => (
-          <Crate 
-            key={id} 
-            id={id} 
-            position={pos} 
-            asset={byId.get(id)} 
-            isHL={highlight === id} 
-            onClick={onPick || (() => {})} 
-          />
-        ))}
-      </Canvas>
+    <div className="w-full flex flex-col gap-3">
+      {/* Container Selection Header */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-1.5 overflow-x-auto scroll-thin pb-1">
+          {Object.entries(CONTAINER_SPECS).map(([key, spec]) => (
+            <button
+              key={key}
+              onClick={() => setActiveContainer(key)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition border ${
+                activeContainer === key
+                  ? 'bg-blue-600 text-white border-blue-500 shadow-md shadow-blue-500/20'
+                  : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              {key === 'ALL' ? '🌐 All Fleet Bays' : `${key} ${spec.type === 'ColdStore' ? '❄️ ColdStore' : spec.type === 'Hazmat' ? '⚠️ Hazmat' : '📦 Ambient'}`}
+            </button>
+          ))}
+        </div>
+        <div className="text-[11px] text-white/50 mono font-medium">
+          {activeSpec.tempZone}
+        </div>
+      </div>
+
+      {/* 3D Canvas Box */}
+      <div className="w-full h-72 sm:h-80 bg-slate-950/80 rounded-2xl overflow-hidden relative border border-white/10 shadow-inner">
+        <div className="absolute top-3 left-3 z-10 flex flex-col gap-1 pointer-events-none">
+          <div className="text-xs font-bold text-white flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span>{activeSpec.name}</span>
+          </div>
+          <div className="text-[10px] text-white/40 mono">Drag to rotate • Pinch to zoom</div>
+        </div>
+
+        <div className="absolute bottom-3 left-3 z-10 flex items-center gap-3 text-[10px] text-white/60 pointer-events-none bg-black/60 backdrop-blur px-2.5 py-1 rounded-full border border-white/10">
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#10B981]" /> Normal</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#F97316]" /> Low Stock</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#EF4444]" /> Critical</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#F59E0B]" /> Selected</span>
+        </div>
+
+        <Canvas camera={{ position: [0, 2.4, 5.5], fov: 48 }} shadows>
+          <ambientLight intensity={0.7} />
+          <directionalLight position={[6, 8, 4]} intensity={0.9} castShadow />
+          <pointLight position={[-6, -4, -4]} intensity={0.4} />
+          <OrbitControls enableZoom={true} maxPolarAngle={Math.PI / 2 + 0.1} minDistance={2.5} maxDistance={9} />
+
+          <mesh position={[0, 0.1, 0]}>
+            <boxGeometry args={[3.6, 2.6, 2.8]} />
+            <meshBasicMaterial color="#38BDF8" wireframe opacity={0.2} transparent />
+          </mesh>
+
+          <gridHelper args={[6, 6, '#3B82F6', '#1E293B']} position={[0, -1.2, 0]} />
+
+          {cratesToRender.map(([id, pos]) => (
+            <CrateMesh
+              key={id}
+              id={id}
+              position={pos}
+              assets={cratesMap.get(id) || []}
+              isHL={selectedCrateId === id}
+              onClick={handleCrateClick}
+            />
+          ))}
+        </Canvas>
+      </div>
+
+      {/* Interactive Crate Inspector Drawer / Box */}
+      {selectedCrateId && (
+        <div className="bg-slate-900/90 border border-blue-500/30 rounded-xl p-4 transition animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center justify-between border-b border-white/10 pb-2.5 mb-3">
+            <div className="flex items-center gap-2">
+              <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono text-xs font-bold border border-amber-500/30">
+                CRATE {selectedCrateId}
+              </span>
+              <span className="text-xs text-white/50">
+                {selectedCrateAssets.length} asset{selectedCrateAssets.length !== 1 ? 's' : ''} stored
+              </span>
+            </div>
+            <button
+              onClick={() => setSelectedCrateId(null)}
+              className="text-xs text-white/40 hover:text-white px-2 py-1 rounded bg-white/5 hover:bg-white/10"
+            >
+              Close
+            </button>
+          </div>
+
+          {selectedCrateAssets.length > 0 ? (
+            <div className="space-y-2">
+              {selectedCrateAssets.map((asset) => (
+                <div
+                  key={asset.id}
+                  onClick={() => onSelectAsset?.(asset)}
+                  className="flex items-center justify-between bg-black/40 border border-white/5 hover:border-blue-500/40 rounded-lg px-3 py-2 cursor-pointer transition"
+                >
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-xs font-bold text-white">{asset.sku}</span>
+                      <span
+                        className={`text-[9px] px-1.5 py-0.2 rounded font-bold ${
+                          asset.criticality === 'CRITICAL'
+                            ? 'bg-red-500/20 text-red-300 border border-red-500/30'
+                            : 'bg-white/10 text-white/70'
+                        }`}
+                      >
+                        {asset.criticality}
+                      </span>
+                      {asset.expiry_date && (
+                        <span className="text-[10px] text-amber-400/80">exp {asset.expiry_date}</span>
+                      )}
+                    </div>
+                    <div className="text-xs text-white/60 mt-0.5">{asset.name}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-bold text-white">{asset.qty} <span className="text-xs font-normal text-white/50">{asset.unit}</span></div>
+                    <div className="text-[10px] text-blue-400 hover:underline">Inspect →</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-4 text-xs text-white/40">
+              No inventory recorded in crate {selectedCrateId}.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

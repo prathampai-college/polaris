@@ -1,6 +1,80 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-:root { color-scheme: dark; }
-body { @apply bg-polar-bg text-white antialiased; }
-.glove-btn { @apply min-h-[48px] min-w-[48px] px-6 py-3 text-lg font-semibold rounded-lg active:scale-95 transition; }
+
+:root {
+  color-scheme: dark;
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+
+body {
+  @apply bg-[#060B16] text-white antialiased selection:bg-blue-500/30 selection:text-blue-200;
+  font-family: 'Instrument Sans', system-ui, -apple-system, sans-serif;
+}
+
+.mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.display {
+  font-family: 'Space Grotesk', sans-serif;
+}
+
+/* Polar glass & card tokens */
+.glass-panel {
+  @apply bg-[#0D162B]/85 backdrop-blur-xl border border-white/[0.08] shadow-2xl;
+}
+
+.card {
+  @apply bg-[#0E1830] border border-white/[0.08] rounded-2xl transition-all;
+}
+
+.card-hover {
+  @apply hover:border-blue-500/40 hover:bg-[#121F3D];
+}
+
+.card-glow {
+  box-shadow: 0 0 0 1px rgba(59,130,246,0.12), 0 8px 32px rgba(0,0,0,0.5);
+}
+
+.card-raised {
+  @apply bg-[#142345] border border-white/[0.09] rounded-2xl;
+}
+
+/* Glove mode styling (48px standard for thick polar mitts) */
+.glove-btn {
+  @apply min-h-[52px] px-5 py-3 text-[15px] font-bold rounded-xl active:scale-[0.98] transition inline-flex items-center justify-center gap-2 border border-transparent;
+}
+
+.glove-mode input,
+.glove-mode select,
+.glove-mode button {
+  @apply min-h-[48px] text-[15px];
+}
+
+.glove-mode .table-row {
+  @apply py-4;
+}
+
+/* Custom scrollbars */
+.scroll-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+}
+.scroll-thin::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Animations */
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.8; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
+.animate-glow {
+  animation: pulseGlow 2.5s infinite ease-in-out;
+}
