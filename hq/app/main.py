@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -8,8 +8,9 @@ from contextlib import asynccontextmanager
 
 from .db import init_db, get_conn, USE_PG
 from .forecast import load_forecast_model, physics_pred, predict_total
-from .config import DEMO_FORECAST, ALLOWED
+from .config import DEMO_FORECAST, ALLOWED, SECRET_KEY, TOKEN_EXPIRY_DAYS, STATION_PINS
 from .mqtt_client import init_mqtt, publish_telemetry as mqtt_publish, shutdown_mqtt
+from .auth import sign_jwt, get_current_user, require_role
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("polaris.hq")
@@ -198,6 +199,27 @@ def health():
         utc = datetime.timezone.utc
     return {"status":"ok", "db": "postgres" if USE_PG else "sqlite-fallback", "ts": datetime.datetime.now(utc).isoformat()}
 
+class LoginRequest(BaseModel):
+    device_id: str
+    pin: str
+    station_id: str
+
+@app.post("/auth/login")
+async def auth_login(body: LoginRequest):
+    expected_pin = STATION_PINS.get(body.station_id)
+    if not expected_pin or body.pin != expected_pin:
+        raise HTTPException(401, "invalid station or pin")
+    role = "FIELD_OP"
+    token = await sign_jwt({"sub": body.device_id, "role": role, "station_id": body.station_id, "device_id": body.device_id}, SECRET_KEY, TOKEN_EXPIRY_DAYS)
+    return {"token": token, "role": role, "station_id": body.station_id, "device_id": body.device_id}
+
+@app.get("/rbac/me")
+async def rbac_me(request: Request):
+    user = await get_current_user(request)
+    if user:
+        return {"role": user["role"], "station_id": user["station_id"], "device_id": user["device_id"], "permissions": ["CONSUME", "IN", "READ"]}
+    return {"role": "FIELD_OP", "station_id": "ST-BHARATI", "device_id": "BHARATI-TABLET-01", "permissions": ["CONSUME", "IN", "READ"]}
+
 @app.get("/assets")
 def list_assets():
     return _fetch_all("SELECT id, sku, name, category, qty, unit, expiry_date, criticality, crate_id, barcode, version, updated_at FROM assets ORDER BY sku")
@@ -266,7 +288,7 @@ class IndentPatch(BaseModel):
     actor_id: str = "NCPOR_ADMIN"
 
 @app.patch("/indents/{indent_id}")
-def patch_indent(indent_id: str, body: IndentPatch):
+async def patch_indent(indent_id: str, body: IndentPatch, user: dict = Depends(require_role("STATION_LEAD"))):
     conn=get_conn()
     try:
         utc = datetime.UTC
@@ -610,7 +632,3 @@ def ingest(frame: DeltaFrame, request: Request):
             try: conn.execute("ROLLBACK")
             except: pass
             raise HTTPException(500, str(e))
-
-@app.get("/rbac/me")
-def rbac_me():
-    return {"role":"FIELD_OP", "station_id":"ST-BHARATI", "device_id":"BHARATI-TABLET-01", "permissions":["CONSUME","IN","READ"]}
