@@ -1,13 +1,16 @@
 {
   "stations": [
-    ["ST-BHARATI", "Bharati", "69°24′S 76°11′E", 24],
-    ["ST-MAITRI", "Maitri", "70°45′S 11°44′E", 25],
-    ["ST-HIMADRI", "Himadri", "78°55′N 11°56′E", 8]
+    ["ST-BHARATI", "Bharati", "69\u00b024\u2032S 76\u00b011\u2032E", 24],
+    ["ST-MAITRI", "Maitri", "70\u00b045\u2032S 11\u00b044\u2032E", 25],
+    ["ST-HIMADRI", "Himadri", "78\u00b055\u2032N 11\u00b056\u2032E", 8]
   ],
   "containers": [
     ["C1", "ST-BHARATI", "ISO_20ft", "A1"],
     ["C2", "ST-BHARATI", "ColdStore", "A2"],
-    ["C3", "ST-BHARATI", "Hazmat", "B1"]
+    ["C3", "ST-BHARATI", "Hazmat", "B1"],
+    ["C4", "ST-MAITRI", "ISO_20ft", "A1"],
+    ["C5", "ST-MAITRI", "ColdStore", "A2"],
+    ["C6", "ST-HIMADRI", "ISO_20ft", "A1"]
   ],
   "crates": [
     ["C1-K1", "C1", "{\"x\":0,\"y\":0}", "AMBIENT"],
@@ -16,7 +19,12 @@
     ["C2-K2", "C2", "{\"x\":1,\"y\":1}", "COLD"],
     ["C2-K3", "C2", "{\"x\":0,\"y\":2}", "COLD"],
     ["C3-K1", "C3", "{\"x\":0,\"y\":0}", "AMBIENT"],
-    ["C3-K2", "C3", "{\"x\":0,\"y\":1}", "HAZMAT"]
+    ["C3-K2", "C3", "{\"x\":0,\"y\":1}", "HAZMAT"],
+    ["C4-K1", "C4", "{\"x\":0,\"y\":0}", "AMBIENT"],
+    ["C4-K2", "C4", "{\"x\":1,\"y\":0}", "AMBIENT"],
+    ["C5-K1", "C5", "{\"x\":0,\"y\":1}", "COLD"],
+    ["C5-K2", "C5", "{\"x\":1,\"y\":1}", "COLD"],
+    ["C6-K1", "C6", "{\"x\":0,\"y\":0}", "AMBIENT"]
   ],
   "assets": [
     ["A1", "FUEL-DIESEL-001", "Diesel (Winter Grade)", "FUEL_DIESEL", 4200, "L", null, "CRITICAL", "C1-K1", "FUEL-DIESEL-001"],
@@ -28,6 +36,16 @@
     ["A7", "SPARE-BRG-6205-007", "DG Bearing 6205-2RS", "SPARES_DG", 8, "pcs", null, "HIGH", "C3-K1", "SPARE-BRG-6205-007"],
     ["A8", "SPARE-FILTER-FUEL-008", "DG Fuel Filter (Fleetguard)", "SPARES_DG", 14, "pcs", null, "HIGH", "C3-K1", "SPARE-FILTER-FUEL-008"],
     ["A9", "SPARE-HVAC-FAN-009", "HVAC Blower Motor", "SPARES_HVAC", 2, "pcs", null, "HIGH", "C3-K2", "SPARE-HVAC-FAN-009"],
-    ["A10", "SCI-ICE-CORE-010", "Ice Core Drill Bit", "SCIENTIFIC", 4, "pcs", null, "LOW", "C3-K2", "SCI-ICE-CORE-010"]
+    ["A10", "SCI-ICE-CORE-010", "Ice Core Drill Bit", "SCIENTIFIC", 4, "pcs", null, "LOW", "C3-K2", "SCI-ICE-CORE-010"],
+    ["A11", "FUEL-DIESEL-011", "Diesel (Winter Grade)", "FUEL_DIESEL", 3800, "L", null, "CRITICAL", "C4-K1", "FUEL-DIESEL-011"],
+    ["A12", "FUEL-KERO-JP8-012", "Kerosene JP-8", "FUEL_KEROSENE", 1600, "L", null, "CRITICAL", "C4-K2", "FUEL-KERO-JP8-012"],
+    ["A13", "O2-CYL-47L-013", "Oxygen Cylinder 47L", "OXYGEN", 20, "cyl", "2026-09-15", "CRITICAL", "C5-K1", "O2-CYL-47L-013"],
+    ["A14", "RATION-FD-30D-014", "Freeze-Dried Rations (30-day pack)", "FOOD", 80, "packs", "2027-06-01", "HIGH", "C5-K2", "RATION-FD-30D-014"],
+    ["A15", "MED-ANTIBIOTIC-015", "Antibiotic Kit (Amoxicillin)", "MEDICAL", 10, "kits", "2026-09-20", "CRITICAL", "C5-K1", "MED-ANTIBIOTIC-015"],
+    ["A16", "SPARE-BRG-6205-016", "DG Bearing 6205-2RS", "SPARES_DG", 6, "pcs", null, "HIGH", "C4-K1", "SPARE-BRG-6205-016"],
+    ["A17", "FUEL-DIESEL-017", "Diesel (Winter Grade)", "FUEL_DIESEL", 1200, "L", null, "CRITICAL", "C6-K1", "FUEL-DIESEL-017"],
+    ["A18", "O2-CYL-47L-018", "Oxygen Cylinder 47L", "OXYGEN", 15, "cyl", "2026-09-15", "CRITICAL", "C6-K1", "O2-CYL-47L-018"],
+    ["A19", "RATION-FD-30D-019", "Freeze-Dried Rations (30-day pack)", "FOOD", 40, "packs", "2027-06-01", "HIGH", "C6-K1", "RATION-FD-30D-019"],
+    ["A20", "MED-TRAUMA-020", "Trauma Kit (Type A)", "MEDICAL", 4, "kits", "2026-10-10", "CRITICAL", "C6-K1", "MED-TRAUMA-020"]
   ]
 }
