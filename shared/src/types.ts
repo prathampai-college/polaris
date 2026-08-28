@@ -8,6 +8,16 @@ export type IndentUrgency = 'LOW' | 'MEDIUM' | 'CRITICAL';
 export type SyncStatus = 'PENDING' | 'SYNCED' | 'FAILED';
 export type OutboxOp = 'UPSERT' | 'DELETE';
 export type OutboxStatus = 'PENDING' | 'SENT' | 'ACKED' | 'FAILED';
+export type UserRole = 'NCPOR_ADMIN' | 'STATION_LEAD' | 'FIELD_OP' | 'VIEWER';
+
+export interface AuthPayload {
+  sub: string;
+  role: UserRole;
+  station_id: string;
+  device_id: string;
+  iat: number;
+  exp: number;
+}
 
 export interface Station { id: string; name: StationName; location: string; winter_crew_count: number; }
 export interface Container { id: string; station_id: string; type: ContainerType; position_2d: string; }
