@@ -1,9 +1,9 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Any, Dict
-import os, datetime, logging, time, uuid
+import os, datetime, logging, time, uuid, asyncio, json as _json
 from contextlib import asynccontextmanager
 
 from .db import init_db, get_conn, USE_PG
@@ -34,6 +34,20 @@ def check_rate_limit(key: str, limit: int = 120, window: int = 60) -> bool:
     bucket.append(now)
     _rate_store[key] = bucket
     return True
+
+# --- SSE telemetry stream subscribers ---
+_sse_subscribers: list[asyncio.Queue] = []
+
+async def _broadcast_telemetry(tele: dict):
+    """Push telemetry event to all connected SSE clients."""
+    dead = []
+    for q in _sse_subscribers:
+        try:
+            q.put_nowait(tele)
+        except asyncio.QueueFull:
+            dead.append(q)
+    for q in dead:
+        _sse_subscribers.remove(q)
 
 GATEWAY_INTERNAL_URL = os.getenv("GATEWAY_INTERNAL_URL", os.getenv("GATEWAY_URL", "http://localhost:8787"))
 
@@ -96,6 +110,11 @@ async def lifespan(app: FastAPI):
                 check_and_escalate(station_id, t)
             except Exception as e:
                 logger.warning(f"[mqtt] escalation error: {e}")
+            try:
+                loop = asyncio.get_event_loop()
+                loop.call_soon_threadsafe(asyncio.ensure_future, _broadcast_telemetry(tele))
+            except Exception:
+                pass
         except Exception as e:
             logger.warning(f"[mqtt] telemetry insert error: {e}")
 
@@ -305,7 +324,7 @@ class TelemetryIn(BaseModel):
     acoustic_anomaly: float = 0.0 # Phase 4: acoustic prognostics score
 
 @app.post("/telemetry")
-def post_telemetry(t: TelemetryIn):
+async def post_telemetry(t: TelemetryIn):
     conn=get_conn()
     if USE_PG:
         with conn:
@@ -319,6 +338,7 @@ def post_telemetry(t: TelemetryIn):
         try: check_and_escalate(t.station_id, t)
         except: pass
     mqtt_publish(t.model_dump())
+    await _broadcast_telemetry(t.model_dump())
     return {"ok": True}
 
 @app.get("/telemetry/latest")
@@ -329,6 +349,33 @@ def latest_telemetry(station_id: str = "ST-BHARATI"):
 def history_telemetry(station_id: str = "ST-BHARATI", days: int = 30):
     # Phase 3: TimescaleDB trend history endpoint
     return _fetch_all("SELECT date(ts) as day, AVG(temp_outside) as avg_temp, AVG(dg_load) as avg_load FROM telemetry WHERE station_id=? GROUP BY date(ts) ORDER BY day DESC LIMIT ?", (station_id, days))
+
+@app.get("/telemetry/stream")
+async def telemetry_stream():
+    """SSE endpoint — streams telemetry events in real-time to connected dashboards."""
+    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+    _sse_subscribers.append(queue)
+
+    async def event_generator():
+        try:
+            yield f"data: {_json.dumps({'type': 'connected', 'subscribers': len(_sse_subscribers)})}\n\n"
+            while True:
+                try:
+                    tele = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield f"event: telemetry\ndata: {_json.dumps(tele)}\n\n"
+                except asyncio.TimeoutError:
+                    yield f": keepalive {_json.dumps({'ts': time.time()})}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if queue in _sse_subscribers:
+                _sse_subscribers.remove(queue)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    })
 
 def check_and_escalate(station_id: str, tele):
     conn=get_conn()
