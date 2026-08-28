@@ -327,13 +327,22 @@ def stations_overview():
     conn=get_conn()
     stations=_fetch_all("SELECT id, name, winter_crew_count FROM stations")
     for s in stations:
-        s["containers"]=_fetch_one("SELECT COUNT(*) as c FROM containers WHERE station_id=?", (s["id"],))["c"]
-        # ponytail: global assets count vs per-station — kept global for demo parity; per-station join if needed
-        s["assets"]=_fetch_one("SELECT COUNT(*) as c FROM assets")["c"]
-        s["critical_low"]=_fetch_one("SELECT COUNT(*) as c FROM assets WHERE criticality='CRITICAL' AND qty<5")["c"]
-        s["open_indents"]=_fetch_one("SELECT COUNT(*) as c FROM indents WHERE station_id=? AND status IN ('DRAFT','APPROVED','DISPATCHED')",(s["id"],))["c"]
-        s["days_to_stockout"]=42 if s["id"]=="ST-BHARATI" else 60
-        s["forecast_ci"]=[38,47]
+        sid = s["id"]
+        s["containers"]=_fetch_one("SELECT COUNT(*) as c FROM containers WHERE station_id=?", (sid,))["c"]
+        s["assets"]=_fetch_one("SELECT COUNT(*) as c FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=?", (sid,))["c"]
+        s["critical_low"]=_fetch_one("SELECT COUNT(*) as c FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.criticality='CRITICAL' AND a.qty<5", (sid,))["c"]
+        s["open_indents"]=_fetch_one("SELECT COUNT(*) as c FROM indents WHERE station_id=? AND status IN ('DRAFT','APPROVED','DISPATCHED')",(sid,))["c"]
+        diesel=_fetch_one("SELECT a.qty FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku='FUEL-DIESEL-001' LIMIT 1", (sid,))
+        tele=_fetch_one("SELECT temp_outside, wind_speed, pressure, dg_load FROM telemetry WHERE station_id=? ORDER BY ts DESC LIMIT 1", (sid,))
+        if diesel and diesel["qty"]:
+            crew=s["winter_crew_count"]
+            t=tele or {"temp_outside": -15, "wind_speed": 5, "pressure": 1013, "dg_load": 0.7}
+            phys,res,total,used=predict_total(t["temp_outside"], t["wind_speed"], t["pressure"], crew, t["dg_load"])
+            s["days_to_stockout"]=round(diesel["qty"]/total,1) if total>0 else 999
+            s["forecast_ci"]=[round(s["days_to_stockout"]*0.85), round(s["days_to_stockout"]*1.15)]
+        else:
+            s["days_to_stockout"]=0
+            s["forecast_ci"]=[0,0]
     return stations
 
 class TelemetryIn(BaseModel):
