@@ -94,3 +94,9 @@ tmp/
 temp/
 *.tmp
 *.temp
+
+# Generated data
+ai/training/weather_fuel_history.csv
+
+# MQTT
+.mqtt_state
