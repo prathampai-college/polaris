@@ -60,7 +60,7 @@ def predict_total(temp_out, wind, pressure, crew, dg_load):
             out = _ort_sess.run(None, {"input": scaled.reshape(1, 5).astype(np.float32)})[0]
             residual = float(out[0][0])
             used = True
-        except:
+        except Exception:
             pass
     if not used:
         residual = 5 * dg_load + 0.3 * crew - 2

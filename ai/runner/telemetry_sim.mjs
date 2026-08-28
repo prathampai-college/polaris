@@ -3,7 +3,9 @@
 // Same schema used live via serial/MQTT; here replayed for demo (PLAN §4 telemetry source)
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
-const FIELD_DB=process.env.FIELD_DB || 'C:\\Users\\prath\\AppData\\Local\\Temp\\polaris-field-m3.db';
+import os from 'node:os';
+import path from 'node:path';
+const FIELD_DB=process.env.FIELD_DB || path.join(os.tmpdir(), 'polaris-field-m3.db');
 
 export function makeTelemetry({ station_id='ST-BHARATI', temp_outside=-15, wind_speed=5, pressure=1013, dg_load=0.7 }){
   return { ts: new Date().toISOString(), station_id, temp_outside, wind_speed, pressure, dg_load };

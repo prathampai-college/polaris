@@ -93,7 +93,7 @@ def seed_sqlite(conn):
         for r in s["containers"]: conn.execute("INSERT OR IGNORE INTO containers VALUES (?,?,?,?)", r)
         for r in s["crates"]: conn.execute("INSERT OR IGNORE INTO crates VALUES (?,?,?,?)", r)
         import datetime
-        now = datetime.datetime.utcnow().isoformat()
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         for a in s["assets"]: conn.execute("INSERT OR IGNORE INTO assets VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (*a, 1, now))
         conn.commit()
         return
