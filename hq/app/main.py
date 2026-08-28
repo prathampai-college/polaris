@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from .db import init_db, get_conn, USE_PG
 from .forecast import load_forecast_model, physics_pred, predict_total
 from .config import DEMO_FORECAST, ALLOWED
+from .mqtt_client import init_mqtt, publish_telemetry as mqtt_publish, shutdown_mqtt
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("polaris.hq")
@@ -60,7 +61,47 @@ async def lifespan(app: FastAPI):
     init_db()
     try: load_forecast_model()
     except Exception as e: print("[hq forecast] model fallback", e)
+
+    def _on_mqtt_telemetry(tele):
+        """Handle incoming MQTT telemetry — insert into DB and run escalation."""
+        try:
+            conn = get_conn()
+            if USE_PG:
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(q("INSERT INTO telemetry VALUES (?,?,?,?,?,?)"), (
+                            tele.get("ts", datetime.datetime.now(datetime.timezone.utc).isoformat()),
+                            tele.get("station_id", "ST-BHARATI"),
+                            tele.get("temp_outside", 0), tele.get("wind_speed", 0),
+                            tele.get("pressure", 1013), tele.get("dg_load", 0.7),
+                        ))
+            else:
+                conn.execute("INSERT INTO telemetry VALUES (?,?,?,?,?,?)", (
+                    tele.get("ts", datetime.datetime.now(datetime.timezone.utc).isoformat()),
+                    tele.get("station_id", "ST-BHARATI"),
+                    tele.get("temp_outside", 0), tele.get("wind_speed", 0),
+                    tele.get("pressure", 1013), tele.get("dg_load", 0.7),
+                ))
+                conn.commit()
+            try:
+                station_id = tele.get("station_id", "ST-BHARATI")
+                class _TeleObj:
+                    pass
+                t = _TeleObj()
+                t.temp_outside = tele.get("temp_outside", 0)
+                t.wind_speed = tele.get("wind_speed", 0)
+                t.pressure = tele.get("pressure", 1013)
+                t.dg_load = tele.get("dg_load", 0.7)
+                t.acoustic_anomaly = tele.get("acoustic_anomaly", 0.0)
+                check_and_escalate(station_id, t)
+            except Exception as e:
+                logger.warning(f"[mqtt] escalation error: {e}")
+        except Exception as e:
+            logger.warning(f"[mqtt] telemetry insert error: {e}")
+
+    init_mqtt(_on_mqtt_telemetry)
     yield
+    shutdown_mqtt()
 
 app = FastAPI(title="POLARIS HQ — NCPOR Command", version="0.1.0", docs_url="/docs", redoc_url="/redoc", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"], allow_credentials=False)
@@ -277,6 +318,7 @@ def post_telemetry(t: TelemetryIn):
         conn.commit()
         try: check_and_escalate(t.station_id, t)
         except: pass
+    mqtt_publish(t.model_dump())
     return {"ok": True}
 
 @app.get("/telemetry/latest")
