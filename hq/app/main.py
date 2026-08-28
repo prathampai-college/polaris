@@ -486,26 +486,15 @@ def check_and_escalate(station_id: str, tele):
 @app.get("/forecast/{station_id}")
 def forecast(station_id: str, asset_sku: str = "FUEL-DIESEL-001"):
     tele=_fetch_one("SELECT temp_outside, wind_speed, pressure, dg_load FROM telemetry WHERE station_id=? ORDER BY ts DESC LIMIT 1", (station_id,))
-    qty_row=_fetch_one("SELECT qty FROM assets WHERE sku=? LIMIT 1", (asset_sku,))
+    qty_row=_fetch_one("SELECT a.qty FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku=? LIMIT 1", (station_id, asset_sku))
     cr=_fetch_one("SELECT winter_crew_count FROM stations WHERE id=?", (station_id,))
     if not qty_row: raise HTTPException(404, "asset")
     qty=qty_row["qty"]; crew=cr["winter_crew_count"] if cr else 24
     if not tele:
         tele={"temp_outside": -15, "wind_speed": 5, "pressure": 1013, "dg_load": 0.7}
-        phys,res,total,used=predict_total(tele["temp_outside"], tele["wind_speed"], tele["pressure"], crew, tele["dg_load"])
-        days=DEMO_FORECAST["baseline"]["days"]
-        return {"station_id": station_id, "asset_sku": asset_sku, "qty": qty, "physics": round(phys,1), "residual": round(res,2), "total_per_day": round(total,1), "days_to_stockout": days, "ci": DEMO_FORECAST["baseline"]["ci"], "used_model": used, "tele": tele, "note": "canned baseline for pitch; live blizzard -> 18d"}
     phys,res,total,used=predict_total(tele["temp_outside"], tele["wind_speed"], tele["pressure"], crew, tele["dg_load"])
     days=qty/total if total>0 else 999
-    if tele["temp_outside"] < -30 and tele["wind_speed"] > 15:
-        days=DEMO_FORECAST["blizzard"]["days"]
-        ci=DEMO_FORECAST["blizzard"]["ci"]
-    else:
-        # keep computed days but clamp display to baseline demo value if within calm range for pitch consistency
-        # blind spot fix: previously overwrote any days>30 to 42 hiding real forecast; now only snap to 42 if close to baseline prediction
-        if 38 <= days <= 48:
-            days=DEMO_FORECAST["baseline"]["days"]
-        ci=[round(days*0.85), round(days*1.15)]
+    ci=[round(days*0.85), round(days*1.15)]
     return {"station_id": station_id, "asset_sku": asset_sku, "qty": qty, "physics": round(phys,1), "residual": round(res,2), "total_per_day": round(total,1), "days_to_stockout": round(days,1), "ci": ci, "used_model": used, "tele": tele,
             "pure_physics_days": round(qty/phys,1) if phys>0 else 999}
 
