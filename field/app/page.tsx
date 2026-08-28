@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { getDb, seedIfEmpty, listAssets, consumeAsset, outboxCount, getAssetByBarcode, createIndent, listIndents, updateIndentLocal, listTransactions, listAudit, isExpiringSoon, isExpired } from '../lib/db';
 import { SyncWorker } from '../lib/sync';
+import { MqttPublisher } from '../lib/mqtt';
 
 const DEVICE_ID = 'BHARATI-TABLET-01';
 const ACTOR_ID = 'FIELD_OP_01';
@@ -28,6 +29,8 @@ export default function FieldPage() {
   const [txType, setTxType] = useState<'CONSUME'|'IN'|'OUT'|'ADJUST'>('CONSUME');
   const [overrideExp, setOverrideExp] = useState(false);
   const [forecast, setForecast] = useState<any>(null);
+  const [mqttLive, setMqttLive] = useState(false);
+  const mqttRef = useState(() => new MqttPublisher(STATION_ID))[0];
 
   async function refresh() {
     setAssets(await listAssets());
@@ -56,19 +59,32 @@ export default function FieldPage() {
         setSyncStats({...w.stats});
       };
       w.connect();
+      mqttRef.connect().then(()=>setMqttLive(mqttRef.isConnected()));
 
       const refreshTimer = setInterval(refresh, 2000);
       const statsTimer = setInterval(()=>setSyncStats({...w.stats}), 1000);
+      const mqttCheck = setInterval(()=>setMqttLive(mqttRef.isConnected()), 2000);
       (window as any).__polaris_drain = ()=>w.drain();
 
       return () => {
         clearInterval(refreshTimer);
         clearInterval(statsTimer);
+        clearInterval(mqttCheck);
         w.disconnect();
+        mqttRef.disconnect();
       };
     })();
   },[]);
 
+
+  async function sendTelemetry(payload: Record<string, any>) {
+    const sent = mqttRef.publishTelemetry(payload);
+    if (!sent) {
+      await fetch(`${HQ_URL}/telemetry`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    }
+    setLog(l=>[`telemetry ${sent?'mqtt':'http'} ${payload.temp_outside < -30 ? 'blizzard' : payload.acoustic_anomaly > 0.9 ? 'acoustic' : 'calm'}`, ...l].slice(0,20));
+    setTimeout(refresh, 500);
+  }
 
   async function doConsume(assetId: string) {
     const delta = txType==='CONSUME' ? -Math.abs(qtyDelta) : txType==='IN' ? Math.abs(qtyDelta) : txType==='OUT' ? -Math.abs(qtyDelta) : qtyDelta;
@@ -121,9 +137,10 @@ export default function FieldPage() {
             <div className="text-xs text-white/60">{forecast.qty}L diesel • {forecast.tele.temp_outside}°C {forecast.tele.wind_speed}m/s • {forecast.days_to_stockout<=20?'⚠ CRITICAL indent auto-created':''}</div>
           </div>
           <div className="flex gap-2 items-center">
-            <button onClick={async()=>{ await fetch(`${HQ_URL}/telemetry`,{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ts:new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-15, wind_speed:5, pressure:1013, dg_load:0.7, acoustic_anomaly:0.1})}); refresh(); }} className="bg-emerald-600 px-3 py-2 rounded text-xs">Calm</button>
-            <button onClick={async()=>{ await fetch(`${HQ_URL}/telemetry`,{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ts:new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-38, wind_speed:22, pressure:960, dg_load:0.9, acoustic_anomaly:0.1})}); refresh(); }} className="bg-red-600 px-3 py-2 rounded text-xs">Blizzard 42→18d</button>
-            <button onClick={async()=>{ await fetch(`${HQ_URL}/telemetry`,{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ts:new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-15, wind_speed:5, pressure:1013, dg_load:0.7, acoustic_anomaly:0.95})}); refresh(); }} className="bg-purple-600 px-3 py-2 rounded text-xs">Simulate Bearing Failure</button>
+            <button onClick={()=>sendTelemetry({ts:new Date().toISOString(), station_id:STATION_ID, temp_outside:-15, wind_speed:5, pressure:1013, dg_load:0.7, acoustic_anomaly:0.1})} className="bg-emerald-600 px-3 py-2 rounded text-xs">Calm</button>
+            <button onClick={()=>sendTelemetry({ts:new Date().toISOString(), station_id:STATION_ID, temp_outside:-38, wind_speed:22, pressure:960, dg_load:0.9, acoustic_anomaly:0.1})} className="bg-red-600 px-3 py-2 rounded text-xs">Blizzard 42→18d</button>
+            <button onClick={()=>sendTelemetry({ts:new Date().toISOString(), station_id:STATION_ID, temp_outside:-15, wind_speed:5, pressure:1013, dg_load:0.7, acoustic_anomaly:0.95})} className="bg-purple-600 px-3 py-2 rounded text-xs">Simulate Bearing Failure</button>
+            <span className={`text-[10px] px-2 py-1 rounded ${mqttLive?'bg-emerald-600 text-white':'bg-white/10 text-white/40'}`}>{mqttLive?'MQTT LIVE':'HTTP fallback'}</span>
           </div>
         </div>
       )}
