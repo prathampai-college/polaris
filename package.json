@@ -15,5 +15,10 @@
     "typecheck": "npx tsc -p shared/tsconfig.json --noEmit && npx tsc -p sync-gateway/tsconfig.json --noEmit",
     "build": "npm --prefix shared run build && npm --prefix sync-gateway run build",
     "verify": "node scripts/m1_verify.mjs && node scripts/m2_verify.mjs && node scripts/m3_verify.mjs && node scripts/m4_verify.mjs && node scripts/m5_verify.mjs"
+  },
+  "devDependencies": {
+    "@msgpack/msgpack": "^3.0.0",
+    "ulid": "^2.3.0",
+    "ws": "^8.17.0"
   }
 }
