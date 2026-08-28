@@ -174,7 +174,7 @@ def _fetch_all(sql: str, params=()):
     finally:
         if close_after:
             try: conn.close()
-            except: pass
+            except Exception: pass
 
 def _fetch_one(sql: str, params=()):
     rows = _fetch_all(sql, params)
@@ -260,7 +260,7 @@ def create_indent(body: IndentCreate):
     try:
         from ulid import ULID
         iid=str(ULID())
-    except:
+    except Exception:
         iid=str(uuid.uuid4())[:8]+"-"+body.asset_id
     if USE_PG:
         with conn:
@@ -362,7 +362,7 @@ async def post_telemetry(t: TelemetryIn):
             with conn.cursor() as cur:
                 cur.execute(q("INSERT INTO telemetry VALUES (?,?,?,?,?,?)"), (t.ts, t.station_id, t.temp_outside, t.wind_speed, t.pressure, t.dg_load))
                 try: check_and_escalate(t.station_id, t)
-                except: pass
+                except Exception: pass
     else:
         conn.execute("INSERT INTO telemetry VALUES (?,?,?,?,?,?)", (t.ts, t.station_id, t.temp_outside, t.wind_speed, t.pressure, t.dg_load))
         conn.commit()
@@ -423,7 +423,7 @@ def check_and_escalate(station_id: str, tele):
             try:
                 from ulid import ULID
                 iid=str(ULID())
-            except:
+            except Exception:
                 iid=str(uuid.uuid4())[:8]+"-auto"
             try:
                 utc = datetime.UTC
@@ -460,7 +460,7 @@ def check_and_escalate(station_id: str, tele):
                 try:
                     from ulid import ULID
                     iid = str(ULID())
-                except:
+                except Exception:
                     iid = str(uuid.uuid4())[:8]+"-ac"
                 if USE_PG:
                     with conn:
@@ -527,7 +527,7 @@ def ingest(frame: DeltaFrame, request: Request):
     import json as _json
     try:
         patch_bytes_len = len(_json.dumps(frame.patch).encode())
-    except:
+    except Exception:
         patch_bytes_len = 0
     if patch_bytes_len > 2048:
         raise HTTPException(413, "patch too large >2KB")
@@ -642,5 +642,5 @@ def ingest(frame: DeltaFrame, request: Request):
             raise
         except Exception as e:
             try: conn.execute("ROLLBACK")
-            except: pass
+            except Exception: pass
             raise HTTPException(500, str(e))
