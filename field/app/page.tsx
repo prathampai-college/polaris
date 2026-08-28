@@ -4,9 +4,6 @@ import { getDb, seedIfEmpty, listAssets, consumeAsset, outboxCount, getAssetByBa
 import { SyncWorker } from '../lib/sync';
 import { MqttPublisher } from '../lib/mqtt';
 
-const DEVICE_ID = 'BHARATI-TABLET-01';
-const ACTOR_ID = 'FIELD_OP_01';
-const STATION_ID = 'ST-BHARATI';
 const HQ_URL = process.env.NEXT_PUBLIC_HQ_URL?.replace('ws','http').replace('8787','8000') || 'http://localhost:8000';
 
 export default function FieldPage() {
@@ -30,7 +27,45 @@ export default function FieldPage() {
   const [overrideExp, setOverrideExp] = useState(false);
   const [forecast, setForecast] = useState<any>(null);
   const [mqttLive, setMqttLive] = useState(false);
-  const mqttRef = useState(() => new MqttPublisher(STATION_ID))[0];
+
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [loginStation, setLoginStation] = useState('ST-BHARATI');
+  const [loginPin, setLoginPin] = useState('');
+  const [deviceId, setDeviceId] = useState('');
+  const [authToken, setAuthToken] = useState('');
+
+  const STATION_ID = loginStation;
+  const DEVICE_ID = deviceId;
+  const ACTOR_ID = `FIELD_OP_${loginStation.replace('ST-','')}`;
+
+  const mqttRef = useState(() => new MqttPublisher(loginStation))[0];
+
+  async function doLogin() {
+    try {
+      const res = await fetch(`${HQ_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_id: deviceId || `TABLET-${loginStation}-${Date.now()}`, pin: loginPin, station_id: loginStation }),
+      });
+      if (!res.ok) { setLog([`LOGIN FAILED: ${await res.text()}`]); return; }
+      const data = await res.json();
+      setAuthToken(data.token);
+      localStorage.setItem('polaris_token', data.token);
+      localStorage.setItem('polaris_station', data.station_id);
+      localStorage.setItem('polaris_device', data.device_id);
+      setLoggedIn(true);
+      setLog([`LOGIN OK — ${data.station_id} as ${data.role}`]);
+    } catch (e: any) { setLog([`LOGIN ERR: ${e.message}`]); }
+  }
+
+  function doLogout() {
+    localStorage.removeItem('polaris_token');
+    localStorage.removeItem('polaris_station');
+    localStorage.removeItem('polaris_device');
+    setLoggedIn(false);
+    setAuthToken('');
+    mqttRef.disconnect();
+  }
 
   async function refresh() {
     setAssets(await listAssets());
@@ -38,9 +73,24 @@ export default function FieldPage() {
     setTxns(await listTransactions(10));
     setAudit(await listAudit(10));
     setOutbox(await outboxCount());
-    try { const r=await fetch(`${HQ_URL}/forecast/ST-BHARATI`); if(r.ok) setForecast(await r.json()); } catch {}
+    try {
+      const headers: Record<string, string> = authToken ? { 'Authorization': `Bearer ${authToken}` } : {};
+      const r = await fetch(`${HQ_URL}/forecast/${STATION_ID}`, { headers });
+      if(r.ok) setForecast(await r.json());
+    } catch {}
   }
   useEffect(()=>{
+    const stored = localStorage.getItem('polaris_token');
+    if (stored) {
+      setAuthToken(stored);
+      setLoginStation(localStorage.getItem('polaris_station') || 'ST-BHARATI');
+      setDeviceId(localStorage.getItem('polaris_device') || '');
+      setLoggedIn(true);
+    }
+  },[]);
+
+  useEffect(()=>{
+    if (!loggedIn) return;
     (async()=>{
       await getDb(); await seedIfEmpty(DEVICE_ID); await refresh();
       const w = new SyncWorker(DEVICE_ID, STATION_ID);
@@ -74,13 +124,15 @@ export default function FieldPage() {
         mqttRef.disconnect();
       };
     })();
-  },[]);
+  },[loggedIn]);
 
 
   async function sendTelemetry(payload: Record<string, any>) {
     const sent = mqttRef.publishTelemetry(payload);
     if (!sent) {
-      await fetch(`${HQ_URL}/telemetry`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+      await fetch(`${HQ_URL}/telemetry`, { method:'POST', headers, body: JSON.stringify(payload) });
     }
     setLog(l=>[`telemetry ${sent?'mqtt':'http'} ${payload.temp_outside < -30 ? 'blizzard' : payload.acoustic_anomaly > 0.9 ? 'acoustic' : 'calm'}`, ...l].slice(0,20));
     setTimeout(refresh, 500);
@@ -106,17 +158,41 @@ export default function FieldPage() {
     try { await updateIndentLocal({ indentId:id, status:'RECEIVED', actorId: ACTOR_ID, deviceId: DEVICE_ID }); setLog(l=>[`INDENT RECEIVED ${id.slice(0,8)}`,...l]); refresh(); } catch(e:any){ setLog(l=>[`ERR ${e.message}`,...l]); }
   }
 
+  if (!loggedIn) {
+    return (
+      <div className="min-h-screen p-3 max-w-md mx-auto flex items-center justify-center">
+        <div className="bg-polar-card rounded-xl p-6 border border-white/10 w-full space-y-4">
+          <div className="text-center">
+            <h1 className="text-2xl font-black">POLARIS FIELD</h1>
+            <p className="text-xs text-white/50 mt-1">Station Login</p>
+          </div>
+          <select value={loginStation} onChange={e=>setLoginStation(e.target.value)} className="w-full bg-black/30 border border-white/10 rounded p-3 text-sm">
+            <option value="ST-BHARATI">Bharati</option>
+            <option value="ST-MAITRI">Maitri</option>
+            <option value="ST-HIMADRI">Himadri</option>
+          </select>
+          <input value={deviceId} onChange={e=>setDeviceId(e.target.value)} placeholder="Device ID (auto if blank)" className="w-full bg-black/30 border border-white/10 rounded p-3 text-sm" />
+          <input type="password" value={loginPin} onChange={e=>setLoginPin(e.target.value)} onKeyDown={e=>e.key==='Enter'&&doLogin()} placeholder="PIN" className="w-full bg-black/30 border border-white/10 rounded p-3 text-sm" />
+          <button onClick={doLogin} className="w-full bg-polar-accent hover:opacity-90 py-3 rounded font-bold">Login</button>
+          {log.length>0 && <div className="text-xs text-red-400">{log[0]}</div>}
+          <p className="text-[10px] text-white/30 text-center">BHARATI-2024 / MAITRI-2024 / HIMADRI-2024</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`${fontLarge?'text-lg':''} min-h-screen p-3 max-w-7xl mx-auto`}>
       <header className="flex flex-wrap gap-3 items-center justify-between bg-polar-card rounded-xl p-4 border border-white/10">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">POLARIS FIELD — Bharati</h1>
+          <h1 className="text-2xl font-black tracking-tight">POLARIS FIELD — {STATION_ID.replace('ST-','')}</h1>
           <p className="text-xs text-white/60">Offline-first • SQLite OPFS/WAL • {DEVICE_ID} • Station {STATION_ID} • PWA</p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={()=>setGlove(v=>!v)} className={`glove-btn ${glove?'bg-polar-accent text-white':'bg-white/10'}`}>Glove {glove?'ON':'OFF'}</button>
           <button onClick={()=>setFontLarge(v=>!v)} className="glove-btn bg-white/10">A{fontLarge?'−':'＋'} 200%</button>
           <span className={`glove-btn ${outbox>0?'bg-amber-500 text-black':'bg-emerald-600 text-white'}`}>OUTBOX: {outbox} PENDING</span>
+          <button onClick={doLogout} className="glove-btn bg-red-600/60">Logout</button>
         </div>
       </header>
 
