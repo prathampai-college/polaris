@@ -35,13 +35,13 @@ function bytesToStr(b: Uint8Array): string {
 }
 
 async function hmacSign(key: CryptoKey, data: Uint8Array): Promise<Uint8Array> {
-  const sig = await crypto.subtle.sign('HMAC', key, data);
+  const sig = await crypto.subtle.sign('HMAC', key, data.buffer as ArrayBuffer);
   return new Uint8Array(sig);
 }
 
 async function importKey(hex: string): Promise<CryptoKey> {
   const bytes = base64UrlDecode(hex);
-  return crypto.subtle.importKey('raw', bytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+  return crypto.subtle.importKey('raw', bytes.buffer as ArrayBuffer, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
 }
 
 function b64url(obj: unknown): string {
@@ -94,7 +94,7 @@ export async function verifyJwt(token: string, secretHex: string): Promise<AuthP
     const key = await importKey(secretHex);
     const data = `${parts[0]}.${parts[1]}`;
     const sig = base64UrlDecode(parts[2]);
-    const valid = await crypto.subtle.verify('HMAC', key, sig, strToBytes(data));
+    const valid = await crypto.subtle.verify('HMAC', key, sig.buffer as ArrayBuffer, strToBytes(data).buffer as ArrayBuffer);
     if (!valid) return null;
     const payload = parseJwtPayload(token);
     if (!payload) return null;

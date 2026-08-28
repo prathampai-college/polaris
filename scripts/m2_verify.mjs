@@ -129,6 +129,11 @@ console.log('\n4) Start HQ + Gateway, drain outbox over ws (msgpack+CRC+AES)...'
 const hqProc=spawn('python',['-m','uvicorn','hq.app.main:app','--port',String(HQ_PORT),'--log-level','warning'],{env:{...process.env, GATEWAY_URL:`http://localhost:${GW_PORT}`, GATEWAY_INTERNAL_URL:`http://localhost:${GW_PORT}`}, cwd:process.cwd(),stdio:['ignore','pipe','pipe']});
 
 for(let i=0;i<30;i++){await sleep(300); try{const r=await fetch(`http://localhost:${HQ_PORT}/health`); if(r.ok){console.log('   HQ ready',await r.json()); break;}}catch{}}
+
+// Login as STATION_LEAD for indent approval
+const loginRes=await fetch(`http://localhost:${HQ_PORT}/auth/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:'NCPOR-ADMIN-01',pin:'BHARATI-2024',station_id:'ST-BHARATI',role:'STATION_LEAD'})});
+const {token: hqToken}=await loginRes.json();
+console.log('   HQ login STATION_LEAD OK');
 const gwProc=spawn('node',['sync-gateway/dist/gateway.js'],{env:{...process.env, HQ_URL:`http://localhost:${HQ_PORT}`, GATEWAY_PORT:String(GW_PORT), PSK_HEX}, stdio:['ignore','pipe','pipe']});
 gwProc.stdout.on('data',d=>process.stdout.write('[gw] '+d));
 await sleep(800);
@@ -175,7 +180,7 @@ console.log(`   HQ indents ${hqIndents.length} DRAFT=${hqIndents.filter(i=>i.sta
 if(!hqIndents.find(i=>i.id===indentId)) throw new Error('indent not synced to HQ');
 
 console.log('\n6) Indent lifecycle: HQ approve → Duplex WS Push → field receive → sync back...');
-let res=await fetch(`http://localhost:${HQ_PORT}/indents/${indentId}`,{method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({status:'APPROVED', actor_id:'NCPOR_ADMIN'})});
+let res=await fetch(`http://localhost:${HQ_PORT}/indents/${indentId}`,{method:'PATCH', headers:{'Content-Type':'application/json','Authorization':`Bearer ${hqToken}`}, body:JSON.stringify({status:'APPROVED', actor_id:'NCPOR_ADMIN'})});
 console.log('   HQ APPROVE', await res.json());
 await sleep(400); // wait for duplex WS push to deliver
 
@@ -184,7 +189,7 @@ const fieldStatusAfterApprove=checkDb.prepare('SELECT status FROM indents WHERE 
 console.log('   field indent status via Duplex WS push:', fieldStatusAfterApprove, '(expect APPROVED)');
 if(fieldStatusAfterApprove!=='APPROVED') throw new Error('duplex push for APPROVED failed');
 
-res=await fetch(`http://localhost:${HQ_PORT}/indents/${indentId}`,{method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({status:'DISPATCHED', actor_id:'NCPOR_ADMIN'})});
+res=await fetch(`http://localhost:${HQ_PORT}/indents/${indentId}`,{method:'PATCH', headers:{'Content-Type':'application/json','Authorization':`Bearer ${hqToken}`}, body:JSON.stringify({status:'DISPATCHED', actor_id:'NCPOR_ADMIN'})});
 console.log('   HQ DISPATCH', await res.json());
 await sleep(400); // wait for duplex WS push to deliver
 

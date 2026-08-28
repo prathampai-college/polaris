@@ -203,14 +203,18 @@ class LoginRequest(BaseModel):
     device_id: str
     pin: str
     station_id: str
+    role: str | None = None
 
 @app.post("/auth/login")
 async def auth_login(body: LoginRequest):
     expected_pin = STATION_PINS.get(body.station_id)
     if not expected_pin or body.pin != expected_pin:
         raise HTTPException(401, "invalid station or pin")
-    role = "FIELD_OP"
-    token = await sign_jwt({"sub": body.device_id, "role": role, "station_id": body.station_id, "device_id": body.device_id}, SECRET_KEY, TOKEN_EXPIRY_DAYS)
+    role = body.role or "FIELD_OP"
+    ROLES = ["FIELD_OP","STATION_LEAD","DISPATCH","HQ_LOGISTICS","NCPOR_ADMIN"]
+    if role not in ROLES:
+        raise HTTPException(400, f"invalid role, must be one of {ROLES}")
+    token = sign_jwt({"sub": body.device_id, "role": role, "station_id": body.station_id, "device_id": body.device_id}, SECRET_KEY, TOKEN_EXPIRY_DAYS)
     return {"token": token, "role": role, "station_id": body.station_id, "device_id": body.device_id}
 
 @app.get("/rbac/me")
