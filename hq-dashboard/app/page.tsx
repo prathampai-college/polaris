@@ -18,6 +18,7 @@ export default function HQPage() {
   const [authToken, setAuthToken] = useState('');
   const [loggedIn, setLoggedIn] = useState(false);
   const [loginPin, setLoginPin] = useState('');
+  const [procurement, setProcurement] = useState<any[]>([]);
 
   function headers(): Record<string, string> {
     const h: Record<string, string> = {};
@@ -41,7 +42,7 @@ export default function HQPage() {
   async function load() {
     try {
       const h = headers();
-      const [s, a, ind, au, fc, tl, tr] = await Promise.all([
+      const [s, a, ind, au, fc, tl, tr, pr] = await Promise.all([
         fetch(`${HQ}/stations/overview`, { headers: h }).then(r=>r.json()).catch(()=>[]),
         fetch(`${HQ}/assets`, { headers: h }).then(r=>r.json()).catch(()=>[]),
         fetch(`${HQ}/indents?station_id=${selectedStation}`, { headers: h }).then(r=>r.json()).catch(()=>[]),
@@ -49,9 +50,11 @@ export default function HQPage() {
         fetch(`${HQ}/forecast/${selectedStation}`, { headers: h }).then(r=>r.json()).catch(()=>null),
         fetch(`${HQ}/telemetry/latest?station_id=${selectedStation}`, { headers: h }).then(r=>r.json()).catch(()=>null),
         fetch(`${HQ}/telemetry/history?station_id=${selectedStation}&days=7`, { headers: h }).then(r=>r.json()).catch(()=>[]),
+        fetch(`${HQ}/procurement/${selectedStation}`, { headers: h }).then(r=>r.json()).catch(()=>[]),
       ]);
       setStations(s); setAssets(a); setIndents(ind); setAudit(au); setForecast(fc); setTele(tl?.temp_outside?tl:fc?.tele);
       if (tr.length) setTrend(tr);
+      if (pr.length) setProcurement(pr);
     } catch (e:any) { setMsg(e.message); }
   }
 
@@ -148,12 +151,13 @@ export default function HQPage() {
             </div>
           </div>
           <div className="mt-3 grid grid-cols-7 gap-1 text-[10px]">
-            {/* mini sparkline placeholder for TimescaleDB trend (M5) */}
-            {[42,40,38,30,22,19,18].map((v,i)=>(
+            {trend.length > 0 ? trend.slice(-7).map((t:any,i:number)=>(
               <div key={i} className="bg-white/5 rounded p-1 text-center border border-white/10">
-                <div className="text-white/60">D-{6-i}</div><div className="font-bold">{v}d</div><div className={`h-1 mt-1 rounded ${v<20?'bg-red-600':'bg-emerald-600'}`} />
+                <div className="text-white/60">{t.day?.slice(-5) || `D-${6-i}`}</div><div className="font-bold">{t.avg_temp != null ? `${Math.round(t.avg_temp)}°C` : '—'}</div><div className={`h-1 mt-1 rounded ${(t.avg_load||0)>0.8?'bg-red-600':'bg-emerald-600'}`} />
               </div>
-            ))}
+            )) : (
+              <div className="col-span-7 text-center text-white/30 py-2">No telemetry history yet — send from Field PWA</div>
+            )}
           </div>
         </section>
       )}
@@ -171,7 +175,7 @@ export default function HQPage() {
               <div className="text-xs text-white/50">Days to stockout (diesel)</div>
               <div className="text-xl font-black">{s.days_to_stockout} days <span className="text-xs font-normal text-white/60">95% CI {s.forecast_ci?.[0]}–{s.forecast_ci?.[1]}</span></div>
               <div className="w-full bg-white/10 rounded h-2 mt-1"><div className="bg-polar-accent h-2 rounded" style={{width: `${Math.min(100, s.days_to_stockout)}%`}} /></div>
-              <div className="text-[11px] text-white/40">M2 placeholder • M3 blizzard → 18d (95% CI 15–22)</div>
+              <div className="text-[11px] text-white/40">computed from inventory + physics model</div>
             </div>
           </div>
         ))}
@@ -228,16 +232,16 @@ export default function HQPage() {
       </section>
 
       <section className="bg-polar-card rounded-xl p-3 border border-white/10">
-        <h3 className="font-bold text-sm">TimescaleDB Trend • Procurement Forecast (M5)</h3>
+        <h3 className="font-bold text-sm">Trend & Procurement</h3>
         <div className="grid md:grid-cols-2 gap-3 mt-2">
           <TrendChart data={trend} />
           <div>
-            <ProcurementTable rows={[
-              {sku:'FUEL-DIESEL-001', name:'Diesel Winter', need:500, unit:'L', eta:'18d before freeze', cost:'₹1.2L'},
-              {sku:'O2-CYL-47L-003', name:'Oxygen 47L', need:12, unit:'cyl', eta:'22d', cost:'₹0.8L'},
-              {sku:'SPARE-BRG-6205-007', name:'DG Bearing', need:4, unit:'pcs', eta:'30d', cost:'₹0.3L'},
-            ]} />
-            <div className="text-[11px] text-white/40 mt-1">Forecast auto-creates CRITICAL indent when days ≤20 • Runs on existing station hardware, no new sat gear (feasibility slide)</div>
+            {procurement.length > 0 ? (
+              <ProcurementTable rows={procurement} />
+            ) : (
+              <div className="text-xs text-white/30 py-4 text-center">No procurement data</div>
+            )}
+            <div className="text-[11px] text-white/40 mt-1">Auto-creates CRITICAL indent when days ≤20 • Runs on existing station hardware</div>
           </div>
         </div>
       </section>
