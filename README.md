@@ -96,14 +96,18 @@ PSK_HEX=a...64hex  # per-station 32B pre-shared key, QR-provisioned at HQ
 HQ_URL=http://localhost:8000
 GATEWAY_PORT=8787
 DATABASE_URL=postgresql://polaris:polaris@db:5432/polaris  # omit for SQLite fallback
+SECRET_KEY=<random-64-char-hex>  # JWT signing key
+MQTT_ENABLED=false  # set true for live telemetry
+MQTT_BROKER_URL=broker.emqx.io:1883
 ```
 
 ---
 
 ## Usage
 
-### Field (Bharati tablet)
+### Field (Station tablets)
 
+- **Login:** Station selector (Bharati/Maitri/Himadri) + Device ID + PIN → JWT stored in localStorage.
 - **QR IN/OUT/CONSUME:** `QR Scan` → `html5-qrcode` (offline) or type barcode → `CONSUME -1` / `IN +1` (WAL tx: `UPDATE assets + INSERT transactions/audit/outbox; COMMIT`). Expiry `<30d` flagged HIGH; expired MEDICAL blocks without `STATION_LEAD` override + audit `CONSUME_OVERRIDE_EXPIRED`. Pessimistic lock — HQ rejects negative.
 - **Indent:** select asset → qty/urgency → `Create DRAFT` (offline→outbox). Once HQ approves/dispatches, status is pushed instantly (<50ms) over the encrypted WebSocket without HTTP polling → `RECEIVED`.
 - **3D Container X-Ray:** Interactive 3D visualizer using Three.js / React Three Fiber, ISO-20ft container rendering with coordinate-indexed crates, highlighting on pick/scan.
@@ -111,10 +115,11 @@ DATABASE_URL=postgresql://polaris:polaris@db:5432/polaris  # omit for SQLite fal
 
 ### HQ Dashboard (`:3001`)
 
-- **Forecast & Prognostics:** live thermo hybrid, Calm/Blizzard/Acoustic Failure buttons post telemetry, `ML residual ON/OFF` (fallback physics 21d), sparkline + auto-escalate banner.
-- **Fleet overview:** `GET /stations/overview` — containers, SKUs, critical_low, open_indents, `days_to_stockout`.
+- **Station Selector:** Switch between Bharati/Maitri/Himadri, filter all views by station.
+- **Forecast & Prognostics:** live thermo hybrid, Calm/Blizzard/Acoustic Failure buttons post telemetry, `ML residual ON/OFF` (fallback physics), SSE live updates.
+- **Fleet overview:** `GET /stations/overview` — per-station containers, SKUs, critical_low, open_indents, computed `days_to_stockout`.
 - **Indents:** workflow table `DRAFT→APPROVED→DISPATCHED→RECEIVED` with RBAC actions and real-time satellite push broadcast.
-- **TimescaleDB Trends:** Responsive `TrendChart` powered by Recharts (TimescaleDB historical aggregation) + procurement table (ETA before freeze, cost).
+- **Trends & Procurement:** Responsive `TrendChart` powered by Recharts + dynamic procurement table from API.
 - **Audit & 3D Twin:** `GET /audit`, `<30d` list, 3D container twin mirrors field.
 
 ---
@@ -124,19 +129,23 @@ DATABASE_URL=postgresql://polaris:polaris@db:5432/polaris  # omit for SQLite fal
 | Method | Path | Notes |
 |--------|------|-------|
 | `GET` | `/health` | `{db: postgres|sqlite-fallback}` |
-| `GET` | `/assets` | list 10 SKUs + version |
+| `POST` | `/auth/login` | `{device_id, pin, station_id}` → JWT token |
+| `GET` | `/assets` | list SKUs + version |
 | `GET` | `/audit?limit=20` | immutable tail |
-| `GET` | `/indents?station_id=` | |
+| `GET` | `/indents?station_id=` | filtered by station |
 | `POST` | `/indents` | `{station_id,asset_id,qty,urgency,created_by}` (broadcasts downstream push) |
-| `PATCH` | `/indents/{id}` | `{status,actor_id}` enforces `ALLOWED` (broadcasts downstream push) |
-| `GET` | `/stations/overview` | aggregates + canned 42d forecast |
+| `PATCH` | `/indents/{id}` | `{status,actor_id}` enforces `ALLOWED` + RBAC (broadcasts downstream push) |
+| `GET` | `/stations/overview` | per-station aggregated inventory + computed forecast |
 | `GET` | `/forecast/{station}` | thermo hybrid `{days_to_stockout, ci, physics, residual, used_model, pure_physics_days}` |
-| `POST` | `/telemetry` | `{ts,station_id,temp_outside,wind_speed,pressure,dg_load}` triggers `check_and_escalate` |
+| `GET` | `/procurement/{station}` | per-station procurement needs from inventory |
+| `POST` | `/telemetry` | `{ts,station_id,temp_outside,wind_speed,pressure,dg_load}` triggers `check_and_escalate`, publishes to MQTT + SSE |
 | `GET` | `/telemetry/latest?station_id=` | |
+| `GET` | `/telemetry/history?station_id=&days=` | TimescaleDB trend aggregation |
+| `GET` | `/telemetry/stream` | SSE live telemetry stream |
 | `POST` | `/sync/ingest` | `DeltaFrame {ulid,device_id,entity,entity_id,op,patch,base_version,ts}` dedupe+version, `CONFLICT_CRITICAL` if negative |
 | `POST` | `/internal/broadcast_delta` | Gateway internal endpoint for HQ-triggered downstream push |
 | `GET` | `/sync/state/{device_id}` | |
-| `GET` | `/rbac/me` | `FIELD_OP/STATION_LEAD/NCPOR_ADMIN` |
+| `GET` | `/rbac/me` | `FIELD_OP/STATION_LEAD/NCPOR_ADMIN` from JWT |
 
 Full spec `docs/API.md`. Wire: `toWire(frame, PSK)` → `[4B CRC][12B nonce||ciphertext||16B tag]` msgpack+AES-GCM. Field `SyncWorker` maintains full-duplex socket, drains `outbox PENDING` every 2s, handles instant downstream push, logs `json vs mp saving`, `PING/PONG` keepalive.
 
@@ -145,7 +154,7 @@ Full spec `docs/API.md`. Wire: `toWire(frame, PSK)` → `[4B CRC][12B nonce||cip
 
 ## Data Model (single SQLite `polaris.db` WAL)
 
-`shared/sql/schema.sql` — `stations, containers, crates({x,y}), assets(sku,criticality,expiry), transactions, indents(DRAFT→RECEIVED), telemetry, audit_log(append-only), outbox(ulid,retry,CRC), sync_state, dedupe`. Seed `shared/src/seed.ts` 10 SKUs (diesel/O₂/meds/spares/ice drill) across 3 containers/6 crates.
+`shared/sql/schema.sql` — `stations, containers, crates({x,y}), assets(sku,criticality,expiry), transactions, indents(DRAFT→RECEIVED), telemetry, audit_log(append-only), outbox(ulid,retry,CRC), sync_state, dedupe`. Seed `shared/seed.json` 20 SKUs across 3 stations (Bharati/Maitri/Himadri), 6 containers, 12 crates.
 
 ---
 
@@ -175,10 +184,11 @@ See `M1_RUNBOOK.md` … `M5_RUNBOOK.md` for phase demos.
 
 ## Security & Resilience
 
-- **Zero cloud:** `docker compose up` WiFi off, PWA Workbox pre-cached, OPFS `polaris.db`, `SQLCipher`/disk encryption at-rest placeholder.
-- **Transit:** TLS + `AES-GCM` per frame (`nonce 12B||tag 16B`) + `CRC32`, PSK per station QR-provisioned, `KEY_ROTATE` outbox on next window (WireGuard/mTLS planned §11).
+- **Zero cloud:** `docker compose up` WiFi off, PWA Workbox pre-cached, OPFS `polaris.db`.
+- **Transit:** TLS + `AES-GCM` per frame (`nonce 12B||tag 16B`) + `CRC32`, PSK per station QR-provisioned.
 - **At-rest:** SQLite WAL `SYNCHRONOUS=NORMAL`, file `OPFS` + OS disk encryption.
-- **Auth/RBAC:** JWT 30d offline + local RBAC cache (`NCPOR_ADMIN>STATION_LEAD>FIELD_OP>VIEWER`), row-level `station_id` filter, roster revocation on next sync via `sync_state`.
+- **Auth/RBAC:** HMAC-SHA256 JWT 30d offline + local RBAC cache (`NCPOR_ADMIN>STATION_LEAD>FIELD_OP>VIEWER`), row-level `station_id` filter, roster revocation on next sync via `sync_state`.
+- **Live Telemetry:** MQTT pub/sub (paho-mqtt) + SSE streaming for real-time dashboard updates.
 - **Audit:** immutable `audit_log` both field/HQ, replayable.
 - **DR:** WAL + nightly `pg_dump` + `VACUUM INTO 'snapshot.db'`, HQ TimescaleDB source of truth, re-bootstrap via snapshot + delta replay.
 
@@ -186,7 +196,7 @@ See `M1_RUNBOOK.md` … `M5_RUNBOOK.md` for phase demos.
 
 ## AI — Thermo Hybrid
 
-`ai/training/generate.py` → `weather_fuel_history.csv` (1095 rows, physics `110*(1+0.012ΔT+0.018wind)+0.08ΔP` + noise) → `ai/training/train.py` tiny MLP `5→16→8→1` → `ai/thermo_residual.onnx` **1.3KB** `ai/scaler.json`. Runner `ai/runner/infer.mjs` (`onnxruntime-node`, `<200ms`) + fallback linear. HQ `hq/app/main.py:236` `predict_total()` + `check_and_escalate()`. Honest framing: *"physics-informed forecast, not certified prediction"*.
+`ai/training/generate.py` → `weather_fuel_history.csv` (1095 rows, physics `110*(1+0.012ΔT+0.018wind)+0.08ΔP` + noise) → `ai/training/train.py` tiny MLP `5→16→8→1` → `ai/thermo_residual.onnx` **1.3KB** `ai/scaler.json`. Runner `ai/runner/infer.mjs` (`onnxruntime-node`, `<200ms`) + fallback linear. HQ `hq/app/main.py` `predict_total()` + `check_and_escalate()`. Honest framing: *"physics-informed forecast, not certified prediction"*.
 
 ---
 
@@ -219,7 +229,7 @@ docker-compose.yml + Dockerfiles (hardened, non-root, healthcheck)
 
 ## Roadmap & Architecture
 
-Production path: Rust sync microservice (`tokio`/`quinn`) + protobuf schema registry + mTLS/WireGuard + short-lived JWT with offline rotation.
+Production path: Rust sync microservice (`tokio`/`quinn`) + protobuf schema registry + mTLS/WireGuard + key rotation.
 
 ---
 
