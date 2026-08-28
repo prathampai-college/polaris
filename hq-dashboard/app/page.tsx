@@ -14,17 +14,41 @@ export default function HQPage() {
   const [mlOn, setMlOn] = useState(true);
   const [msg, setMsg] = useState('');
   const [sseStatus, setSseStatus] = useState<'connecting'|'live'|'polling'>('connecting');
+  const [selectedStation, setSelectedStation] = useState('ST-BHARATI');
+  const [authToken, setAuthToken] = useState('');
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [loginPin, setLoginPin] = useState('');
+
+  function headers(): Record<string, string> {
+    const h: Record<string, string> = {};
+    if (authToken) h['Authorization'] = `Bearer ${authToken}`;
+    return h;
+  }
+
+  async function doLogin() {
+    try {
+      const res = await fetch(`${HQ}/auth/login`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_id: `HQ-DASHBOARD-${Date.now()}`, pin: loginPin, station_id: selectedStation }),
+      });
+      if (!res.ok) { setMsg('login failed'); return; }
+      const data = await res.json();
+      setAuthToken(data.token);
+      setLoggedIn(true);
+    } catch { setMsg('login error'); }
+  }
 
   async function load() {
     try {
+      const h = headers();
       const [s, a, ind, au, fc, tl, tr] = await Promise.all([
-        fetch(`${HQ}/stations/overview`).then(r=>r.json()).catch(()=>[]),
-        fetch(`${HQ}/assets`).then(r=>r.json()).catch(()=>[]),
-        fetch(`${HQ}/indents`).then(r=>r.json()).catch(()=>[]),
-        fetch(`${HQ}/audit?limit=20`).then(r=>r.json()).catch(()=>[]),
-        fetch(`${HQ}/forecast/ST-BHARATI`).then(r=>r.json()).catch(()=>null),
-        fetch(`${HQ}/telemetry/latest?station_id=ST-BHARATI`).then(r=>r.json()).catch(()=>null),
-        fetch(`${HQ}/telemetry/history?station_id=ST-BHARATI&days=7`).then(r=>r.json()).catch(()=>[]),
+        fetch(`${HQ}/stations/overview`, { headers: h }).then(r=>r.json()).catch(()=>[]),
+        fetch(`${HQ}/assets`, { headers: h }).then(r=>r.json()).catch(()=>[]),
+        fetch(`${HQ}/indents?station_id=${selectedStation}`, { headers: h }).then(r=>r.json()).catch(()=>[]),
+        fetch(`${HQ}/audit?limit=20`, { headers: h }).then(r=>r.json()).catch(()=>[]),
+        fetch(`${HQ}/forecast/${selectedStation}`, { headers: h }).then(r=>r.json()).catch(()=>null),
+        fetch(`${HQ}/telemetry/latest?station_id=${selectedStation}`, { headers: h }).then(r=>r.json()).catch(()=>null),
+        fetch(`${HQ}/telemetry/history?station_id=${selectedStation}&days=7`, { headers: h }).then(r=>r.json()).catch(()=>[]),
       ]);
       setStations(s); setAssets(a); setIndents(ind); setAudit(au); setForecast(fc); setTele(tl?.temp_outside?tl:fc?.tele);
       if (tr.length) setTrend(tr);
@@ -41,31 +65,33 @@ export default function HQPage() {
       evtSource.addEventListener('telemetry', ((ev: MessageEvent) => {
         try {
           const t = JSON.parse(ev.data);
-          setTele(t);
-          setTrend(prev => {
-            const next = [...prev, { day: t.ts?.slice(5,10) || 'live', qty: t.qty || prev[prev.length-1]?.qty || 0, forecast: t.forecast }];
-            return next.length > 14 ? next.slice(-14) : next;
-          });
+          if (t.station_id === selectedStation) {
+            setTele(t);
+            setTrend(prev => {
+              const next = [...prev, { day: t.ts?.slice(5,10) || 'live', qty: t.qty || prev[prev.length-1]?.qty || 0, forecast: t.forecast }];
+              return next.length > 14 ? next.slice(-14) : next;
+            });
+          }
         } catch {}
       }) as EventListener);
       evtSource.onerror = () => { setSseStatus('polling'); evtSource?.close(); };
     } catch { setSseStatus('polling'); }
     return ()=>{ clearInterval(poll); evtSource?.close(); };
-  },[]);
+  },[selectedStation]);
 
   async function sendTelemetry(mode:'calm'|'blizzard'|'acoustic'){
     const payload = mode==='blizzard'
-      ? { ts: new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-38, wind_speed:22, pressure:960, dg_load:0.9, acoustic_anomaly:0.1 }
+      ? { ts: new Date().toISOString(), station_id:selectedStation, temp_outside:-38, wind_speed:22, pressure:960, dg_load:0.9, acoustic_anomaly:0.1 }
       : mode==='acoustic'
-      ? { ts: new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-15, wind_speed:5, pressure:1013, dg_load:0.7, acoustic_anomaly:0.95 }
-      : { ts: new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-15, wind_speed:5, pressure:1013, dg_load:0.7, acoustic_anomaly:0.1 };
-    await fetch(`${HQ}/telemetry`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+      ? { ts: new Date().toISOString(), station_id:selectedStation, temp_outside:-15, wind_speed:5, pressure:1013, dg_load:0.7, acoustic_anomaly:0.95 }
+      : { ts: new Date().toISOString(), station_id:selectedStation, temp_outside:-15, wind_speed:5, pressure:1013, dg_load:0.7, acoustic_anomaly:0.1 };
+    await fetch(`${HQ}/telemetry`, { method:'POST', headers:{'Content-Type':'application/json', ...headers()}, body: JSON.stringify(payload) });
     setMsg(`telemetry ${mode} sent`);
     setTimeout(load, 500);
   }
 
   async function updateIndent(id:string, status:string) {
-    const res=await fetch(`${HQ}/indents/${id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status, actor_id:'NCPOR_ADMIN' }) });
+    const res=await fetch(`${HQ}/indents/${id}`, { method:'PATCH', headers:{'Content-Type':'application/json', ...headers()}, body: JSON.stringify({ status, actor_id:'NCPOR_ADMIN' }) });
     const j=await res.json();
     setMsg(JSON.stringify(j));
     load();
@@ -78,11 +104,24 @@ export default function HQPage() {
       <header className="bg-polar-card rounded-xl p-4 border border-white/10 flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-black">POLARIS HQ — NCPOR / MoES Command</h1>
-          <p className="text-xs text-white/50">Fleet view • Indent workflow • Audit • Thermo hybrid forecast (ONNX int8 &lt;2MB, &lt;200ms)</p>
+          <p className="text-xs text-white/50">Fleet view • Indent workflow • Audit • Thermo hybrid forecast (ONNX &lt;2MB, &lt;200ms)</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          <select value={selectedStation} onChange={e=>setSelectedStation(e.target.value)} className="bg-black/30 border border-white/10 rounded px-2 py-1 text-xs">
+            <option value="ST-BHARATI">Bharati</option>
+            <option value="ST-MAITRI">Maitri</option>
+            <option value="ST-HIMADRI">Himadri</option>
+          </select>
           <span className={`text-xs px-3 py-1 rounded ${sseStatus==='live'?'bg-emerald-600':sseStatus==='connecting'?'bg-amber-600':'bg-white/20'}`}>{sseStatus==='live'?'LIVE SSE':sseStatus==='connecting'?'CONNECTING':'POLLING 10s'}</span>
           <span className="text-xs bg-polar-accent px-3 py-1 rounded">FIELD live TS • HQ Python</span>
+          {loggedIn ? (
+            <button onClick={()=>{setLoggedIn(false);setAuthToken('');}} className="text-xs bg-red-600/60 px-3 py-1 rounded">Logout</button>
+          ) : (
+            <div className="flex gap-1">
+              <input type="password" value={loginPin} onChange={e=>setLoginPin(e.target.value)} onKeyDown={e=>e.key==='Enter'&&doLogin()} placeholder="PIN" className="w-20 bg-black/30 border border-white/10 rounded px-2 py-1 text-xs" />
+              <button onClick={doLogin} className="text-xs bg-blue-600 px-2 py-1 rounded">Login</button>
+            </div>
+          )}
         </div>
       </header>
 
