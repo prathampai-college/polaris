@@ -498,6 +498,20 @@ def forecast(station_id: str, asset_sku: str = "FUEL-DIESEL-001"):
     return {"station_id": station_id, "asset_sku": asset_sku, "qty": qty, "physics": round(phys,1), "residual": round(res,2), "total_per_day": round(total,1), "days_to_stockout": round(days,1), "ci": ci, "used_model": used, "tele": tele,
             "pure_physics_days": round(qty/phys,1) if phys>0 else 999}
 
+@app.get("/procurement/{station_id}")
+def procurement(station_id: str):
+    """Compute procurement needs from current inventory levels vs season targets."""
+    SEASON_TARGETS = {"FUEL-DIESEL-001": 5000, "O2-CYL-47L-003": 30, "SPARE-BRG-6205-007": 10}
+    UNIT_MAP = {"FUEL-DIESEL-001": ("L", 1200), "O2-CYL-47L-003": ("cyl", 200), "SPARE-BRG-6205-007": ("pcs", 80)}
+    rows = _fetch_all("SELECT a.sku, a.name, a.qty, a.unit FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku IN ('FUEL-DIESEL-001','O2-CYL-47L-003','SPARE-BRG-6205-007')", (station_id,))
+    result = []
+    for r in rows:
+        target = SEASON_TARGETS.get(r["sku"], 0)
+        need = max(0, target - r["qty"])
+        _, cost_per_unit = UNIT_MAP.get(r["sku"], (r["unit"], 0))
+        result.append({"sku": r["sku"], "name": r["name"], "need": need, "unit": r["unit"], "eta": "30d before freeze", "cost": f"\u20b9{round(need*cost_per_unit/100000,1)}L"})
+    return result
+
 @app.get("/sync/state/{device_id}")
 def sync_state(device_id: str):
     row=_fetch_one("SELECT * FROM sync_state WHERE device_id=?", (device_id,))
