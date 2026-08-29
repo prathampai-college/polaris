@@ -1,6 +1,6 @@
 'use client';
-import { encode } from '@msgpack/msgpack';
 import { toWire as toWireWeb, fromWire as fromWireWeb } from '@shared/codec.web.js';
+import { sizeReport } from '@shared/codec.web.js';
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'ws://localhost:8787';
 const PSK_HEX = process.env.NEXT_PUBLIC_PSK_HEX || 'a'.repeat(64);
@@ -18,6 +18,7 @@ export class SyncWorker {
   onDownstreamDelta?: (delta: unknown) => void;
   stats: SyncStats = { sent: 0, acked: 0, deduped: 0, pending: 0, receivedDeltas: 0 };
   private timer: ReturnType<typeof setInterval> | null = null;
+  private draining = false;
 
   constructor(deviceId: string, stationId = 'ST-BHARATI') {
     this.deviceId = deviceId;
@@ -102,24 +103,27 @@ export class SyncWorker {
   }
 
   async drain() {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    const { getDb } = await import('./db');
-    const db = await getDb();
-    const rows = db.selectObjects("SELECT * FROM outbox WHERE status='PENDING' ORDER BY created_at LIMIT 20") as Array<Record<string, unknown>>;
-    this.stats.pending = rows.length;
-    for (const r of rows) {
-      const { decode } = await import('@msgpack/msgpack');
-      const patch = decode(r.patch as Uint8Array) as Record<string, unknown>;
-      const frame = { ulid: r.ulid, device_id: r.device_id, entity: r.entity, entity_id: r.entity_id, op: r.op, patch, base_version: r.base_version, ts: r.created_at };
-      const jsonBytes = new TextEncoder().encode(JSON.stringify(frame)).length;
-      const mpBytes = encode(frame as never).length;
-      this.stats.savingPct = ((jsonBytes - mpBytes) / jsonBytes) * 100;
-      const wire = await toWire(frame);
-      if (wire.length > 2048) console.warn('[sync] frame >2KB', wire.length);
-      (this.ws as unknown as { send(d: Uint8Array): void }).send(wire);
-      this.stats.sent++;
-      db.exec({ sql: "UPDATE outbox SET status='SENT' WHERE ulid=?", bind: [r.ulid] });
-    }
+    if (this.draining || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.draining = true;
+    try {
+      const { getDb } = await import('./db');
+      const db = await getDb();
+      const rows = db.selectObjects("SELECT * FROM outbox WHERE status IN ('PENDING','SENT') ORDER BY created_at LIMIT 20") as Array<Record<string, unknown>>;
+      this.stats.pending = db.selectValue("SELECT COUNT(*) FROM outbox WHERE status IN ('PENDING','SENT')") as number;
+      for (const r of rows) {
+        const { decode } = await import('@msgpack/msgpack');
+        const patch = decode(r.patch as Uint8Array) as Record<string, unknown>;
+        const frame = { ulid: r.ulid, device_id: r.device_id, entity: r.entity, entity_id: r.entity_id, op: r.op, patch, base_version: r.base_version, ts: r.created_at };
+        const { savingPct } = sizeReport(frame);
+        this.stats.savingPct = savingPct;
+        const wire = await toWire(frame);
+        if (wire.length > 2048) { console.warn('[sync] frame >2KB', wire.length); continue; }
+        (this.ws as unknown as { send(d: Uint8Array): void }).send(wire);
+        this.stats.sent++;
+        // keep PENDING until ACK (DEDUPED at HQ ensures idempotency); mark SENT for visibility but retry on next drain
+        if (r.status === 'PENDING') db.exec({ sql: "UPDATE outbox SET status='SENT', retry_count=retry_count+1 WHERE ulid=?", bind: [r.ulid] });
+      }
+    } finally { this.draining = false; }
   }
 
   disconnect() {

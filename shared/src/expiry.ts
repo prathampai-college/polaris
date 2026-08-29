@@ -1,13 +1,16 @@
 export function isExpiringSoon(expiry: string | null): boolean {
   if (!expiry) return false;
-  const ms = new Date(expiry).getTime() - Date.now();
-  // expiring soon = 0..30 days in future, exclusive of already expired
+  const t = new Date(expiry).getTime();
+  if (Number.isNaN(t)) return false;
+  const ms = t - Date.now();
   return ms >= 0 && ms < 30 * 86400000;
 }
 
 export function isExpired(expiry: string | null): boolean {
   if (!expiry) return false;
-  return new Date(expiry).getTime() < Date.now();
+  const t = new Date(expiry).getTime();
+  if (Number.isNaN(t)) return true; // invalid date → treat as expired (fail-safe)
+  return t < Date.now();
 }
 
 export function daysUntilExpiry(expiry: string | null): number | null {

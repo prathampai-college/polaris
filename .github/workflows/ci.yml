@@ -62,6 +62,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: hq-dashboard/package-lock.json }
+      - run: npm i --legacy-peer-deps --prefix shared
+      - run: npm --prefix shared run build
       - run: npm i --legacy-peer-deps --prefix hq-dashboard
       - run: npx --prefix hq-dashboard tsc -p hq-dashboard/tsconfig.json --noEmit
       - run: npm --prefix hq-dashboard run build

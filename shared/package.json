@@ -4,6 +4,20 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./containers.js": {
+      "types": "./dist/containers.d.ts",
+      "import": "./dist/containers.js"
+    },
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "import": "./dist/*.js"
+    }
+  },
   "scripts": {
     "build": "tsc",
     "test": "npm run build && node test/codec.test.mjs && node test/schemas.test.mjs",

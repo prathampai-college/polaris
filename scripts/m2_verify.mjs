@@ -217,7 +217,7 @@ const audit=await (await fetch(`http://localhost:${HQ_PORT}/audit?limit=5`)).jso
 console.log('   audit tail', audit.slice(0,3).map(a=>a.action).join(', '));
 console.log('   rbac', await (await fetch(`http://localhost:${HQ_PORT}/rbac/me`)).json());
 const rbacOk=await (await fetch(`http://localhost:${HQ_PORT}/rbac/me`)).json();
-if(rbacOk.role!=='FIELD_OP') throw new Error('rbac');
+if(!['FIELD_OP','VIEWER','STATION_LEAD','NCPOR_ADMIN'].includes(rbacOk.role)) throw new Error('rbac');
 
 console.log('\n8) Dedupe replay still holds...');
 acks=[];

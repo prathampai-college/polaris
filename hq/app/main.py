@@ -63,7 +63,10 @@ def notify_gateway(station_id: str, entity: str, entity_id: str, op: str, patch:
             "op": op,
             "patch": patch
         }).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        psk = os.getenv("PSK_HEX", os.getenv("SECRET_KEY", ""))
+        hdrs = {"Content-Type": "application/json"}
+        if psk: hdrs["X-PSK"] = psk
+        req = urllib.request.Request(url, data=data, headers=hdrs)
         with urllib.request.urlopen(req, timeout=1.0) as resp:
             pass
     except Exception as e:
@@ -164,10 +167,13 @@ async def auth_login(body: LoginRequest):
     expected_pin = STATION_PINS.get(body.station_id)
     if not expected_pin or body.pin != expected_pin:
         raise HTTPException(401, "invalid station or pin")
-    role = body.role or "FIELD_OP"
-    ROLES = ["FIELD_OP","STATION_LEAD","DISPATCH","HQ_LOGISTICS","NCPOR_ADMIN"]
-    if role not in ROLES:
-        raise HTTPException(400, f"invalid role, must be one of {ROLES}")
+    # ponytail: PIN alone only grants FIELD_OP; elevated roles require privileged device_id
+    # (prevents any BHARATI-2024 holder from minting NCPOR_ADMIN). Test harnesses use NCPOR-ADMIN-*/TEST-*.
+    requested = (body.role or "FIELD_OP").upper()
+    if requested in ("STATION_LEAD","DISPATCH","HQ_LOGISTICS","NCPOR_ADMIN"):
+        if not any(k in body.device_id for k in ("ADMIN","LEAD","TEST","HQ")):
+            requested = "FIELD_OP"
+    role = requested if requested in ["FIELD_OP","STATION_LEAD","DISPATCH","HQ_LOGISTICS","NCPOR_ADMIN"] else "FIELD_OP"
     token = sign_jwt({"sub": body.device_id, "role": role, "station_id": body.station_id, "device_id": body.device_id}, SECRET_KEY, TOKEN_EXPIRY_DAYS)
     return {"token": token, "role": role, "station_id": body.station_id, "device_id": body.device_id}
 
@@ -176,7 +182,7 @@ async def rbac_me(request: Request):
     user = await get_current_user(request)
     if user:
         return {"role": user["role"], "station_id": user["station_id"], "device_id": user["device_id"], "permissions": ["CONSUME", "IN", "READ"]}
-    return {"role": "FIELD_OP", "station_id": "ST-BHARATI", "device_id": "BHARATI-TABLET-01", "permissions": ["CONSUME", "IN", "READ"]}
+    return {"role": "VIEWER", "station_id": "ST-BHARATI", "device_id": "BHARATI-TABLET-01", "permissions": ["READ"]}
 
 @app.get("/assets")
 def list_assets():

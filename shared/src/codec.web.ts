@@ -2,9 +2,22 @@ import { encode, decode } from '@msgpack/msgpack';
 import { crc32 } from './crc.js';
 export { crc32 } from './crc.js';
 
+export function sizeReport(frame: unknown): { jsonBytes: number; msgpackBytes: number; savingPct: number } {
+  const jsonBytes = new TextEncoder().encode(JSON.stringify(frame)).length;
+  const msgpackBytes = encode(frame as never).length;
+  const savingPct = ((jsonBytes - msgpackBytes) / jsonBytes) * 100;
+  return { jsonBytes, msgpackBytes, savingPct };
+}
+
 function hexToBytes(hex: string): Uint8Array {
+  if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length % 2 !== 0) throw new Error('hex must be even hex string');
+  if (hex.length !== 64) throw new Error('PSK must be 64 hex chars (32B)');
   const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) out[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+  for (let i = 0; i < hex.length; i += 2) {
+    const v = parseInt(hex.slice(i, i + 2), 16);
+    if (Number.isNaN(v)) throw new Error('invalid hex');
+    out[i / 2] = v;
+  }
   return out;
 }
 
@@ -33,7 +46,7 @@ export async function toWire(frame: unknown, keyHex: string): Promise<Uint8Array
   const enc = await encrypt(mp, keyHex);
   const crc = crc32(enc);
   const wire = new Uint8Array(4 + enc.length);
-  new DataView(wire.buffer).setUint32(0, crc, false);
+  new DataView(wire.buffer, wire.byteOffset, wire.byteLength).setUint32(0, crc, false);
   wire.set(enc, 4);
   return wire;
 }
