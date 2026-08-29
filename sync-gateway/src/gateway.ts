@@ -1,7 +1,6 @@
 import http from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { encode } from '@msgpack/msgpack';
-import { toWire, fromWire, ulid } from '@polaris/shared';
+import { toWire, fromWire, ulid, sizeReport } from '@polaris/shared';
 import type { DownstreamDeltaFrame, SyncInitFrame, SyncInitRespFrame, AckFrame } from '@polaris/shared';
 
 const PORT = Number(process.env.GATEWAY_PORT || 8787);
@@ -11,10 +10,6 @@ const MAX_WIRE_SIZE = 2048; // strict 2KB frame budget
 
 if (!/^[0-9a-fA-F]{64}$/.test(PSK_HEX)) {
   console.warn('[polaris-gateway] WARNING: PSK_HEX must be 64 hex chars (32B). Using fallback is insecure for production.');
-}
-
-function toWireAck(ack: AckFrame, keyHex: string): Uint8Array {
-  return toWire(ack, keyHex);
 }
 
 function log(level: string, msg: string, extra: Record<string, unknown> = {}) {
@@ -208,9 +203,7 @@ wss.on('connection', (ws: WebSocket) => {
     const meta = clients.get(ws);
     if (meta && !meta.deviceId) meta.deviceId = String(f.device_id);
 
-    const jsonBytes = Buffer.byteLength(JSON.stringify(f), 'utf8');
-    const mpBytes = (encode(f) as Uint8Array).length;
-    const saving = (((jsonBytes - mpBytes) / jsonBytes) * 100).toFixed(1);
+    const { jsonBytes, msgpackBytes: mpBytes, savingPct } = sizeReport(f);
     log('info', 'delta', {
       entity: f.entity,
       id: f.entity_id,
@@ -219,7 +212,7 @@ wss.on('connection', (ws: WebSocket) => {
       patch: f.patch,
       jsonBytes,
       mpBytes,
-      saving: saving + '%',
+      saving: savingPct.toFixed(1) + '%',
       wire: data.length,
     });
 
@@ -238,14 +231,14 @@ wss.on('connection', (ws: WebSocket) => {
         server_version: body.server_version as number | undefined,
         message: body.message as string | undefined,
       };
-      const wireAck = toWireAck(ack, PSK_HEX);
+      const wireAck = toWire(ack, PSK_HEX);
       if (ws.readyState === WebSocket.OPEN) ws.send(wireAck);
       log('info', 'hq ack', { status: ack.status, http: res.status, ms: Date.now() - t0, ulid: String(f.ulid).slice(0, 8) });
     } catch (e: unknown) {
       log('error', 'hq forward fail', { error: (e as Error).message, ulid: String(f.ulid).slice(0, 8) });
       const ack: AckFrame = { type: 'ACK', ulid: String(f.ulid), status: 'FAILED', message: (e as Error).message };
       try {
-        if (ws.readyState === WebSocket.OPEN) ws.send(toWireAck(ack, PSK_HEX));
+        if (ws.readyState === WebSocket.OPEN) ws.send(toWire(ack, PSK_HEX));
       } catch {}
     }
   });
