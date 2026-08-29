@@ -98,5 +98,10 @@ temp/
 # Generated data
 ai/training/weather_fuel_history.csv
 
+# Provisioned PSK QR (per-station, never commit)
+provision/
+provision/*.png
+provision/*.json
+
 # MQTT
 .mqtt_state
