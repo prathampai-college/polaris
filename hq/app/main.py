@@ -343,7 +343,7 @@ def latest_telemetry(station_id: str = "ST-BHARATI"):
 @app.get("/telemetry/history")
 def history_telemetry(station_id: str = "ST-BHARATI", days: int = 30):
     # Phase 3: TimescaleDB trend history endpoint
-    return _fetch_all("SELECT date(ts) as day, AVG(temp_outside) as avg_temp, AVG(dg_load) as avg_load FROM telemetry WHERE station_id=? GROUP BY date(ts) ORDER BY day DESC LIMIT ?", (station_id, days))
+    return _fetch_all("SELECT SUBSTR(ts, 1, 10) as day, AVG(temp_outside) as avg_temp, AVG(dg_load) as avg_load FROM telemetry WHERE station_id=? GROUP BY SUBSTR(ts, 1, 10) ORDER BY day DESC LIMIT ?", (station_id, days))
 
 @app.get("/telemetry/stream")
 async def telemetry_stream():
@@ -381,6 +381,11 @@ def check_and_escalate(station_id: str, tele):
     crew=cr["winter_crew_count"] if cr else 24
     phys,res,total,used=predict_total(tele.temp_outside, tele.wind_speed, tele.pressure, crew, tele.dg_load)
     days=qty/total if total>0 else 999
+    try:
+        utc = datetime.UTC
+    except AttributeError:
+        utc = datetime.timezone.utc
+    now=datetime.datetime.now(utc).isoformat()
     if days <= 20:
         exists=_fetch_one("SELECT 1 as c FROM indents WHERE asset_id=? AND station_id=? AND status IN ('DRAFT','APPROVED','DISPATCHED')", (asset_id, station_id))
         if not exists:
@@ -389,11 +394,6 @@ def check_and_escalate(station_id: str, tele):
                 iid=str(ULID())
             except Exception:
                 iid=str(uuid.uuid4())[:8]+"-auto"
-            try:
-                utc = datetime.UTC
-            except AttributeError:
-                utc = datetime.timezone.utc
-            now=datetime.datetime.now(utc).isoformat()
             if USE_PG:
                 with conn:
                     with conn.cursor() as cur:
@@ -546,7 +546,7 @@ def ingest(frame: DeltaFrame, request: Request):
                 if cur.fetchone():
                     cur.execute(q("SELECT last_server_version FROM sync_state WHERE device_id=?"), (frame.device_id,))
                     r=cur.fetchone()
-                    ver=r[0] if r else 0
+                    ver=r[0] if r and r[0] is not None else 0
                     return {"status":"DEDUPED", "server_version": ver, "message":"duplicate ULID, already applied"}
                 if frame.entity=="indents" and frame.op=="UPSERT":
                     p=frame.patch
@@ -561,7 +561,7 @@ def ingest(frame: DeltaFrame, request: Request):
                     cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (ulid, frame.device_id, f"SYNC_INDENT_{p.get('status','UPSERT')}", "indents", None, str(p), now))
                     cur.execute(q("SELECT last_server_version FROM sync_state WHERE device_id=?"), (frame.device_id,))
                     rv=cur.fetchone()
-                    ver=rv[0] if rv else 0
+                    ver=rv[0] if rv and rv[0] is not None else 0
                     cur.execute(q("INSERT INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,?) ON CONFLICT (device_id) DO UPDATE SET last_acked_ulid=EXCLUDED.last_acked_ulid"), (frame.device_id, ulid, ver))
                     c.commit()
                     return {"status":"APPLIED", "server_version": ver}

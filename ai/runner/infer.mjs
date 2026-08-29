@@ -31,7 +31,7 @@ export async function init() {
     ort = await import('onnxruntime-node');
     if (fs.existsSync(MODEL_PATH)) {
       session = await ort.InferenceSession.create(MODEL_PATH, { executionProviders: ['cpu'] });
-      console.log(`[ai] ONNX loaded ${MODEL_PATH} ${(fs.statSync(MODEL_PATH).length/1024).toFixed(1)}KB`);
+      console.log(`[ai] ONNX loaded ${MODEL_PATH} ${(fs.statSync(MODEL_PATH).size/1024).toFixed(1)}KB`);
     }
   } catch (e) {
     console.warn('[ai] ONNX not available, physics-only fallback:', e.message);
