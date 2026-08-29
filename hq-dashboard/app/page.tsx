@@ -57,7 +57,8 @@ const Icons = {
   ),
 };
 
-const STATION_CRATES: Record<string, string[]> = {
+// Phase 1.2: STATION_CRATES removed — scoping now via asset.station_id from GET /assets join (fallback to legacy map if station_id missing)
+const LEGACY_STATION_CRATES: Record<string, string[]> = {
   'ST-BHARATI': ['C1-K1', 'C1-K2', 'C2-K1', 'C2-K2', 'C2-K3', 'C3-K1', 'C3-K2'],
   'ST-MAITRI': ['C4-K1', 'C4-K2', 'C5-K1', 'C5-K2'],
   'ST-HIMADRI': ['C6-K1'],
@@ -295,11 +296,13 @@ export default function HQPage() {
     }
   }
 
-  // Station-scoped Assets vs All Assets
-  const stationCrates = STATION_CRATES[selectedStation] || [];
+  // Station-scoped Assets vs All Assets (Phase 1.2: prefer server station_id, fallback to legacy crate map)
   const currentStationAssets = useMemo(() => {
-    return assets.filter((a: any) => stationCrates.includes(a.crate_id));
-  }, [assets, stationCrates]);
+    const hasStationId = assets.some((a: any) => a.station_id);
+    if (hasStationId) return assets.filter((a: any) => a.station_id === selectedStation);
+    const crates = LEGACY_STATION_CRATES[selectedStation] || [];
+    return assets.filter((a: any) => crates.includes(a.crate_id));
+  }, [assets, selectedStation]);
 
   const displayedAssets = useMemo(() => {
     let list = onlyCurrentStation ? currentStationAssets : assets;
