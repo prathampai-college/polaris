@@ -77,7 +77,8 @@ export async function seedIfEmpty(deviceId: string) {
 // Helpers used by UI
 export async function listAssets() {
   const db = await getDb();
-  return db.selectObjects('SELECT a.*, c.coords, c.container_id, cr.type as container_type FROM assets a LEFT JOIN crates c ON c.id=a.crate_id LEFT JOIN containers cr ON cr.id=c.container_id ORDER BY a.sku');
+  // Include station_id for parity with HQ GET /assets (Phase 1.2) — c is crates, cr is containers
+  return db.selectObjects('SELECT a.*, c.coords, c.container_id, cr.type as container_type, cr.station_id FROM assets a LEFT JOIN crates c ON c.id=a.crate_id LEFT JOIN containers cr ON cr.id=c.container_id ORDER BY a.sku');
 }
 export async function getAssetByBarcode(barcode: string) {
   const db = await getDb();

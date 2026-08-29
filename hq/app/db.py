@@ -54,11 +54,22 @@ def _pg_schema_sql():
     return sql
 
 def _ensure_procurement_targets_sqlite(conn):
-    cur = conn.execute("SELECT COUNT(*) FROM procurement_targets")
-    if cur.fetchone()[0] == 0:
-        for row in PROCUREMENT_SEED:
-            conn.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
-        conn.commit()
+    try:
+        cur = conn.execute("SELECT COUNT(*) FROM procurement_targets")
+        if cur.fetchone()[0] == 0:
+            for row in PROCUREMENT_SEED:
+                conn.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
+            conn.commit()
+    except Exception as e:
+        # Table may not exist on old DBs — create via executescript already handled; silently seed if needed
+        if "no such table" in str(e).lower():
+            try:
+                conn.executescript("CREATE TABLE IF NOT EXISTS procurement_targets (sku TEXT PRIMARY KEY, target_qty REAL NOT NULL, cost_per_unit REAL NOT NULL, unit TEXT NOT NULL, eta TEXT NOT NULL);")
+                for row in PROCUREMENT_SEED:
+                    conn.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
+                conn.commit()
+            except Exception:
+                pass
 
 def init_db():
     global _sqlite_conn
