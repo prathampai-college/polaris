@@ -16,7 +16,6 @@ import {
   isExpired,
 } from '../lib/db';
 import { SyncWorker } from '../lib/sync';
-import { MqttPublisher } from '../lib/mqtt';
 
 const HQ_URL =
   process.env.NEXT_PUBLIC_HQ_URL?.replace('ws', 'http').replace('8787', '8000') ||
@@ -101,7 +100,6 @@ export default function FieldPage() {
 
   // Live telemetry & forecast
   const [forecast, setForecast] = useState<any>(null);
-  const [mqttLive, setMqttLive] = useState(false);
 
   // UI state
   const [tab, setTab] = useState<Tab>('today');
@@ -123,8 +121,6 @@ export default function FieldPage() {
   const STATION_ID = loginStation;
   const DEVICE_ID = deviceId || `TAB-${loginStation.replace('ST-', '')}-01`;
   const ACTOR_ID = `${userRole}_${loginStation.replace('ST-', '')}`;
-
-  const mqttRef = useMemo(() => new MqttPublisher(loginStation), [loginStation]);
 
   const pushToast = useCallback((m: string) => {
     setToast(m);
@@ -176,7 +172,6 @@ export default function FieldPage() {
     localStorage.removeItem('polaris_role');
     setLoggedIn(false);
     setAuthToken('');
-    mqttRef.disconnect();
     pushToast('Logged out of station');
   }
 
@@ -208,13 +203,12 @@ export default function FieldPage() {
     }
   }, []);
 
-  // Initialize DB, Sync Worker, and MQTT once logged in
+  // Initialize DB and Sync Worker once logged in
   useEffect(() => {
     if (!loggedIn) return;
     let worker: SyncWorker | null = null;
     let rt: any = null;
     let st: any = null;
-    let mq: any = null;
 
     (async () => {
       await getDb();
@@ -239,11 +233,9 @@ export default function FieldPage() {
       };
 
       worker.connect();
-      mqttRef.connect().then(() => setMqttLive(mqttRef.isConnected()));
 
       rt = setInterval(refresh, 3000);
       st = setInterval(() => setSyncStats({ ...worker?.stats }), 1500);
-      mq = setInterval(() => setMqttLive(mqttRef.isConnected()), 2500);
 
       (window as any).__polaris_drain = () => worker?.drain();
     })();
@@ -251,11 +243,9 @@ export default function FieldPage() {
     return () => {
       if (rt) clearInterval(rt);
       if (st) clearInterval(st);
-      if (mq) clearInterval(mq);
       worker?.disconnect();
-      mqttRef.disconnect();
     };
-  }, [loggedIn, DEVICE_ID, STATION_ID, mqttRef, refresh, pushToast]);
+  }, [loggedIn, DEVICE_ID, STATION_ID, refresh, pushToast]);
 
   // Tab deep link via hash
   useEffect(() => {
@@ -270,20 +260,17 @@ export default function FieldPage() {
   }, [tab]);
 
   async function sendTelemetry(payload: Record<string, any>) {
-    const sent = mqttRef.publishTelemetry(payload);
-    if (!sent) {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
-      await fetch(`${HQ_URL}/telemetry`, { method: 'POST', headers, body: JSON.stringify(payload) });
-    }
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+    await fetch(`${HQ_URL}/telemetry`, { method: 'POST', headers, body: JSON.stringify(payload) });
     const mode =
       payload.temp_outside < -30
         ? 'Blizzard (-38°C)'
         : payload.acoustic_anomaly > 0.9
         ? 'Bearing Failure (Acoustic AI)'
         : 'Calm Baseline';
-    setLog((l) => [`Telemetry sent (${sent ? 'MQTT' : 'HTTP'}): ${mode}`, ...l].slice(0, 25));
-    pushToast(`Telemetry · ${mode} · ${sent ? 'MQTT live' : 'HTTP'}`);
+    setLog((l) => [`Telemetry sent (HTTP): ${mode}`, ...l].slice(0, 25));
+    pushToast(`Telemetry · ${mode} · HTTP`);
     setTimeout(refresh, 800);
   }
 
@@ -524,15 +511,8 @@ export default function FieldPage() {
               {outbox > 0 ? `${outbox} Outbox Pending` : 'Fully Synced'}
             </button>
 
-            {/* MQTT Live / HTTP Fallback badge */}
-            <span
-              className={`hidden md:inline-flex text-[11px] px-2.5 py-1 rounded-full border ${
-                mqttLive
-                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/25'
-                  : 'bg-white/5 text-white/50 border-white/10'
-              }`}
-            >
-              {mqttLive ? '⚡ MQTT Live' : '📡 HTTP Fallback'}
+            <span className="hidden md:inline-flex text-[11px] px-2.5 py-1 rounded-full border bg-white/5 text-white/50 border-white/10">
+              📡 HTTP/SSE Live
             </span>
 
             {/* Font Toggle */}
