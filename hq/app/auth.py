@@ -6,7 +6,7 @@ from fastapi import HTTPException, Request
 
 logger = logging.getLogger("polaris.hq.auth")
 
-ROLE_HIERARCHY = {"NCPOR_ADMIN": 4, "STATION_LEAD": 3, "FIELD_OP": 2, "VIEWER": 1}
+ROLE_HIERARCHY = {"NCPOR_ADMIN": 5, "HQ_LOGISTICS": 4, "DISPATCH": 3, "STATION_LEAD": 3, "FIELD_OP": 2, "VIEWER": 1}
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -18,14 +18,24 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s)
 
 
+def _secret_bytes(secret: str) -> bytes:
+    # secret is 64 hex chars (32B) — decode hex; fallback to utf8 for backwards compat
+    try:
+        if len(secret) == 64 and all(c in "0123456789abcdefABCDEF" for c in secret):
+            return bytes.fromhex(secret)
+    except Exception:
+        pass
+    return secret.encode()
+
+
 def sign_jwt(payload: dict, secret: str, expires_in_days: int = 30) -> str:
     header = {"alg": "HS256", "typ": "JWT"}
     now = int(time.time())
     full_payload = {**payload, "iat": now, "exp": now + expires_in_days * 86400}
-    header_b64 = _b64url_encode(json.dumps(header).encode())
-    payload_b64 = _b64url_encode(json.dumps(full_payload).encode())
+    header_b64 = _b64url_encode(json.dumps(header, separators=(",", ":")).encode())
+    payload_b64 = _b64url_encode(json.dumps(full_payload, separators=(",", ":")).encode())
     data = f"{header_b64}.{payload_b64}"
-    sig = hmac.new(secret.encode(), data.encode(), hashlib.sha256).digest()
+    sig = hmac.new(_secret_bytes(secret), data.encode(), hashlib.sha256).digest()
     return f"{data}.{_b64url_encode(sig)}"
 
 
@@ -36,7 +46,7 @@ def verify_jwt(token: str, secret: str) -> Optional[dict]:
             return None
         data = f"{parts[0]}.{parts[1]}"
         sig = _b64url_decode(parts[2])
-        expected = hmac.new(secret.encode(), data.encode(), hashlib.sha256).digest()
+        expected = hmac.new(_secret_bytes(secret), data.encode(), hashlib.sha256).digest()
         if not hmac.compare_digest(sig, expected):
             return None
         payload = json.loads(_b64url_decode(parts[1]))

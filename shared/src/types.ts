@@ -8,7 +8,7 @@ export type IndentUrgency = 'LOW' | 'MEDIUM' | 'CRITICAL';
 export type SyncStatus = 'PENDING' | 'SYNCED' | 'FAILED';
 export type OutboxOp = 'UPSERT' | 'DELETE';
 export type OutboxStatus = 'PENDING' | 'SENT' | 'ACKED' | 'FAILED';
-export type UserRole = 'NCPOR_ADMIN' | 'STATION_LEAD' | 'FIELD_OP' | 'VIEWER';
+export type UserRole = 'NCPOR_ADMIN' | 'HQ_LOGISTICS' | 'DISPATCH' | 'STATION_LEAD' | 'FIELD_OP' | 'VIEWER';
 
 export interface AuthPayload {
   sub: string;
