@@ -43,3 +43,40 @@ def test_onnx_size_and_fallback():
     assert p.exists()
     assert p.stat().st_size < 2*1024*1024
     assert p.stat().st_size > 0
+
+def test_telemetry_history_and_acoustic_escalation():
+    _clean()
+    # post telemetry with high acoustic anomaly
+    res = client.post("/telemetry", json={
+        "ts": "2026-08-27T12:00:00.000Z",
+        "station_id": "ST-BHARATI",
+        "temp_outside": -15,
+        "wind_speed": 5,
+        "pressure": 1013,
+        "dg_load": 0.7,
+        "acoustic_anomaly": 0.95
+    })
+    assert res.status_code == 200
+
+    # check telemetry history
+    hist = client.get("/telemetry/history?station_id=ST-BHARATI&days=7")
+    assert hist.status_code == 200
+    hist_data = hist.json()
+    assert len(hist_data) >= 1
+    assert "day" in hist_data[0]
+    assert hist_data[0]["day"] == "2026-08-27"
+
+    # check acoustic ai indent was created
+    indents = client.get("/indents?station_id=ST-BHARATI").json()
+    acoustic_indent = next((i for i in indents if i["created_by"] == "ACOUSTIC_AI"), None)
+    assert acoustic_indent is not None
+    assert acoustic_indent["urgency"] == "CRITICAL"
+
+def test_procurement_targets_and_calculation():
+    targets = client.get("/procurement/targets")
+    assert targets.status_code == 200
+    assert len(targets.json()) >= 1
+
+    proc = client.get("/procurement/ST-BHARATI")
+    assert proc.status_code == 200
+    assert isinstance(proc.json(), list)
