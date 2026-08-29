@@ -5,7 +5,9 @@
 import type { AuthPayload, UserRole } from './types.js';
 
 export const ROLE_HIERARCHY: Record<UserRole, number> = {
-  NCPOR_ADMIN: 4,
+  NCPOR_ADMIN: 5,
+  HQ_LOGISTICS: 4,
+  DISPATCH: 3,
   STATION_LEAD: 3,
   FIELD_OP: 2,
   VIEWER: 1,
@@ -39,8 +41,15 @@ async function hmacSign(key: CryptoKey, data: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(sig);
 }
 
+function hexToBytes(hex: string): Uint8Array {
+  if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length % 2 !== 0) throw new Error('hex must be even hex string');
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) out[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+  return out;
+}
+
 async function importKey(hex: string): Promise<CryptoKey> {
-  const bytes = base64UrlDecode(hex);
+  const bytes = hexToBytes(hex);
   return crypto.subtle.importKey('raw', bytes.buffer as ArrayBuffer, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
 }
 
