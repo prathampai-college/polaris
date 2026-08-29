@@ -24,10 +24,16 @@ export function TrendChart({
 }) {
   const [metric, setMetric] = useState<'fuel' | 'temp' | 'load'>('fuel');
 
+  // Phase 1.3: empty state unless ?demo=1 — prevents fake trend when DB empty
+  const demoMode = React.useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    return new URLSearchParams(window.location.search).get('demo') === '1';
+  }, []);
+  const isEmpty = !data || data.length === 0;
   // Normalize data rows to ensure keys exist
   const normalizedData = React.useMemo(() => {
-    if (!data || data.length === 0) {
-      // Provide realistic 7-day demo trend if empty
+    if (isEmpty) {
+      if (!demoMode) return [];
       return [
         { day: 'D-6', qty: 4700, forecast: 4680, avg_temp: -14, avg_load: 0.68, wind: 6 },
         { day: 'D-5', qty: 4580, forecast: 4560, avg_temp: -16, avg_load: 0.70, wind: 8 },
@@ -108,9 +114,17 @@ export function TrendChart({
         </div>
       </div>
 
-      {/* Chart Canvas */}
-      <div className="w-full h-48 sm:h-52">
-        <ResponsiveContainer width="100%" height="100%">
+      {/* Chart Canvas — Phase 1.3 empty state */}
+      {isEmpty && !demoMode ? (
+        <div className="w-full h-48 sm:h-52 grid place-items-center rounded-xl border border-dashed border-white/15 bg-black/20">
+          <div className="text-center space-y-1">
+            <div className="text-xs font-bold text-white/70">No telemetry yet</div>
+            <div className="text-[11px] text-white/40">Post first telemetry via HQ or add <span className="font-mono text-white/60">?demo=1</span> for sample trend</div>
+          </div>
+        </div>
+      ) : (
+        <div className="w-full h-48 sm:h-52">
+          <ResponsiveContainer width="100%" height="100%">
           {metric === 'fuel' ? (
             <AreaChart data={normalizedData} margin={{ top: 10, right: 10, left: -15, bottom: 0 }}>
               <defs>
@@ -182,8 +196,9 @@ export function TrendChart({
               <Area type="monotone" dataKey="avg_load" stroke="#F59E0B" strokeWidth={2.5} fillOpacity={1} fill="url(#loadGrad)" />
             </AreaChart>
           )}
-        </ResponsiveContainer>
-      </div>
+          </ResponsiveContainer>
+        </div>
+      )}
 
       {/* Legend & Stats strip */}
       <div className="flex items-center justify-between text-[11px] text-white/50 pt-1 border-t border-white/5">
