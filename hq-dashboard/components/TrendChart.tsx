@@ -27,8 +27,12 @@ export function TrendChart({
   // Phase 1.3: empty state unless ?demo=1 — prevents fake trend when DB empty
   const demoMode = React.useMemo(() => {
     if (typeof window === 'undefined') return false;
-    return new URLSearchParams(window.location.search).get('demo') === '1';
-  }, []);
+    try {
+      return new URLSearchParams(window.location.search).get('demo') === '1';
+    } catch {
+      return false;
+    }
+  }, []); // search change triggers full reload, no need for reactive dep
   const isEmpty = !data || data.length === 0;
   // Normalize data rows to ensure keys exist
   const normalizedData = React.useMemo(() => {
@@ -58,7 +62,7 @@ export function TrendChart({
         wind: d.wind_speed != null ? Number(d.wind_speed) : 8 + (i % 5) * 3,
       };
     });
-  }, [data]);
+  }, [data, demoMode, isEmpty]);
 
   return (
     <div className="w-full bg-slate-950/70 rounded-2xl p-4 border border-white/10 flex flex-col gap-3">
