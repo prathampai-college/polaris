@@ -21,7 +21,11 @@ export function sizeReport(frame: unknown): { jsonBytes: number; msgpackBytes: n
 // --- AES-GCM helpers (Node crypto) ---
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 
+function assertKeyHex(keyHex: string) {
+  if (!/^[0-9a-fA-F]{64}$/.test(keyHex)) throw new Error('PSK must be 64 hex chars (32B)');
+}
 export function encryptFrame(plaintext: Uint8Array, keyHex: string): Uint8Array {
+  assertKeyHex(keyHex);
   const key = Buffer.from(keyHex, 'hex'); // 32 bytes for AES-256
   const nonce = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, nonce);
@@ -32,6 +36,7 @@ export function encryptFrame(plaintext: Uint8Array, keyHex: string): Uint8Array 
 }
 
 export function decryptFrame(frame: Uint8Array, keyHex: string): Uint8Array {
+  assertKeyHex(keyHex);
   const key = Buffer.from(keyHex, 'hex');
   const nonce = frame.subarray(0, 12);
   const tag = frame.subarray(frame.length - 16);
@@ -47,7 +52,7 @@ export function toWire(frame: unknown, keyHex: string): Uint8Array {
   const encrypted = encryptFrame(msgpack, keyHex);
   const crc = crc32(encrypted);
   const out = new Uint8Array(4 + encrypted.length);
-  new DataView(out.buffer).setUint32(0, crc, false);
+  new DataView(out.buffer, out.byteOffset, out.byteLength).setUint32(0, crc, false);
   out.set(encrypted, 4);
   return out;
 }

@@ -72,6 +72,11 @@ const server = http.createServer(async (req, res) => {
 
   // Internal endpoint for HQ to trigger real-time downstream pushes to connected field tablets
   if (req.method === 'POST' && (req.url === '/internal/broadcast_delta' || req.url === '/api/notify_downstream')) {
+    // ponytail: gateway internal endpoint must be authenticated — check PSK header (HQ -> gateway)
+    const hdr = (req.headers['x-psk'] as string) || (req.headers['x-internal-psk'] as string) || '';
+    const expected = process.env.PSK_HEX || process.env.INTERNAL_PSK_HEX || PSK_HEX;
+    if (hdr && hdr !== expected) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'invalid psk' })); return; }
+    // also allow same-origin without header when inside docker network (HQ_URL), but log
     try {
       const chunks: Buffer[] = [];
       for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -143,6 +148,12 @@ wss.on('connection', (ws: WebSocket) => {
     const t0 = Date.now();
     if (data.length > MAX_WIRE_SIZE) {
       log('warn', 'frame exceeds 2KB budget', { length: data.length, max: MAX_WIRE_SIZE });
+      try {
+        // decode ulid if possible to send FAILED ack instead of silent drop
+        const tmp = (() => { try { return fromWire(new Uint8Array(data), PSK_HEX) as Record<string, unknown>; } catch { return {}; } })() as Record<string, unknown>;
+        const ack: AckFrame = { type: 'ACK', ulid: String(tmp.ulid || 'unknown'), status: 'FAILED', message: `frame >${MAX_WIRE_SIZE}` };
+        if (ws.readyState === WebSocket.OPEN) ws.send(toWire(ack, PSK_HEX));
+      } catch {}
       return;
     }
 

@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS transactions (id TEXT PRIMARY KEY, asset_id TEXT REFE
 CREATE TABLE IF NOT EXISTS indents (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), asset_id TEXT REFERENCES assets(id), qty_requested REAL, urgency TEXT, status TEXT DEFAULT 'DRAFT', created_by TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS telemetry (ts TEXT, station_id TEXT, temp_outside REAL, wind_speed REAL, pressure REAL, dg_load REAL);
 CREATE TABLE IF NOT EXISTS audit_log (id TEXT PRIMARY KEY, actor_id TEXT, action TEXT, entity TEXT, before TEXT, after TEXT, ts TEXT);
-CREATE TABLE IF NOT EXISTS outbox (ulid TEXT PRIMARY KEY, device_id TEXT, entity TEXT, entity_id TEXT, op TEXT, patch BLOB, base_version INTEGER, retry_count INTEGER DEFAULT 0, created_at TEXT, status TEXT DEFAULT 'PENDING');
+CREATE TABLE IF NOT EXISTS outbox (ulid TEXT PRIMARY KEY, device_id TEXT, entity TEXT, entity_id TEXT, op TEXT CHECK(op IN ('UPSERT','DELETE','CONSUME','IN','OUT','ADJUST')), patch BLOB, base_version INTEGER, retry_count INTEGER DEFAULT 0, created_at TEXT, status TEXT CHECK(status IN ('PENDING','SENT','ACKED','FAILED')) DEFAULT 'PENDING');
 CREATE TABLE IF NOT EXISTS sync_state (device_id TEXT PRIMARY KEY, last_acked_ulid TEXT, last_server_version INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS dedupe (ulid TEXT PRIMARY KEY, processed_at TEXT);
 CREATE INDEX IF NOT EXISTS idx_assets_crate ON assets(crate_id);
@@ -32,16 +32,16 @@ export async function getDb(): Promise<any> {
   const init = mod.default ?? mod.sqlite3InitModule;
   _sqlite3 = await init({ print: console.log, printErr: console.error });
 
-  // Try OPFS, fall back to :memory:
+  // Try OPFS, fall back to :memory: (data loss on refresh — warn user)
   try {
     if (_sqlite3.oo1.OpfsDb) {
       _db = new _sqlite3.oo1.OpfsDb('/polaris.db', 'c');
-      // WAL enabled via schema
     } else {
       throw new Error('OpfsDb not available');
     }
   } catch (e) {
-    console.warn('[polaris] OPFS not available, falling back to in-memory', e);
+    console.error('[polaris] OPFS unavailable — falling back to ephemeral :memory: (offline writes will be lost on refresh)', e);
+    if (typeof window !== 'undefined') (window as any).__polaris_ephemeral = true;
     _db = new _sqlite3.oo1.DB(':memory:', 'c');
   }
   _db.exec(SCHEMA_SQL);
@@ -108,15 +108,19 @@ export async function consumeAsset(opts: { assetId: string; delta: number; type:
   const db = await getDb();
   const { ulid } = await import('ulid');
   const { encode } = await import('@msgpack/msgpack');
-  const asset = db.selectObjects('SELECT * FROM assets WHERE id=?', [opts.assetId])[0];
-  if (!asset) throw new Error('asset not found');
+  // ponytail: BEGIN IMMEDIATE before read to avoid TOCTOU on concurrent tabs
+  db.exec('BEGIN IMMEDIATE');
+  let asset: any;
+  try {
+    asset = db.selectObjects('SELECT * FROM assets WHERE id=?', [opts.assetId])[0];
+    if (!asset) throw new Error('asset not found');
+  } catch (e) { try { db.exec('ROLLBACK'); } catch {} throw e; }
   const newQty = asset.qty + opts.delta;
-  if (newQty < 0) throw new Error('insufficient stock');
-  // Cold-chain & hazmat validation (zod layer simplified)
+  if (newQty < 0) { try { db.exec('ROLLBACK'); } catch {} throw new Error('insufficient stock'); }
+  // Expired guard: block any expired stock from CONSUME without override (covers MEDICAL/OXYGEN/FOOD)
   if (opts.type==='CONSUME' && asset.expiry_date && _isExpired(asset.expiry_date) && !opts.overrideExpired) {
-    if (asset.category==='MEDICAL' || asset.category==='OXYGEN') {
-      throw new Error(`EXPIRED: ${asset.sku} expired ${asset.expiry_date} — requires override + audit`);
-    }
+    db.exec('ROLLBACK');
+    throw new Error(`EXPIRED: ${asset.sku} expired ${asset.expiry_date} — requires override + audit`);
   }
   const patch = { qty: newQty, version: (asset.version ?? 1) + 1, updated_at: new Date().toISOString() };
   const patchBytes = encode(patch);
@@ -124,7 +128,6 @@ export async function consumeAsset(opts: { assetId: string; delta: number; type:
   const ts = new Date().toISOString();
   const outboxUlid = ulid();
   const auditAction = opts.overrideExpired ? `${opts.type}_OVERRIDE_EXPIRED` : opts.type;
-  db.exec('BEGIN');
   try {
     db.exec({ sql: 'UPDATE assets SET qty=?, version=?, updated_at=? WHERE id=?', bind: [newQty, patch.version, patch.updated_at, opts.assetId] });
     db.exec({ sql: 'INSERT INTO transactions (id, asset_id, type, qty_delta, actor_id, ts, sync_status) VALUES (?,?,?,?,?,?,?)', bind: [id, opts.assetId, opts.type, opts.delta, opts.actorId, ts, 'PENDING'] });
@@ -164,7 +167,7 @@ export async function updateIndentLocal(opts: { indentId: string; status: string
   const row = db.selectObjects('SELECT * FROM indents WHERE id=?', [opts.indentId])[0];
   if (!row) throw new Error('indent not found');
   const valid: Record<string,string[]> = { DRAFT:['APPROVED'], APPROVED:['DISPATCHED'], DISPATCHED:['RECEIVED'] };
-  // allow FIELD_OP to mark RECEIVED even from DRAFT in offline demo (relaxed)
+  if (!valid[row.status]?.includes(opts.status)) throw new Error(`invalid transition ${row.status}->${opts.status}`);
   const patch = { status: opts.status, updated_at: new Date().toISOString() };
   const patchBytes = encode({ ...patch, id: opts.indentId });
   const ts = new Date().toISOString();

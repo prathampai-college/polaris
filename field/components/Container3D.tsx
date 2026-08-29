@@ -115,13 +115,13 @@ export function Container3D({
   }, [highlight]);
 
   // Crates to render
-  const cratesToRender = useMemo(() => {
+  const cratesToRender = useMemo<[string, [number, number, number]][]>(() => {
     if (activeContainer === 'ALL') {
-      return Object.entries(CRATE_COORDS);
+      return Object.entries(CRATE_COORDS) as [string, [number, number, number]][];
     }
     const spec = CONTAINER_SPECS[activeContainer];
-    if (!spec) return Object.entries(CRATE_COORDS);
-    return Object.entries(CRATE_COORDS).filter(([id]) => spec.crates.includes(id));
+    if (!spec) return Object.entries(CRATE_COORDS) as [string, [number, number, number]][];
+    return (Object.entries(CRATE_COORDS) as [string, [number, number, number]][]).filter(([id]) => spec.crates.includes(id));
   }, [activeContainer]);
 
   const selectedCrateAssets = selectedCrateId ? cratesMap.get(selectedCrateId) || [] : [];
@@ -137,7 +137,7 @@ export function Container3D({
       {/* Container Selection Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-1.5 overflow-x-auto scroll-thin pb-1">
-          {Object.entries(CONTAINER_SPECS).map(([key, spec]) => (
+          {Object.entries(CONTAINER_SPECS).map(([key, spec]: [string, { name: string; type: string; tempZone: string; color: string; crates: string[] }]) => (
             <button
               key={key}
               onClick={() => setActiveContainer(key)}

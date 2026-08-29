@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS outbox (
   device_id TEXT,
   entity TEXT,
   entity_id TEXT,
-  op TEXT CHECK(op IN ('UPSERT','DELETE')),
+  op TEXT CHECK(op IN ('UPSERT','DELETE','CONSUME','IN','OUT','ADJUST')),
   patch BLOB,
   base_version INTEGER,
   retry_count INTEGER DEFAULT 0,
