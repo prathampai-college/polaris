@@ -103,6 +103,23 @@ CREATE TABLE IF NOT EXISTS dedupe (
   processed_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS procurement_targets (
+  sku TEXT PRIMARY KEY,
+  target_qty REAL NOT NULL,
+  cost_per_unit REAL NOT NULL,
+  unit TEXT NOT NULL,
+  eta TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS physics_params (
+  station_id TEXT PRIMARY KEY REFERENCES stations(id),
+  T_INSIDE REAL NOT NULL,
+  BASE REAL NOT NULL,
+  K1 REAL NOT NULL,
+  K2 REAL NOT NULL,
+  K3 REAL NOT NULL
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_assets_crate ON assets(crate_id);
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status, created_at);

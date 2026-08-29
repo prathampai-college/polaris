@@ -186,7 +186,8 @@ async def rbac_me(request: Request):
 
 @app.get("/assets")
 def list_assets():
-    return _fetch_all("SELECT id, sku, name, category, qty, unit, expiry_date, criticality, crate_id, barcode, version, updated_at FROM assets ORDER BY sku")
+    # Phase 1.2: include station_id/container_id via join so client can scope without STATION_CRATES
+    return _fetch_all("SELECT a.id, a.sku, a.name, a.category, a.qty, a.unit, a.expiry_date, a.criticality, a.crate_id, a.barcode, a.version, a.updated_at, c.station_id, cr.container_id FROM assets a LEFT JOIN crates cr ON a.crate_id=cr.id LEFT JOIN containers c ON cr.container_id=c.id ORDER BY a.sku")
 
 @app.get("/audit")
 def list_audit(limit: int=50):
@@ -461,18 +462,48 @@ def forecast(station_id: str, asset_sku: str = "FUEL-DIESEL-001"):
     return {"station_id": station_id, "asset_sku": asset_sku, "qty": qty, "physics": round(phys,1), "residual": round(res,2), "total_per_day": round(total,1), "days_to_stockout": round(days,1), "ci": ci, "used_model": used, "tele": tele,
             "pure_physics_days": round(qty/phys,1) if phys>0 else 999}
 
+@app.get("/procurement/targets")
+def list_procurement_targets():
+    """List all procurement targets (DB-driven, Phase 1.1)."""
+    return _fetch_all("SELECT sku, target_qty, cost_per_unit, unit, eta FROM procurement_targets ORDER BY sku")
+
+class ProcurementTargetUpsert(BaseModel):
+    sku: str
+    target_qty: float
+    cost_per_unit: float
+    unit: str
+    eta: str = "30d before freeze"
+
+@app.put("/procurement/targets/{sku}")
+async def upsert_procurement_target(sku: str, body: ProcurementTargetUpsert, user: dict = Depends(require_role("STATION_LEAD"))):
+    if body.target_qty < 0 or body.cost_per_unit < 0:
+        raise HTTPException(400, "target_qty and cost_per_unit must be >=0")
+    conn = get_conn()
+    if USE_PG:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(q("INSERT INTO procurement_targets (sku, target_qty, cost_per_unit, unit, eta) VALUES (?,?,?,?,?) ON CONFLICT (sku) DO UPDATE SET target_qty=EXCLUDED.target_qty, cost_per_unit=EXCLUDED.cost_per_unit, unit=EXCLUDED.unit, eta=EXCLUDED.eta"), (sku, body.target_qty, body.cost_per_unit, body.unit, body.eta))
+    else:
+        conn.execute("INSERT INTO procurement_targets (sku, target_qty, cost_per_unit, unit, eta) VALUES (?,?,?,?,?) ON CONFLICT(sku) DO UPDATE SET target_qty=excluded.target_qty, cost_per_unit=excluded.cost_per_unit, unit=excluded.unit, eta=excluded.eta", (sku, body.target_qty, body.cost_per_unit, body.unit, body.eta))
+        conn.commit()
+    return {"sku": sku, "target_qty": body.target_qty, "cost_per_unit": body.cost_per_unit, "unit": body.unit, "eta": body.eta}
+
 @app.get("/procurement/{station_id}")
 def procurement(station_id: str):
-    """Compute procurement needs from current inventory levels vs season targets."""
-    SEASON_TARGETS = {"FUEL-DIESEL-001": 5000, "O2-CYL-47L-003": 30, "SPARE-BRG-6205-007": 10}
-    UNIT_MAP = {"FUEL-DIESEL-001": ("L", 1200), "O2-CYL-47L-003": ("cyl", 200), "SPARE-BRG-6205-007": ("pcs", 80)}
-    rows = _fetch_all("SELECT a.sku, a.name, a.qty, a.unit FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku IN ('FUEL-DIESEL-001','O2-CYL-47L-003','SPARE-BRG-6205-007')", (station_id,))
+    """Compute procurement needs from current inventory levels vs DB targets (Phase 1.1)."""
+    targets = {r["sku"]: r for r in _fetch_all("SELECT sku, target_qty, cost_per_unit, unit, eta FROM procurement_targets")}
+    if not targets:
+        return []
+    skus = list(targets.keys())
+    placeholders = ",".join(["?"] * len(skus))
+    rows = _fetch_all(f"SELECT a.sku, a.name, a.qty, a.unit FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku IN ({placeholders})", (station_id, *skus))
     result = []
     for r in rows:
-        target = SEASON_TARGETS.get(r["sku"], 0)
-        need = max(0, target - r["qty"])
-        _, cost_per_unit = UNIT_MAP.get(r["sku"], (r["unit"], 0))
-        result.append({"sku": r["sku"], "name": r["name"], "need": need, "unit": r["unit"], "eta": "30d before freeze", "cost": f"\u20b9{round(need*cost_per_unit/100000,1)}L"})
+        t = targets.get(r["sku"])
+        if not t:
+            continue
+        need = max(0, float(t["target_qty"]) - float(r["qty"]))
+        result.append({"sku": r["sku"], "name": r["name"], "need": need, "unit": r["unit"], "eta": t["eta"], "cost": f"\u20b9{round(need*float(t['cost_per_unit'])/100000,1)}L"})
     return result
 
 @app.get("/sync/state/{device_id}")

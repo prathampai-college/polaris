@@ -40,12 +40,25 @@ def get_sqlite():
 
 _sqlite_conn = None
 
+PROCUREMENT_SEED = [
+    ("FUEL-DIESEL-001", 5000, 1200, "L", "30d before freeze"),
+    ("O2-CYL-47L-003", 30, 200, "cyl", "30d before freeze"),
+    ("SPARE-BRG-6205-007", 10, 80, "pcs", "30d before freeze"),
+]
+
 def _pg_schema_sql():
     # strip PRAGMA lines which are SQLite-only and convert SQLite types to PG
     sql = "\n".join(l for l in SCHEMA_SQL.splitlines() if not l.strip().upper().startswith("PRAGMA"))
     # SQLite BLOB -> PG BYTEA
     sql = sql.replace(" BLOB", " BYTEA").replace("\tBLOB", "\tBYTEA")
     return sql
+
+def _ensure_procurement_targets_sqlite(conn):
+    cur = conn.execute("SELECT COUNT(*) FROM procurement_targets")
+    if cur.fetchone()[0] == 0:
+        for row in PROCUREMENT_SEED:
+            conn.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
+        conn.commit()
 
 def init_db():
     global _sqlite_conn
@@ -66,6 +79,14 @@ def init_db():
                 cur.execute("SELECT COUNT(*) FROM stations")
                 if cur.fetchone()[0] == 0:
                     seed(cur)
+                else:
+                    # ensure procurement_targets seeded even on existing DB (Phase 1 migration)
+                    try:
+                        cur.execute("SELECT COUNT(*) FROM procurement_targets")
+                        if cur.fetchone()[0] == 0:
+                            seed_procurement_targets(cur)
+                    except Exception:
+                        pass
         print(f"[hq] Postgres init ok {DATABASE_URL.split('@')[-1]}")
     else:
         _sqlite_conn = get_sqlite()
@@ -73,7 +94,16 @@ def init_db():
         cur = _sqlite_conn.execute("SELECT COUNT(*) FROM stations")
         if cur.fetchone()[0] == 0:
             seed_sqlite(_sqlite_conn)
+        else:
+            _ensure_procurement_targets_sqlite(_sqlite_conn)
         print(f"[hq] SQLite init ok {HQ_DB_PATH} (fallback, no Docker)")
+
+def seed_procurement_targets(cur):
+    for row in PROCUREMENT_SEED:
+        try:
+            cur.execute("INSERT INTO procurement_targets VALUES (%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING", row)
+        except Exception:
+            cur.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
 
 def seed(cur):
     s = _SEED
@@ -82,9 +112,11 @@ def seed(cur):
         for r in s["containers"]: cur.execute("INSERT INTO containers VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING", r)
         for r in s["crates"]: cur.execute("INSERT INTO crates VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING", r)
         for a in s["assets"]: cur.execute("INSERT INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1,now()) ON CONFLICT (id) DO NOTHING", a)
+        seed_procurement_targets(cur)
         return
     # fallback (should not happen)
     for r in [("ST-BHARATI","Bharati","69°24′S 76°11′E",24)]: cur.execute("INSERT INTO stations VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING", r)
+    seed_procurement_targets(cur)
 
 def seed_sqlite(conn):
     s = _SEED
@@ -95,8 +127,14 @@ def seed_sqlite(conn):
         import datetime
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         for a in s["assets"]: conn.execute("INSERT OR IGNORE INTO assets VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (*a, 1, now))
+        for row in PROCUREMENT_SEED:
+            conn.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
         conn.commit()
         return
+    # ensure procurement even without seed
+    for row in PROCUREMENT_SEED:
+        conn.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
+    conn.commit()
 
 def get_conn():
     if USE_PG:
