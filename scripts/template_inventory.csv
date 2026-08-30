@@ -1,0 +1,5 @@
+sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode
+FUEL-DIESEL-001,Diesel (Winter Grade),FUEL_DIESEL,4200,L,,CRITICAL,C1-K1,FUEL-DIESEL-001
+O2-CYL-47L-003,Oxygen Cylinder 47L,OXYGEN,24,cyl,2026-09-15,CRITICAL,C2-K1,O2-CYL-47L-003
+SPARE-BRG-6205-007,DG Bearing 6205-2RS,SPARES_DG,8,pcs,,HIGH,C3-K1,SPARE-BRG-6205-007
+RATION-FD-30D-004,Freeze-Dried Rations (30-day pack),FOOD,90,packs,2027-06-01,HIGH,C2-K2,RATION-FD-30D-004
