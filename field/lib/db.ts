@@ -197,21 +197,23 @@ export async function applyDownstreamIndent(indentId: string, patch: Record<stri
   try {
     if (!existing) {
       db.exec({
-        sql: 'INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at) VALUES (?,?,?,?,?,?,?,?)',
-        bind: [indentId, patch.station_id || 'ST-BHARATI', patch.asset_id || 'A1', patch.qty_requested || 1, patch.urgency || 'MEDIUM', patch.status || 'DRAFT', patch.created_by || 'HQ', patch.created_at || now]
+        sql: 'INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?)',
+        bind: [indentId, patch.station_id || 'ST-BHARATI', patch.asset_id || 'A1', patch.qty_requested || 1, patch.urgency || 'MEDIUM', patch.status || 'DRAFT', patch.created_by || 'HQ', patch.created_at || now, patch.vessel_imo || null]
       });
       db.exec({
         sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)',
         bind: [ulid(), 'HQ_PUSH', 'DOWNSTREAM_INDENT_INSERT', 'indents', null, JSON.stringify(patch), now]
       });
-    } else if (patch.status && existing.status !== patch.status) {
+    } else if ((patch.status && existing.status !== patch.status) || (patch.vessel_imo && existing.vessel_imo !== patch.vessel_imo)) {
+      const newStatus = patch.status || existing.status;
+      const newVessel = patch.vessel_imo !== undefined ? patch.vessel_imo : existing.vessel_imo;
       db.exec({
-        sql: 'UPDATE indents SET status=? WHERE id=?',
-        bind: [patch.status, indentId]
+        sql: 'UPDATE indents SET status=?, vessel_imo=? WHERE id=?',
+        bind: [newStatus, newVessel, indentId]
       });
       db.exec({
         sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)',
-        bind: [ulid(), 'HQ_PUSH', `DOWNSTREAM_INDENT_${patch.status}`, 'indents', JSON.stringify(existing), JSON.stringify({ ...existing, ...patch }), now]
+        bind: [ulid(), 'HQ_PUSH', `DOWNSTREAM_INDENT_${patch.status || existing.status}`, 'indents', JSON.stringify(existing), JSON.stringify({ ...existing, ...patch }), now]
       });
     }
     db.exec('COMMIT');
@@ -232,14 +234,14 @@ export async function applyDownstreamSyncInit(indents: any[]) {
       const local = db.selectObjects('SELECT * FROM indents WHERE id=?', [r.id])[0];
       if (!local) {
         db.exec({
-          sql: 'INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at) VALUES (?,?,?,?,?,?,?,?)',
-          bind: [r.id, r.station_id, r.asset_id, r.qty_requested, r.urgency, r.status, r.created_by, r.created_at]
+          sql: 'INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?)',
+          bind: [r.id, r.station_id, r.asset_id, r.qty_requested, r.urgency, r.status, r.created_by, r.created_at, r.vessel_imo || null]
         });
         count++;
-      } else if (local.status !== r.status) {
+      } else if (local.status !== r.status || local.vessel_imo !== r.vessel_imo) {
         db.exec({
-          sql: 'UPDATE indents SET status=? WHERE id=?',
-          bind: [r.status, r.id]
+          sql: 'UPDATE indents SET status=?, vessel_imo=? WHERE id=?',
+          bind: [r.status || local.status, r.vessel_imo !== undefined ? r.vessel_imo : local.vessel_imo, r.id]
         });
         count++;
       }
@@ -307,10 +309,10 @@ export async function pullIndentsFromHQ(hqUrl: string) {
     for (const r of remote) {
       const local = db.selectObjects('SELECT * FROM indents WHERE id=?', [r.id])[0];
       if (!local) {
-        db.exec({ sql: 'INSERT OR IGNORE INTO indents VALUES (?,?,?,?,?,?,?,?)', bind: [r.id, r.station_id, r.asset_id, r.qty_requested, r.urgency, r.status, r.created_by, r.created_at] });
+        db.exec({ sql: 'INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?)', bind: [r.id, r.station_id, r.asset_id, r.qty_requested, r.urgency, r.status, r.created_by, r.created_at, r.vessel_imo || null] });
         pulled++;
-      } else if (local.status !== r.status) {
-        db.exec({ sql: 'UPDATE indents SET status=? WHERE id=?', bind: [r.status, r.id] });
+      } else if (local.status !== r.status || local.vessel_imo !== r.vessel_imo) {
+        db.exec({ sql: 'UPDATE indents SET status=?, vessel_imo=? WHERE id=?', bind: [r.status, r.vessel_imo || local.vessel_imo || null, r.id] });
         pulled++;
       }
     }

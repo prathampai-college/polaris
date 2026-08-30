@@ -61,27 +61,8 @@ export function VesselMap({ stationId = 'ST-BHARATI' }: { stationId?: string }) 
         <div className="text-[10px] font-mono text-white/40">cache /tmp/ais_cache.json • poll 15m</div>
       </div>
 
-      {/* Leaflet overlay placeholder — falls back to ETA pill if air-gapped tiles unavailable */}
-      <div className="w-full h-48 rounded-xl overflow-hidden border border-white/10 relative bg-gradient-to-br from-blue-950 to-slate-900">
-        {/* Simple schematic map (no external tiles) — lat/lon plotted as points */}
-        <div className="absolute inset-0 grid place-items-center text-[10px] text-white/30">Offline schematic — ETA pill primary when tiles unavailable</div>
-        <div className="absolute inset-0">
-          {/* grid lines */}
-          <div className="absolute inset-2 border border-white/10 rounded-lg" />
-          <div className="absolute inset-0 flex items-center justify-center gap-8">
-            {vessels.map(v => (
-              <div key={v.imo} className="flex flex-col items-center gap-1">
-                <div className="w-3 h-3 rounded-full bg-cyan-400 shadow-lg shadow-cyan-400/40 animate-pulse" title={`${v.lat},${v.lon}`} />
-                <span className="text-[9px] font-mono text-cyan-300">{v.lat.toFixed(2)}, {v.lon.toFixed(2)}</span>
-                <span className="text-[9px] font-bold text-white">{v.name.slice(0,12)}</span>
-              </div>
-            ))}
-          </div>
-          {/* SOG arrow */}
-          <div className="absolute bottom-2 right-2 text-[10px] font-mono text-white/50 bg-black/40 px-2 py-1 rounded-full border border-white/10">SOG {vessels[0]?.sog} kn</div>
-        </div>
-        {/* Leaflet would mount here if tiles available: <div id="leaflet-map" /> */}
-      </div>
+      {/* Leaflet map with offline ETA pill fallback */}
+      <LeafletOrFallback vessels={vessels} />
 
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
@@ -115,6 +96,75 @@ export function VesselMap({ stationId = 'ST-BHARATI' }: { stationId?: string }) 
         </table>
       </div>
       <div className="text-[10px] text-white/30 font-mono">Air-gapped fallback: ETA pill shown when Leaflet tiles unavailable. Field tablets receive via <span className="text-white/50">DOWNSTREAM_DELTA vessels</span> over encrypted WS.</div>
+    </div>
+  );
+}
+
+function LeafletOrFallback({ vessels }: { vessels: Vessel[] }) {
+  const [useLeaflet, setUseLeaflet] = useState(false);
+  const [LeafletComps, setLeafletComps] = useState<any>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !navigator.onLine) return;
+    // probe tile reachability with 2s timeout; if fails keep schematic
+    fetch('https://tile.openstreetmap.org/0/0/0.png', { method: 'HEAD', cache: 'no-store', signal: AbortSignal.timeout(2000) })
+      .then(r => {
+        if (!r.ok) throw new Error('tile probe fail');
+        return import('react-leaflet');
+      })
+      .then(async (rl) => {
+        const L = await import('leaflet');
+        // fix default icon paths for Next.js (uses /leaflet images)
+        // @ts-ignore
+        delete (L.Icon.Default.prototype as any)._getIconUrl;
+        L.Icon.Default.mergeOptions({
+          iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+          iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+          shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+        });
+        setLeafletComps(rl);
+        setUseLeaflet(true);
+      })
+      .catch(() => setUseLeaflet(false));
+  }, []);
+
+  if (useLeaflet && LeafletComps) {
+    const { MapContainer, TileLayer, Marker, Popup } = LeafletComps;
+    const center: [number, number] = [vessels[0].lat, vessels[0].lon];
+    return (
+      <div className="w-full h-48 rounded-xl overflow-hidden border border-white/10 relative">
+        <MapContainer center={center} zoom={3} scrollWheelZoom={false} style={{ height: '100%', width: '100%' }}>
+          <TileLayer attribution='&copy; OpenStreetMap' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          {vessels.map(v => (
+            <Marker key={v.imo} position={[v.lat, v.lon]}>
+              <Popup>
+                <b>{v.name}</b> ({v.imo})<br />{v.lat.toFixed(2)}, {v.lon.toFixed(2)}<br />SOG {v.sog} kn<br />ETA {v.eta}
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
+        <div className="absolute bottom-2 right-2 text-[10px] font-mono text-white/80 bg-black/60 px-2 py-1 rounded-full border border-white/10 pointer-events-none">LIVE Leaflet • SOG {vessels[0]?.sog} kn</div>
+      </div>
+    );
+  }
+
+  // offline schematic fallback (always works air-gapped)
+  return (
+    <div className="w-full h-48 rounded-xl overflow-hidden border border-white/10 relative bg-gradient-to-br from-blue-950 to-slate-900">
+      <div className="absolute inset-0 grid place-items-center text-[10px] text-white/30">Offline schematic — ETA pill primary when tiles unavailable</div>
+      <div className="absolute inset-0">
+        <div className="absolute inset-2 border border-white/10 rounded-lg" />
+        <div className="absolute inset-0 flex items-center justify-center gap-8">
+          {vessels.map(v => (
+            <div key={v.imo} className="flex flex-col items-center gap-1">
+              <div className="w-3 h-3 rounded-full bg-cyan-400 shadow-lg shadow-cyan-400/40 animate-pulse" title={`${v.lat},${v.lon}`} />
+              <span className="text-[9px] font-mono text-cyan-300">{v.lat.toFixed(2)}, {v.lon.toFixed(2)}</span>
+              <span className="text-[9px] font-bold text-white">{v.name.slice(0, 12)}</span>
+            </div>
+          ))}
+        </div>
+        <div className="absolute bottom-2 right-2 text-[10px] font-mono text-white/50 bg-black/40 px-2 py-1 rounded-full border border-white/10">SOG {vessels[0]?.sog} kn • Mock fallback</div>
+      </div>
     </div>
   );
 }
