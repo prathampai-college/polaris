@@ -497,6 +497,7 @@ def forecast(station_id: str, asset_sku: str = "FUEL-DIESEL-001"):
             "pure_physics_days": round(qty/phys,1) if phys>0 else 999}
 
 @app.get("/physics/{station_id}")
+@app.get("/physics/params/{station_id}")
 def get_physics(station_id: str):
     """Per-station physics params (Phase 2.3). Falls back to global physics.json if no DB row."""
     row = _fetch_one("SELECT station_id, T_INSIDE, BASE, K1, K2, K3 FROM physics_params WHERE station_id=?", (station_id,))
@@ -528,6 +529,24 @@ def list_vessels(station_id: str | None = None):
     for r in rows:
         r["source"] = src
     return rows
+
+@app.get("/vessels/sources")
+def vessel_sources():
+    """Health and status of AIS / mock vessel poller."""
+    try:
+        from .vessel_poller import get_status
+        return get_status()
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/vessels/poll")
+async def trigger_vessel_poll():
+    """Trigger manual vessel poll and upsert."""
+    try:
+        from .vessel_poller import poll_once
+        return await poll_once()
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 @app.get("/vessels/{imo}")
 def get_vessel(imo: str):
@@ -588,6 +607,7 @@ def procurement(station_id: str):
 
 # --- Phase 2.1: Inventory bulk import scaffold (no NCPOR data needed; seed fallback stays if COUNT=0) ---
 @app.get("/assets/bulk/template")
+@app.get("/assets/template.csv")
 def assets_bulk_template():
     """Return CSV header template for bulk import. Mirrors shared/seed.json asset shape."""
     from fastapi.responses import PlainTextResponse

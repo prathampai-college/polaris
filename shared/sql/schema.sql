@@ -48,6 +48,17 @@ CREATE TABLE IF NOT EXISTS transactions (
   sync_status TEXT CHECK(sync_status IN ('PENDING','SYNCED','FAILED')) DEFAULT 'PENDING'
 );
 
+CREATE TABLE IF NOT EXISTS vessels (
+  imo TEXT PRIMARY KEY,
+  name TEXT,
+  lat REAL,
+  lon REAL,
+  sog REAL,
+  eta TEXT,
+  station_id TEXT REFERENCES stations(id),
+  last_seen TEXT
+);
+
 CREATE TABLE IF NOT EXISTS indents (
   id TEXT PRIMARY KEY,
   station_id TEXT REFERENCES stations(id),
@@ -119,17 +130,6 @@ CREATE TABLE IF NOT EXISTS physics_params (
   K1 REAL NOT NULL,
   K2 REAL NOT NULL,
   K3 REAL NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS vessels (
-  imo TEXT PRIMARY KEY,
-  name TEXT,
-  lat REAL,
-  lon REAL,
-  sog REAL,
-  eta TEXT,
-  station_id TEXT REFERENCES stations(id),
-  last_seen TEXT
 );
 
 -- Indexes

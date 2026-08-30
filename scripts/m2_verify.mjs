@@ -82,7 +82,7 @@ const indentAsset='A1'; const qtyReq=200;
 indentId=ulid(); indentUlid=ulid(); ts=new Date().toISOString();
 const indent={id:indentId, station_id:'ST-BHARATI', asset_id:indentAsset, qty_requested:qtyReq, urgency:'CRITICAL', status:'DRAFT', created_by:'FIELD_OP_01', created_at:ts};
 fieldDb.exec('BEGIN');
-fieldDb.prepare('INSERT INTO indents VALUES (?,?,?,?,?,?,?,?)').run(indentId,'ST-BHARATI',indentAsset,qtyReq,'CRITICAL','DRAFT','FIELD_OP_01',ts);
+fieldDb.prepare('INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at) VALUES (?,?,?,?,?,?,?,?)').run(indentId,'ST-BHARATI',indentAsset,qtyReq,'CRITICAL','DRAFT','FIELD_OP_01',ts);
 fieldDb.prepare('INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)').run(ulid(),'FIELD_OP_01','INDENT_CREATE','indents',null,JSON.stringify(indent),ts);
 fieldDb.prepare('INSERT INTO outbox VALUES (?,?,?,?,?,?,?,?,?,?)').run(indentUlid,deviceId,'indents',indentId,'UPSERT',encode(indent),0,0,ts,'PENDING');
 fieldDb.exec('COMMIT');
