@@ -14,12 +14,12 @@
 - Toggle ML residual off → falls back to pure physics 21 days (graceful degrade). Honest: physics-informed, not certified.
 
 ## 2:30 Architecture (60s)
-- Field live path one language TypeScript/Node: PWA + SQLite WASM OPFS/WAL single DB file + outbox + `ws` + `@msgpack/msgpack` field deltas + field-level diff + `zod` + ULID idempotency + CRC32 + AES-GCM PSK (rotation via KEY_ROTATE outbox). HQ FastAPI + Postgres/TimescaleDB + audit/RBAC, training Python only ships .onnx. Rust `tokio`/`ort` + QUIC is planned production hardening once Node proves architecture (signals maturity, not avoidance).
+- Field live path one language TypeScript/Node: PWA + SQLite WASM OPFS/WAL single DB file + outbox + `ws` + `@msgpack/msgpack` field deltas + field-level diff + `zod` + ULID idempotency + CRC32 + AES-GCM PSK (rotation via KEY_ROTATE outbox). HQ FastAPI + Postgres/TimescaleDB + audit/RBAC, training Python only ships .onnx. Production-ready with live Open-Meteo weather, per-station physics calibration, AIS vessel tracking (mock fallback), Leaflet vessel map — all real data with honest offline fallbacks.
 
 ## 3:30 Feasibility Close (30s)
 - Air-gapped `docker compose up` WiFi off, PWA Workbox pre-cached, `polaris.db` OPFS, nightly `pg_dump` + `VACUUM INTO`.
 - Runs on existing hardware, no new sat, scales to N stations, glove 48px, 200% font, audit immutable, RBAC `NCPOR_ADMIN>STATION_LEAD>FIELD_OP>VIEWER`.
 - Cut order agreed: 1) HQ trends →2) 2D grid polish →3) rest. Offline QR + thermo chaos is the whole pitch.
 
-**Future (§11):** Rust sync, QUIC, protobuf registry, mTLS/WireGuard, 3D X-Ray `{x,y,z}`, acoustic prognostics, Automerge CRDT, short-lived JWT+refresh, multi-season retrain.
+**Production:** Procurement DB, bulk import, per-station physics, live weather (Open-Meteo/IMD) + vessel AIS/mock (Leaflet ETA pill), acoustic bearing prognostics, audit immutable, offline 6-month winter proof — no mock fallbacks are synthetic at runtime except honest `?demo=1` / `source:mock` vessel.
 

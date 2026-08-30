@@ -1,6 +1,6 @@
-# API — POLARIS HQ (FastAPI :8000)
+# API — POLARIS HQ (FastAPI :8000) — Production
 
-Base: `http://localhost:8000` (or `hq:8000` in Docker). All JSON. CORS via `ALLOWED_ORIGINS` env (default `*` in dev, restrict in prod).
+Base: `http://localhost:8000` (or `hq:8000` in Docker). All JSON. CORS via `ALLOWED_ORIGINS` env (default `*` in dev, restrict in prod). See `hq/app/main.py:156` for `health`.
 
 ## Health
 
@@ -8,23 +8,27 @@ Base: `http://localhost:8000` (or `hq:8000` in Docker). All JSON. CORS via `ALLO
 
 ## Assets
 
-`GET /assets` → `Asset[] {id, sku, name, category, qty, unit, expiry_date, criticality, crate_id, barcode, version, updated_at}`
+`GET /assets` → `Asset[] {id, sku, name, category, qty, unit, expiry_date, criticality, crate_id, barcode, version, updated_at, station_id, container_id}` via `LEFT JOIN crates→containers` `hq/app/main.py:193`.
+
+`GET /assets/bulk/template` → `text/csv` `sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode` + example `hq/app/main.py:539`.
+
+`POST /assets/bulk` body `BulkAssetRequest {rows:[{sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,id?}]}` → `{inserted, updated}` RBAC `NCPOR_ADMIN` `hq/app/main.py:562` (`INSERT ... ON CONFLICT(sku) DO UPDATE`, validates `category` `FUEL_DIESEL|…|SCIENTIFIC` and `criticality` `CRITICAL|HIGH|LOW`, max 500 rows, `qty>=0`). Used by `scripts/import_inventory.mjs` + `scripts/template_inventory.csv`.
 
 ## Audit
 
-`GET /audit?limit=20` → `AuditLog[] {id, actor_id, action, entity, before, after, ts}` immutable append-only. `limit` clamped 1–200.
+`GET /audit?limit=20` → `AuditLog[] {id, actor_id, action, entity, before, after, ts}` immutable append-only. `limit` clamped 1–200 `hq/app/main.py:198`.
 
-## Indents (Indent Workflow §3.2)
+## Indents (Indent Workflow)
 
-`GET /indents?station_id=ST-BHARATI` → `Indent[] + sku/name join`, ordered `created_at DESC`.
+`GET /indents?station_id=ST-BHARATI` → `Indent[] {id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo}` + `sku/name` join, ordered `created_at DESC` `hq/app/main.py:209`. Includes `vessel_imo` when `DISPATCHED`.
 
-`POST /indents` body `IndentCreate {station_id, asset_id, qty_requested, urgency:LOW|MEDIUM|CRITICAL, created_by, status=DRAFT}` → `{id, status}`. Used by HQ; field creates via sync outbox `entity=indents, op=UPSERT`.
+`POST /indents` body `IndentCreate {station_id, asset_id, qty_requested, urgency:LOW|MEDIUM|CRITICAL, created_by, status=DRAFT}` → `{id, status}`. Used by HQ; field creates via sync outbox `entity=indents, op=UPSERT`. 9-col `vessel_imo` defaults NULL `hq/app/main.py:243`.
 
-`PATCH /indents/{id}` body `IndentPatch {status, actor_id}` → `{id, old, new}`. Strict `ALLOWED: DRAFT→APPROVED→DISPATCHED→RECEIVED` — no `DRAFT→RECEIVED` shortcut. Requires `Authorization: Bearer <JWT>` with `STATION_LEAD`+ (`require_role("STATION_LEAD")`), returns `401`/`403` otherwise. Appends `audit_log`; triggers `notify_gateway` with `X-PSK` header for downstream push. SQLite fallback still enforces strict.
+`PATCH /indents/{id}` body `IndentPatch {status, actor_id, vessel_imo?}` → `{id, old, new}`. Strict `ALLOWED: DRAFT→APPROVED→DISPATCHED→RECEIVED` — no `DRAFT→RECEIVED` shortcut (except `DRAFT→RECEIVED` tolerated for offline field demo `hq/app/main.py:281`). Requires `Authorization: Bearer <JWT>` with `STATION_LEAD`+ (`require_role("STATION_LEAD")`), validates `vessel_imo` exists in `vessels` `hq/app/main.py:283`, returns `404 vessel not found` if invalid, `401`/`403` otherwise. Appends `audit_log`; triggers `notify_gateway` with `X-PSK` for downstream push (`vessel_imo` included). SQLite fallback still enforces strict.
 
 ## Stations & Forecast
 
-`GET /stations/overview` → `Station[] {id,name,winter_crew_count, containers, assets, critical_low, open_indents, days_to_stockout, forecast_ci:[low,high]}`.
+`GET /stations/overview` → `Station[] {id,name,winter_crew_count, containers, assets, critical_low, open_indents, days_to_stockout, forecast_ci:[low,high]}`. Computes `predict_total(..., station_id)` per-station physics `hq/app/main.py:323`.
 
 `GET /forecast/{station_id}?asset_sku=FUEL-DIESEL-001` →
 
@@ -39,37 +43,62 @@ Base: `http://localhost:8000` (or `hq:8000` in Docker). All JSON. CORS via `ALLO
 // blizzard tele -38,22,960 → days 18 ci[15,22] pure 18.4
 ```
 
-`POST /telemetry` body `TelemetryIn {ts,station_id,temp_outside,wind_speed,pressure,dg_load,acoustic_anomaly?}` → `{ok:true}` + triggers `check_and_escalate` (if `qty/total ≤20` creates `CRITICAL` diesel indent 500 units, `FORECAST_AUTO`; if `acoustic_anomaly > 0.90` creates `CRITICAL` bearing indent 4 pcs, `ACOUSTIC_AI`) + SSE broadcast to `/telemetry/stream`. No MQTT (removed — SSE is live path).
+Uses `load_physics(station_id)` `hq/app/forecast.py:7` per-station `physics_params` DB else global `shared/src/physics.json`. `hq/app/main.py:484`.
 
-`GET /telemetry/latest?station_id=ST-BHARATI` → last row or `{}`.
+`GET /physics/{station}` → `{station_id, T_INSIDE, BASE, K1, K2, K3}` per-station `hq/app/main.py:499` or `global_fallback` + `source` flag. Used by `scripts/calibrate_physics.py`.
 
-`GET /telemetry/history?station_id=ST-BHARATI&days=30` → `[{day, avg_temp, avg_load}]` aggregated telemetry history for TimescaleDB trend visualization.
+## Procurement (DB-driven)
 
-`GET /telemetry/stream` → SSE `text/event-stream` (`event: telemetry`).
+`GET /procurement/targets` → `ProcurementTarget[] {sku,target_qty,cost_per_unit,unit,eta}` `hq/app/main.py:513`.
+
+`PUT /procurement/targets/{sku}` body `ProcurementTargetUpsert {sku,target_qty,cost_per_unit,unit,eta}` → upsert RBAC `STATION_LEAD` `hq/app/main.py:525` `INSERT ... ON CONFLICT DO UPDATE`.
+
+`GET /procurement/{station}` → DB-driven `need=max(0,target-qty)` `₹cost` `hq/app/main.py:541`; `[]` if no targets.
+
+## Vessels (AIS Adaptive)
+
+`GET /vessels?station_id=ST-BHARATI` → `Vessel[] {imo,name,lat,lon,sog,eta,station_id,last_seen,source:live|mock}` `hq/app/main.py:517` filter by station, `source` from `vessel_poller.get_status()` (`mock` when no `AIS_API_KEY` or `429`, `live` when AISHub succeeds). Poller `hq/app/vessel_poller.py:11` every 15m (`VESSEL_POLL_SEC`), cache `/tmp/ais_cache.json`.
+
+`GET /vessels/{imo}` → single vessel `hq/app/main.py:533` with `source`.
+
+`PATCH /indents/{id}` supports `vessel_imo` as above (validated). Dispatch flow: HQ `POST /indents` `DRAFT` → `PATCH APPROVED` → `PATCH DISPATCHED {vessel_imo:9734567}` (Sagar Nidhi) → field `DOWNSTREAM_DELTA vessels` → offline ETA `field/lib/db.ts:276`.
+
+## Telemetry
+
+`POST /telemetry` body `TelemetryIn {ts,station_id,temp_outside,wind_speed,pressure,dg_load,acoustic_anomaly?}` → `{ok:true}` + triggers `check_and_escalate` (if `qty/total ≤20` creates `CRITICAL` diesel indent 500 units, `FORECAST_AUTO`; if `acoustic_anomaly > 0.90` creates `CRITICAL` bearing indent 4 pcs, `ACOUSTIC_AI`) + SSE broadcast to `/telemetry/stream` `hq/app/main.py:41`.
+
+`GET /telemetry/latest?station_id=ST-BHARATI` → last row or `{}` `hq/app/main.py:346`.
+
+`GET /telemetry/history?station_id=ST-BHARATI&days=30` → `[{day, avg_temp, avg_load}]` aggregated history `hq/app/main.py:351`.
+
+`GET /telemetry/sources` → poller health `{source_setting:both|sim|imd|openmeteo, poll_interval_sec, coords, imd_configured, last_poll:{ts,results,error}}` `hq/app/main.py:354` `hq/app/telemetry_poller.py:11` (Open-Meteo free + optional IMD, `TELEMETRY_SOURCE`).
+
+`GET /telemetry/stream` → SSE `text/event-stream` (`event: telemetry`) `hq/app/main.py:363` `asyncio.Queue` 100 keepalive 30s.
 
 ## Sync (PolarNet Micro-Gateway)
 
-`GET /sync/state/{device_id}` → `{device_id, last_acked_ulid, last_server_version}`
+`GET /sync/state/{device_id}` → `{device_id, last_acked_ulid, last_server_version}` `hq/app/main.py:683`.
 
-`POST /sync/ingest` body `DeltaFrame {ulid(26), device_id, entity:assets|indents, entity_id, op:UPSERT|CONSUME|IN|OUT|ADJUST|DELETE, patch:Record, base_version:int, ts}`
+`POST /sync/ingest` body `DeltaFrame {ulid(26), device_id, entity:assets|indents|vessels|telemetry|stations|containers|crates, entity_id, op:UPSERT|CONSUME|IN|OUT|ADJUST|DELETE, patch:Record, base_version:int, ts}` `hq/app/main.py:685`.
 
-- Wire-level `PSK_HEX` validated `64 hex` (32B) via `hexToBytes`/`assertKeyHex` — odd/invalid hex rejected, `DataView` byteOffset-safe. `toWire` = `[4B CRC BE][12B nonce||ciphertext||16B tag]` msgpack+AES-GCM (GCM tag is integrity, CRC is framing). `>2KB` frame returns `{status:"FAILED", message:"frame >2048"}` instead of silent drop.
+- Wire-level `PSK_HEX` validated `64 hex` (32B) via `hexToBytes`/`assertKeyHex` — odd/invalid hex rejected, `DataView` byteOffset-safe. `toWire` = `[4B CRC BE][12B nonce||ciphertext||16B tag]` msgpack+AES-GCM (GCM tag is integrity, CRC is framing). `>2KB` frame returns `{status:"FAILED", message:"frame >2048"}` instead of silent drop `sync-gateway/src/gateway.ts:6`.
 - Dedupe: if `ulid` in `dedupe` → `{status:"DEDUPED", server_version}`.
 - Assets: `qty<0` → `{status:"CONFLICT_CRITICAL", server_version, message:"would go negative"}`. Else apply `qty,version`, insert `dedupe`+`audit_log`+`sync_state` (`PG SELECT FOR UPDATE` / `SQLite BEGIN IMMEDIATE`, TOCTOU-safe).
-- Indents: upsert `indents` row or status patch (strict), dedupe, audit `SYNC_INDENT_*`.
+- Indents: upsert `indents` row or status+vessel_imo patch (strict), dedupe, audit `SYNC_INDENT_*` `hq/app/main.py:734`. Supports `vessel_imo` `hq/app/main.py:734`.
+- Vessels: downstream `DOWNSTREAM_DELTA vessels` via `applyDownstreamVessel` `field/lib/db.ts:276`.
 - Gateway validates CRC+decrypt+zod before `POST /sync/ingest`, returns `toWire({ulid,status,server_version})`, logs `jsonBytes vs msgpackBytes` via `sizeReport` (shared).
 
-Errors: `400` ulid length / entity / op allowlist, `404 asset not found`, `413 patch >2KB`, `500` with rollback.
+Errors: `400` ulid length / entity / op allowlist, `404 asset/vessel not found`, `413 patch >2KB`, `500` with rollback.
 
-`GET /sync/ingest` rate-limited `600/min` per `device_id` (`_rate_store` in-memory, 1000-key bound).
+`GET /sync/ingest` rate-limited `600/min` per `device_id` (`_rate_store` in-memory, 1000-key bound) `hq/app/main.py:689`.
 
 ## Auth & RBAC
 
-`POST /auth/login` body `{device_id, pin, station_id, role?}` → `{token, role, station_id, device_id}`. `pin` per-station (`ST-BHARATI: BHARATI-2024` in `config.py:STATION_PINS`). **`role` is ignored** unless `device_id` contains `ADMIN`/`LEAD`/`TEST`/`HQ` — otherwise always `FIELD_OP`. Prevents PIN-holder escalation to `NCPOR_ADMIN`. Token is HMAC-SHA256 JWT, `64 hex` secret hex-decoded to 32B (`hexToBytes`/`bytes.fromhex`), compact JSON (`separators=(',',':')`) cross-verified Node ↔ Python, `exp` 30d (`TOKEN_EXPIRY_DAYS`).
+`POST /auth/login` body `{device_id, pin, station_id, role?}` → `{token, role, station_id, device_id}`. `pin` per-station (`ST-BHARATI: BHARATI-2024` `hq/app/config.py:22`). **`role` is ignored** unless `device_id` contains `ADMIN`/`LEAD`/`TEST`/`HQ` — otherwise always `FIELD_OP` `hq/app/main.py:176`. Prevents PIN-holder escalation to `NCPOR_ADMIN`. Token is HMAC-SHA256 JWT, `64 hex` secret hex-decoded to 32B (`hexToBytes`/`bytes.fromhex`), compact JSON (`separators=(',',':')`) cross-verified Node ↔ Python, `exp` 30d (`TOKEN_EXPIRY_DAYS`).
 
-`GET /rbac/me` → `{role, station_id, device_id, permissions}`. Requires `Authorization: Bearer <JWT>`; when absent returns `{role:"VIEWER", permissions:["READ"]}` (not `FIELD_OP`). Roles `NCPOR_ADMIN(5)>HQ_LOGISTICS(4)>DISPATCH(3)=STATION_LEAD(3)>FIELD_OP(2)>VIEWER(1)`. Row-level: `device_id→station_id` at provisioning; queries `WHERE station_id=:mine`.
+`GET /rbac/me` → `{role, station_id, device_id, permissions}`. Requires `Authorization: Bearer <JWT>`; when absent returns `{role:"VIEWER", permissions:["READ"]}` (not `FIELD_OP`). Roles `NCPOR_ADMIN(5)>HQ_LOGISTICS(4)>DISPATCH(3)=STATION_LEAD(3)>FIELD_OP(2)>VIEWER(1)` `hq/app/auth.py:8`. Row-level: `device_id→station_id` at provisioning; queries `WHERE station_id=:mine`.
 
-`GET /internal/broadcast_delta` (gateway, HQ→field push) → requires header `X-PSK: <PSK_HEX>` equal to gateway `PSK_HEX`, else `401`.
+`GET /internal/broadcast_delta` (gateway, HQ→field push) → requires header `X-PSK: <PSK_HEX>` equal to gateway `PSK_HEX` `sync-gateway/src/gateway.ts:73`, else `401`.
 
 ## Errors
 
@@ -77,21 +106,29 @@ Standard FastAPI `HTTPException` JSON `{detail: string, request_id}`. Security h
 
 ## Wire
 
-Field `SyncWorker` (`field/lib/sync.ts`) maintains full-duplex socket: `connect()` sends `SYNC_INIT` encrypted wire, `drain()` every 2s sends `outbox` `PENDING|SENT` (retry until `ACKED`, `draining` guard prevents concurrent dup), `onmessage` handles `DOWNSTREAM_DELTA`/`SYNC_INIT_RESP`/`ACK`, updates `outbox SET ACKED` + `sync_state`. `PING/PONG` keepalive 30s. Verify scripts use same `toWire`/`fromWire` with `PSK_HEX="a"*64` demo key.
+Field `SyncWorker` (`field/lib/sync.ts:13`) maintains full-duplex socket: `connect()` sends `SYNC_INIT` encrypted wire, `drain()` every 2s sends `outbox` `PENDING|SENT` (retry until `ACKED`, `draining` guard prevents concurrent dup), `onmessage` handles `DOWNSTREAM_DELTA` (assets/indents/vessels) /`SYNC_INIT_RESP`/`ACK`, updates `outbox SET ACKED` + `sync_state`. `PING/PONG` keepalive 30s. Verify scripts use same `toWire`/`fromWire` with `PSK_HEX="a"*64` demo key.
 
 ## Example curl
 
 ```bash
 curl http://localhost:8000/health
 curl http://localhost:8000/forecast/ST-BHARATI
+curl http://localhost:8000/assets | jq '.[0] | {sku,qty,station_id}'
+curl http://localhost:8000/vessels | jq '.[0] | {imo,name,lat,source}'
 curl -X POST http://localhost:8000/auth/login -H "Content-Type: application/json" \
   -d '{"device_id":"BHARATI-TABLET-01","pin":"BHARATI-2024","station_id":"ST-BHARATI"}'
 # → {token, role:"FIELD_OP", ...}  (requesting role:"NCPOR_ADMIN" without ADMIN device_id still returns FIELD_OP)
+TOKEN=$(curl -s http://localhost:8000/auth/login -H "Content-Type: application/json" \
+  -d '{"device_id":"HQ-ADMIN-01","pin":"BHARATI-2024","station_id":"ST-BHARATI","role":"NCPOR_ADMIN"}' | jq -r .token)
+curl http://localhost:8000/assets/bulk/template
+curl -X POST http://localhost:8000/assets/bulk -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"rows":[{"sku":"TEST-SKU-999","name":"Test","category":"FOOD","qty":42,"unit":"packs","criticality":"HIGH","crate_id":"C1-K1"}]}'
+curl http://localhost:8000/telemetry/sources | jq
+curl http://localhost:8000/physics/ST-BHARATI | jq
 curl -H "Authorization: Bearer $TOKEN" -X PATCH http://localhost:8000/indents/$ID \
-  -H "Content-Type: application/json" -d '{"status":"APPROVED","actor_id":"LEAD_01"}'
+  -H "Content-Type: application/json" -d '{"status":"DISPATCHED","actor_id":"LEAD_01","vessel_imo":"9734567"}'
 curl -X POST http://localhost:8000/telemetry -H "Content-Type: application/json" \
   -d '{"ts":"2026-08-27T00:00:00","station_id":"ST-BHARATI","temp_outside":-38,"wind_speed":22,"pressure":960,"dg_load":0.9}'
-curl http://localhost:8000/indents | jq
 # gateway internal push (requires X-PSK)
 curl -X POST http://localhost:8787/internal/broadcast_delta -H "X-PSK: $PSK_HEX" -H "Content-Type: application/json" \
   -d '{"station_id":"ST-BHARATI","entity":"indents","entity_id":"...","op":"STATUS_CHANGE","patch":{"status":"APPROVED"}}'
