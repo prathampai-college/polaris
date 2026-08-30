@@ -46,6 +46,22 @@ PROCUREMENT_SEED = [
     ("SPARE-BRG-6205-007", 10, 80, "pcs", "30d before freeze"),
 ]
 
+def _load_physics():
+    for p in [
+        pathlib.Path(__file__).parent / ".." / ".." / "shared" / "src" / "physics.json",
+        pathlib.Path(__file__).parent / ".." / ".." / "shared" / "physics.json",
+        pathlib.Path("/app/shared/src/physics.json"),
+        pathlib.Path("/app/shared/physics.json"),
+    ]:
+        if p.exists():
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+    return {"T_INSIDE": 18, "BASE": 110, "K1": 0.012, "K2": 0.018, "K3": 0.08}
+
+_PHYSICS = _load_physics()
+
 def _pg_schema_sql():
     # strip PRAGMA lines which are SQLite-only and convert SQLite types to PG
     sql = "\n".join(l for l in SCHEMA_SQL.splitlines() if not l.strip().upper().startswith("PRAGMA"))
@@ -70,6 +86,34 @@ def _ensure_procurement_targets_sqlite(conn):
                 conn.commit()
             except Exception:
                 pass
+
+def _ensure_physics_params_sqlite(conn):
+    try:
+        cur = conn.execute("SELECT COUNT(*) FROM physics_params")
+        if cur.fetchone()[0] == 0:
+            for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
+                conn.execute("INSERT OR IGNORE INTO physics_params (station_id, T_INSIDE, BASE, K1, K2, K3) VALUES (?,?,?,?,?,?)",
+                             (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
+            conn.commit()
+    except Exception as e:
+        if "no such table" in str(e).lower():
+            try:
+                conn.executescript("CREATE TABLE IF NOT EXISTS physics_params (station_id TEXT PRIMARY KEY REFERENCES stations(id), T_INSIDE REAL NOT NULL, BASE REAL NOT NULL, K1 REAL NOT NULL, K2 REAL NOT NULL, K3 REAL NOT NULL);")
+                for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
+                    conn.execute("INSERT OR IGNORE INTO physics_params VALUES (?,?,?,?,?,?)",
+                                 (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
+                conn.commit()
+            except Exception:
+                pass
+
+def seed_physics_params(cur):
+    for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
+        try:
+            cur.execute("INSERT INTO physics_params (station_id, T_INSIDE, BASE, K1, K2, K3) VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
+                        (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
+        except Exception:
+            cur.execute("INSERT OR IGNORE INTO physics_params VALUES (?,?,?,?,?,?)",
+                        (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
 
 def init_db():
     global _sqlite_conn
@@ -98,6 +142,12 @@ def init_db():
                             seed_procurement_targets(cur)
                     except Exception:
                         pass
+                    try:
+                        cur.execute("SELECT COUNT(*) FROM physics_params")
+                        if cur.fetchone()[0] == 0:
+                            seed_physics_params(cur)
+                    except Exception:
+                        pass
         print(f"[hq] Postgres init ok {DATABASE_URL.split('@')[-1]}")
     else:
         _sqlite_conn = get_sqlite()
@@ -107,6 +157,7 @@ def init_db():
             seed_sqlite(_sqlite_conn)
         else:
             _ensure_procurement_targets_sqlite(_sqlite_conn)
+            _ensure_physics_params_sqlite(_sqlite_conn)
         print(f"[hq] SQLite init ok {HQ_DB_PATH} (fallback, no Docker)")
 
 def seed_procurement_targets(cur):
@@ -124,6 +175,7 @@ def seed(cur):
         for r in s["crates"]: cur.execute("INSERT INTO crates VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING", r)
         for a in s["assets"]: cur.execute("INSERT INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1,now()) ON CONFLICT (id) DO NOTHING", a)
         seed_procurement_targets(cur)
+        seed_physics_params(cur)
         return
     # fallback (should not happen)
     for r in [("ST-BHARATI","Bharati","69°24′S 76°11′E",24)]: cur.execute("INSERT INTO stations VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING", r)
@@ -140,11 +192,15 @@ def seed_sqlite(conn):
         for a in s["assets"]: conn.execute("INSERT OR IGNORE INTO assets VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (*a, 1, now))
         for row in PROCUREMENT_SEED:
             conn.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
+        for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
+            conn.execute("INSERT OR IGNORE INTO physics_params VALUES (?,?,?,?,?,?)", (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
         conn.commit()
         return
     # ensure procurement even without seed
     for row in PROCUREMENT_SEED:
         conn.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
+    for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
+        conn.execute("INSERT OR IGNORE INTO physics_params VALUES (?,?,?,?,?,?)", (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
     conn.commit()
 
 def get_conn():

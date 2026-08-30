@@ -4,7 +4,32 @@ _physics = None
 _scaler = None
 _ort_sess = None
 
-def load_physics():
+def load_physics(station_id: str | None = None):
+    """Per-station physics: if station_id given, try DB physics_params, else fallback to global file."""
+    if station_id:
+        try:
+            from .db import get_conn, USE_PG
+            conn = get_conn()
+            if USE_PG:
+                import psycopg as _pg
+                # use a fresh conn for thread safety; get_conn already returns new PG conn
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT T_INSIDE, BASE, K1, K2, K3 FROM physics_params WHERE station_id=%s", (station_id,))
+                        row = cur.fetchone()
+                        if row:
+                            # psycopg returns tuple; map
+                            return {"T_INSIDE": float(row[0]), "BASE": float(row[1]), "K1": float(row[2]), "K2": float(row[3]), "K3": float(row[4])}
+                # don't close here — context manager handles? get_conn returns new conn each call, so close
+                try: conn.close()
+                except Exception: pass
+            else:
+                cur = conn.execute("SELECT T_INSIDE, BASE, K1, K2, K3 FROM physics_params WHERE station_id=?", (station_id,))
+                row = cur.fetchone()
+                if row:
+                    return {"T_INSIDE": float(row["T_INSIDE"]), "BASE": float(row["BASE"]), "K1": float(row["K1"]), "K2": float(row["K2"]), "K3": float(row["K3"])}
+        except Exception:
+            pass
     global _physics
     if _physics is not None:
         return _physics
@@ -43,13 +68,13 @@ def load_forecast_model():
         print("[hq forecast] model fallback", e)
         _ort_sess = None
 
-def physics_pred(temp_out, wind, pressure):
-    ph = load_physics()
+def physics_pred(temp_out, wind, pressure, station_id: str | None = None):
+    ph = load_physics(station_id)
     pd = (1013 - pressure) / 1013
     return ph["BASE"] * (1 + ph["K1"] * (ph["T_INSIDE"] - temp_out) + ph["K2"] * wind) + ph["K3"] * pd * ph["BASE"]
 
-def predict_total(temp_out, wind, pressure, crew, dg_load):
-    phys = physics_pred(temp_out, wind, pressure)
+def predict_total(temp_out, wind, pressure, crew, dg_load, station_id: str | None = None):
+    phys = physics_pred(temp_out, wind, pressure, station_id)
     residual = 0
     used = False
     if _ort_sess and _scaler is not None:
