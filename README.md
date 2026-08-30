@@ -125,7 +125,7 @@ Indexes: `idx_assets_crate`, `idx_outbox_status (status, created_at)`, `idx_tran
 ### 1. Clone & Install
 
 ```powershell
-git clone <repo> polar-logistics; cd polar-logistics
+git clone https://github.com/prathampai-college/polaris.git; cd polaris
 npm install --prefix shared; npx tsc -p shared/tsconfig.json
 npm install --prefix sync-gateway; npx tsc -p sync-gateway/tsconfig.json
 npm install --prefix field          # links @polaris/shared file:../shared

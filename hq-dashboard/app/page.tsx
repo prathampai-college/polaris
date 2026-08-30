@@ -1031,7 +1031,7 @@ export default function HQPage() {
                   <span className="text-xs font-mono text-blue-400">{stationNameMap[selectedStation] || selectedStation}</span>
                 </div>
 
-                <LocatorWrap assets={assets} highlight={null} />
+                <LocatorWrap assets={assets} highlight={null} stationId={selectedStation} />
               </div>
             </div>
           )}
@@ -1119,7 +1119,7 @@ export default function HQPage() {
   );
 }
 
-function LocatorWrap({ assets, highlight }: { assets: any[]; highlight: string | null }) {
+function LocatorWrap({ assets, highlight, stationId }: { assets: any[]; highlight: string | null; stationId?: string }) {
   const [Comp, setComp] = useState<any>(null);
   useEffect(() => {
     import('../components/Container3D').then((m) => setComp(() => m.Container3D));
@@ -1130,7 +1130,7 @@ function LocatorWrap({ assets, highlight }: { assets: any[]; highlight: string |
         Loading 3D Digital Twin…
       </div>
     );
-  return <Comp assets={assets} highlight={highlight} />;
+  return <Comp assets={assets} highlight={highlight} stationId={stationId} />;
 }
 
 function VesselMapWrap({ stationId }: { stationId: string }) {
