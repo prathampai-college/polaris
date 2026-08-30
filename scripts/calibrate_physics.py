@@ -97,7 +97,7 @@ def calibrate_station(db, is_pg, station_id, dry_run=False):
         T_INSIDE, BASE, K1_old, K2_old, K3_old = float(row["T_INSIDE"]), float(row["BASE"]), float(row["K1"]), float(row["K2"]), float(row["K3"])
     data = fetch_daily(db, is_pg, station_id)
     if len(data) < 5:
-        print(f"[{station_id}] insufficient data ({len(data)} days) — need >=5, keeping old K1={K1_old} K2={K2_old} K3={K3_old}")
+        print(f"[{station_id}] insufficient data ({len(data)} days) - need >=5, keeping old K1={K1_old} K2={K2_old} K3={K3_old}")
         return {"station_id": station_id, "K1": K1_old, "K2": K2_old, "K3": K3_old, "fitted": False, "n": len(data)}
     # Build X, y
     # y = actual - BASE

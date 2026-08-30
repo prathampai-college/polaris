@@ -12,7 +12,7 @@
     "test:e2e": "node scripts/m1_verify.mjs && node scripts/m2_verify.mjs",
     "lint": "eslint shared/src sync-gateway/src --ext .ts || echo \"eslint not installed\"",
     "lint:fix": "eslint shared/src sync-gateway/src --ext .ts --fix",
-    "typecheck": "npx tsc -p shared/tsconfig.json --noEmit && npx tsc -p sync-gateway/tsconfig.json --noEmit",
+    "typecheck": "npx tsc -p shared/tsconfig.json --noEmit && npx tsc -p sync-gateway/tsconfig.json --noEmit && npx tsc -p field/tsconfig.json --noEmit && npx tsc -p hq-dashboard/tsconfig.json --noEmit",
     "build": "npm --prefix shared run build && npm --prefix sync-gateway run build",
     "verify": "node scripts/m1_verify.mjs && node scripts/m2_verify.mjs && node scripts/m3_verify.mjs && node scripts/m4_verify.mjs && node scripts/m5_verify.mjs"
   },

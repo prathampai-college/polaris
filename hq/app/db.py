@@ -3,29 +3,31 @@ import os, sqlite3, pathlib, json
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 USE_PG = DATABASE_URL.startswith("postgresql")
 
-_shared_schema = pathlib.Path(__file__).parent / ".." / ".." / "shared" / "sql" / "schema.sql"
-# also try docker context path /app/shared
-_alt_schema = pathlib.Path("/app/shared/sql/schema.sql")
-_alt2 = pathlib.Path(__file__).parent / "schema.sql"
-if _shared_schema.exists():
-    SCHEMA_SQL = _shared_schema.read_text(encoding="utf-8")
-elif _alt_schema.exists():
-    SCHEMA_SQL = _alt_schema.read_text(encoding="utf-8")
-elif _alt2.exists():
-    SCHEMA_SQL = _alt2.read_text(encoding="utf-8")
-else:
-    SCHEMA_SQL = ""
+def _find_file(*subpaths):
+    for sub in subpaths:
+        for p in [
+            pathlib.Path(__file__).parent / ".." / ".." / sub,
+            pathlib.Path(__file__).parent / ".." / sub,
+            pathlib.Path("/app") / sub,
+            pathlib.Path(__file__).parent / pathlib.Path(sub).name,
+            pathlib.Path(sub),
+        ]:
+            if p.exists():
+                return p
+    return None
+
+_schema_file = _find_file("shared/sql/schema.sql", "sql/schema.sql", "schema.sql")
+SCHEMA_SQL = _schema_file.read_text(encoding="utf-8") if _schema_file and _schema_file.exists() else ""
 
 HQ_DB_PATH = pathlib.Path(__file__).parent / "hq.db"
 
 def _load_seed():
-    for p in [
-        pathlib.Path(__file__).parent / ".." / ".." / "shared" / "seed.json",
-        pathlib.Path("/app/shared/seed.json"),
-        pathlib.Path(__file__).parent / "seed.json",
-    ]:
-        if p.exists():
+    p = _find_file("shared/seed.json", "seed.json")
+    if p and p.exists():
+        try:
             return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
     return None
 
 _SEED = _load_seed()
@@ -47,17 +49,12 @@ PROCUREMENT_SEED = [
 ]
 
 def _load_physics():
-    for p in [
-        pathlib.Path(__file__).parent / ".." / ".." / "shared" / "src" / "physics.json",
-        pathlib.Path(__file__).parent / ".." / ".." / "shared" / "physics.json",
-        pathlib.Path("/app/shared/src/physics.json"),
-        pathlib.Path("/app/shared/physics.json"),
-    ]:
-        if p.exists():
-            try:
-                return json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+    p = _find_file("shared/src/physics.json", "shared/physics.json", "physics.json")
+    if p and p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
     return {"T_INSIDE": 18, "BASE": 110, "K1": 0.012, "K2": 0.018, "K3": 0.08}
 
 _PHYSICS = _load_physics()

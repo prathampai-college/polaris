@@ -47,7 +47,7 @@ jobs:
         with: { python-version: '3.11' }
       - run: pip install -r hq/requirements.txt
       - run: pytest hq/tests -v
-      - run: python -m py_compile hq/app/main.py hq/app/db.py hq/app/forecast.py hq/app/config.py
+      - run: python -m py_compile hq/app/main.py hq/app/db.py hq/app/forecast.py hq/app/config.py hq/app/auth.py hq/app/telemetry_poller.py hq/app/vessel_poller.py
       - name: Check budgets (ONNX <2MB, synthetic CSV exists)
         run: |
           test -f ai/thermo_residual.onnx
