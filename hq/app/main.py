@@ -308,7 +308,7 @@ def stations_overview():
         if diesel and diesel["qty"]:
             crew=s["winter_crew_count"]
             t=tele or {"temp_outside": -15, "wind_speed": 5, "pressure": 1013, "dg_load": 0.7}
-            phys,res,total,used=predict_total(t["temp_outside"], t["wind_speed"], t["pressure"], crew, t["dg_load"])
+            phys,res,total,used=predict_total(t["temp_outside"], t["wind_speed"], t["pressure"], crew, t["dg_load"], sid)
             s["days_to_stockout"]=round(diesel["qty"]/total,1) if total>0 else 999
             s["forecast_ci"]=[round(s["days_to_stockout"]*0.85), round(s["days_to_stockout"]*1.15)]
         else:
@@ -394,7 +394,7 @@ def check_and_escalate(station_id: str, tele):
     asset_id, qty=row["id"], row["qty"]
     cr=_fetch_one("SELECT winter_crew_count FROM stations WHERE id=?", (station_id,))
     crew=cr["winter_crew_count"] if cr else 24
-    phys,res,total,used=predict_total(tele.temp_outside, tele.wind_speed, tele.pressure, crew, tele.dg_load)
+    phys,res,total,used=predict_total(tele.temp_outside, tele.wind_speed, tele.pressure, crew, tele.dg_load, station_id)
     days=qty/total if total>0 else 999
     try:
         utc = datetime.UTC
@@ -471,11 +471,25 @@ def forecast(station_id: str, asset_sku: str = "FUEL-DIESEL-001"):
     qty=qty_row["qty"]; crew=cr["winter_crew_count"] if cr else 24
     if not tele:
         tele={"temp_outside": -15, "wind_speed": 5, "pressure": 1013, "dg_load": 0.7}
-    phys,res,total,used=predict_total(tele["temp_outside"], tele["wind_speed"], tele["pressure"], crew, tele["dg_load"])
+    phys,res,total,used=predict_total(tele["temp_outside"], tele["wind_speed"], tele["pressure"], crew, tele["dg_load"], station_id)
     days=qty/total if total>0 else 999
     ci=[round(days*0.85), round(days*1.15)]
     return {"station_id": station_id, "asset_sku": asset_sku, "qty": qty, "physics": round(phys,1), "residual": round(res,2), "total_per_day": round(total,1), "days_to_stockout": round(days,1), "ci": ci, "used_model": used, "tele": tele,
             "pure_physics_days": round(qty/phys,1) if phys>0 else 999}
+
+@app.get("/physics/{station_id}")
+def get_physics(station_id: str):
+    """Per-station physics params (Phase 2.3). Falls back to global physics.json if no DB row."""
+    row = _fetch_one("SELECT station_id, T_INSIDE, BASE, K1, K2, K3 FROM physics_params WHERE station_id=?", (station_id,))
+    if row:
+        return row
+    # fallback global
+    try:
+        from .forecast import load_physics
+        ph = load_physics()
+        return {"station_id": station_id, "T_INSIDE": ph["T_INSIDE"], "BASE": ph["BASE"], "K1": ph["K1"], "K2": ph["K2"], "K3": ph["K3"], "source": "global_fallback"}
+    except Exception as e:
+        raise HTTPException(404, f"physics not found for {station_id}")
 
 @app.get("/procurement/targets")
 def list_procurement_targets():
