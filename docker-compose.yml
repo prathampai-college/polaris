@@ -41,6 +41,9 @@ services:
       DATABASE_URL: postgresql://polaris:polaris@db:5432/polaris
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3001}"
       PSK_HEX: "${PSK_HEX:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+      TELEMETRY_SOURCE: "${TELEMETRY_SOURCE:-both}"
+      IMD_API_KEY: "${IMD_API_KEY:-}"
+      TELEMETRY_POLL_SEC: "${TELEMETRY_POLL_SEC:-900}"
     depends_on:
       db:
         condition: service_healthy

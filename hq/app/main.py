@@ -78,6 +78,12 @@ async def lifespan(app: FastAPI):
     init_db()
     try: load_forecast_model()
     except Exception as e: print("[hq forecast] model fallback", e)
+    # Phase 2.2: start weather poller (Open-Meteo / IMD) if not sim-only disabled
+    try:
+        from .telemetry_poller import start_poller
+        start_poller()
+    except Exception as e:
+        logger.warning(f"[poller] start failed: {e}")
     yield
 
 app = FastAPI(title="POLARIS HQ — NCPOR Command", version="0.1.0", docs_url="/docs", redoc_url="/redoc", lifespan=lifespan)
@@ -344,6 +350,15 @@ def latest_telemetry(station_id: str = "ST-BHARATI"):
 def history_telemetry(station_id: str = "ST-BHARATI", days: int = 30):
     # Phase 3: TimescaleDB trend history endpoint
     return _fetch_all("SELECT SUBSTR(ts, 1, 10) as day, AVG(temp_outside) as avg_temp, AVG(dg_load) as avg_load FROM telemetry WHERE station_id=? GROUP BY SUBSTR(ts, 1, 10) ORDER BY day DESC LIMIT ?", (station_id, days))
+
+@app.get("/telemetry/sources")
+def telemetry_sources():
+    """Health of weather poller sources (Phase 2.2)."""
+    try:
+        from .telemetry_poller import get_status
+        return get_status()
+    except Exception as e:
+        return {"source_setting": os.getenv("TELEMETRY_SOURCE", "both"), "error": str(e), "last_poll": None}
 
 @app.get("/telemetry/stream")
 async def telemetry_stream():
