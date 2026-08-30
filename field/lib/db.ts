@@ -273,6 +273,29 @@ export async function applyDownstreamAsset(assetId: string, patch: Record<string
   }
 }
 
+export async function applyDownstreamVessel(imo: string, patch: Record<string, any>) {
+  const db = await getDb();
+  const now = new Date().toISOString();
+  db.exec('BEGIN');
+  try {
+    db.exec({
+      sql: 'INSERT INTO vessels (imo, name, lat, lon, sog, eta, station_id, last_seen) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(imo) DO UPDATE SET name=excluded.name, lat=excluded.lat, lon=excluded.lon, sog=excluded.sog, eta=excluded.eta, station_id=excluded.station_id, last_seen=excluded.last_seen',
+      bind: [imo, patch.name || 'Unknown', patch.lat ?? 0, patch.lon ?? 0, patch.sog ?? 10, patch.eta || '', patch.station_id || 'ST-BHARATI', patch.last_seen || now],
+    });
+    db.exec('COMMIT');
+    return { applied: true, imo };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+export async function listVessels(stationId?: string) {
+  const db = await getDb();
+  if (stationId) return db.selectObjects('SELECT * FROM vessels WHERE station_id=? ORDER BY last_seen DESC', [stationId]);
+  return db.selectObjects('SELECT * FROM vessels ORDER BY last_seen DESC');
+}
+
 // Pull indents from HQ (fallback legacy sync)
 export async function pullIndentsFromHQ(hqUrl: string) {
   const db = await getDb();
