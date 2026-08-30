@@ -506,6 +506,109 @@ def procurement(station_id: str):
         result.append({"sku": r["sku"], "name": r["name"], "need": need, "unit": r["unit"], "eta": t["eta"], "cost": f"\u20b9{round(need*float(t['cost_per_unit'])/100000,1)}L"})
     return result
 
+# --- Phase 2.1: Inventory bulk import scaffold (no NCPOR data needed; seed fallback stays if COUNT=0) ---
+@app.get("/assets/bulk/template")
+def assets_bulk_template():
+    """Return CSV header template for bulk import. Mirrors shared/seed.json asset shape."""
+    from fastapi.responses import PlainTextResponse
+    header = "sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode"
+    example = "FUEL-DIESEL-001,Diesel (Winter Grade),FUEL_DIESEL,4200,L,,CRITICAL,C1-K1,FUEL-DIESEL-001"
+    return PlainTextResponse(content=f"{header}\n{example}\n", media_type="text/csv", headers={"Content-Disposition": "attachment; filename=template_inventory.csv"})
+
+class BulkAssetRow(BaseModel):
+    sku: str
+    name: str
+    category: str
+    qty: float
+    unit: str
+    expiry_date: str | None = None
+    criticality: str = "LOW"
+    crate_id: str
+    barcode: str | None = None
+    id: str | None = None
+
+class BulkAssetRequest(BaseModel):
+    rows: list[BulkAssetRow]
+
+@app.post("/assets/bulk")
+async def bulk_upsert_assets(body: BulkAssetRequest, user: dict = Depends(require_role("NCPOR_ADMIN"))):
+    """Bulk CSV/JSON importer. Idempotent upsert on sku. Returns {inserted, updated}. Seed stays fallback iff COUNT=0."""
+    if not body.rows:
+        raise HTTPException(400, "rows empty")
+    if len(body.rows) > 500:
+        raise HTTPException(400, "max 500 rows per request")
+    allowed_cat = {"FUEL_DIESEL","FUEL_KEROSENE","OXYGEN","FOOD","MEDICAL","SPARES_DG","SPARES_HVAC","SCIENTIFIC"}
+    allowed_crit = {"CRITICAL","HIGH","LOW"}
+    inserted = 0
+    updated = 0
+    conn = get_conn()
+    try:
+        utc = datetime.UTC
+    except AttributeError:
+        utc = datetime.timezone.utc
+    now = datetime.datetime.now(utc).isoformat()
+    if USE_PG:
+        with conn:
+            with conn.cursor() as cur:
+                for r in body.rows:
+                    if r.category not in allowed_cat:
+                        raise HTTPException(400, f"invalid category {r.category} for {r.sku}")
+                    if r.criticality not in allowed_crit:
+                        raise HTTPException(400, f"invalid criticality {r.criticality} for {r.sku}")
+                    if r.qty < 0:
+                        raise HTTPException(400, f"qty must be >=0 for {r.sku}")
+                    cur.execute(q("SELECT id FROM assets WHERE sku=?"), (r.sku,))
+                    exists = cur.fetchone()
+                    barcode = r.barcode or r.sku
+                    aid = r.id or r.sku
+                    if exists:
+                        cur.execute(q("UPDATE assets SET name=?, category=?, qty=?, unit=?, expiry_date=?, criticality=?, crate_id=?, barcode=?, version=version+1, updated_at=? WHERE sku=?"), (r.name, r.category, r.qty, r.unit, r.expiry_date, r.criticality, r.crate_id, barcode, now, r.sku))
+                        updated += 1
+                    else:
+                        cur.execute(q("INSERT INTO assets (id, sku, name, category, qty, unit, expiry_date, criticality, crate_id, barcode, version, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)"), (aid, r.sku, r.name, r.category, r.qty, r.unit, r.expiry_date, r.criticality, r.crate_id, barcode, now))
+                        inserted += 1
+                    # notify field tablets via gateway
+                    try:
+                        cr = _fetch_one("SELECT container_id FROM crates WHERE id=?", (r.crate_id,))
+                        station_id = None
+                        if cr and cr.get("container_id"):
+                            c = _fetch_one("SELECT station_id FROM containers WHERE id=?", (cr["container_id"],))
+                            station_id = c.get("station_id") if c else None
+                        if station_id:
+                            notify_gateway(station_id, "assets", aid, "UPSERT", {"id": aid, "sku": r.sku, "qty": r.qty, "crate_id": r.crate_id})
+                    except Exception:
+                        pass
+    else:
+        # SQLite
+        for r in body.rows:
+            if r.category not in allowed_cat:
+                raise HTTPException(400, f"invalid category {r.category} for {r.sku}")
+            if r.criticality not in allowed_crit:
+                raise HTTPException(400, f"invalid criticality {r.criticality} for {r.sku}")
+            if r.qty < 0:
+                raise HTTPException(400, f"qty must be >=0 for {r.sku}")
+            cur = conn.execute("SELECT id FROM assets WHERE sku=?", (r.sku,))
+            exists = cur.fetchone()
+            barcode = r.barcode or r.sku
+            aid = r.id or r.sku
+            if exists:
+                conn.execute("UPDATE assets SET name=?, category=?, qty=?, unit=?, expiry_date=?, criticality=?, crate_id=?, barcode=?, version=version+1, updated_at=? WHERE sku=?", (r.name, r.category, r.qty, r.unit, r.expiry_date, r.criticality, r.crate_id, barcode, now, r.sku))
+                updated += 1
+            else:
+                conn.execute("INSERT INTO assets (id, sku, name, category, qty, unit, expiry_date, criticality, crate_id, barcode, version, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)", (aid, r.sku, r.name, r.category, r.qty, r.unit, r.expiry_date, r.criticality, r.crate_id, barcode, now))
+                inserted += 1
+            try:
+                cr = conn.execute("SELECT container_id FROM crates WHERE id=?", (r.crate_id,)).fetchone()
+                if cr and cr["container_id"]:
+                    c = conn.execute("SELECT station_id FROM containers WHERE id=?", (cr["container_id"],)).fetchone()
+                    station_id = c["station_id"] if c else None
+                    if station_id:
+                        notify_gateway(station_id, "assets", aid, "UPSERT", {"id": aid, "sku": r.sku, "qty": r.qty, "crate_id": r.crate_id})
+            except Exception:
+                pass
+        conn.commit()
+    return {"inserted": inserted, "updated": updated}
+
 @app.get("/sync/state/{device_id}")
 def sync_state(device_id: str):
     row=_fetch_one("SELECT * FROM sync_state WHERE device_id=?", (device_id,))
