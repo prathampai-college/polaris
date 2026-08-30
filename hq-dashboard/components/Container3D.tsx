@@ -1,8 +1,8 @@
 'use client';
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Text } from '@react-three/drei';
-import { CONTAINER_SPECS, CRATE_COORDS } from '@polaris/shared/containers.js';
+import { CONTAINER_SPECS, CRATE_COORDS, STATION_CONTAINERS } from '@polaris/shared/containers.js';
 
 export interface AssetRow {
   id: string;
@@ -44,27 +44,27 @@ function CrateMesh({
   return (
     <group position={position} onClick={(e) => { e.stopPropagation(); onClick(id); }}>
       <mesh castShadow receiveShadow>
-        <boxGeometry args={[0.95, 0.85, 0.95]} />
+        <boxGeometry args={[0.88, 0.80, 0.88]} />
         <meshStandardMaterial
           color={color}
           roughness={0.3}
           metalness={0.2}
-          opacity={isHL ? 1.0 : 0.88}
+          opacity={isHL ? 1.0 : 0.90}
           transparent
         />
       </mesh>
 
       <mesh>
-        <boxGeometry args={[0.96, 0.86, 0.96]} />
+        <boxGeometry args={[0.89, 0.81, 0.89]} />
         <meshBasicMaterial color={isHL ? '#FFFFFF' : '#000000'} wireframe opacity={0.35} transparent />
       </mesh>
 
-      <Text position={[0, 0.12, 0.5]} fontSize={0.16} color="#FFFFFF" anchorX="center" anchorY="middle">
+      <Text position={[0, 0.14, 0.46]} fontSize={0.14} color="#FFFFFF" anchorX="center" anchorY="middle">
         {id}
       </Text>
 
       {primaryAsset && (
-        <Text position={[0, -0.15, 0.5]} fontSize={0.095} color="#E2E8F0" anchorX="center" anchorY="middle">
+        <Text position={[0, -0.14, 0.46]} fontSize={0.088} color="#E2E8F0" anchorX="center" anchorY="middle">
           {assets.length > 1 ? `${assets.length} SKUs (${primaryAsset.sku})` : `${primaryAsset.qty} ${primaryAsset.unit}`}
         </Text>
       )}
@@ -75,17 +75,35 @@ function CrateMesh({
 export function Container3D({
   assets = [],
   highlight = null,
+  stationId = null,
   onPick,
   onSelectAsset,
 }: {
   assets: AssetRow[];
   highlight?: string | null;
+  stationId?: string | null;
   onPick?: (id: string) => void;
   onSelectAsset?: (asset: AssetRow) => void;
 }) {
-  const [activeContainer, setActiveContainer] = useState<string>('ALL');
+  // Determine default container based on station or highlight
+  const availableContainers = useMemo(() => {
+    if (stationId && STATION_CONTAINERS[stationId]) {
+      return STATION_CONTAINERS[stationId];
+    }
+    return Object.keys(CONTAINER_SPECS);
+  }, [stationId]);
+
+  const [activeContainer, setActiveContainer] = useState<string>(() => {
+    if (highlight) {
+      const p = highlight.split('-')[0];
+      if (CONTAINER_SPECS[p]) return p;
+    }
+    return availableContainers[0] || 'C1';
+  });
+
   const [selectedCrateId, setSelectedCrateId] = useState<string | null>(highlight || null);
 
+  // Group assets by crate
   const cratesMap = useMemo(() => {
     const map = new Map<string, AssetRow[]>();
     for (const a of assets) {
@@ -96,7 +114,18 @@ export function Container3D({
     return map;
   }, [assets]);
 
-  React.useEffect(() => {
+  // Update active container when stationId changes
+  useEffect(() => {
+    if (stationId && STATION_CONTAINERS[stationId]) {
+      const stationCon = STATION_CONTAINERS[stationId];
+      if (!stationCon.includes(activeContainer)) {
+        setActiveContainer(stationCon[0]);
+      }
+    }
+  }, [stationId, activeContainer]);
+
+  // Update selected crate if highlight prop changes
+  useEffect(() => {
     if (highlight) {
       setSelectedCrateId(highlight);
       const containerPrefix = highlight.split('-')[0];
@@ -106,17 +135,13 @@ export function Container3D({
     }
   }, [highlight]);
 
+  const spec = CONTAINER_SPECS[activeContainer] || CONTAINER_SPECS['C1'];
   const cratesToRender = useMemo<[string, [number, number, number]][]>(() => {
-    if (activeContainer === 'ALL') {
-      return Object.entries(CRATE_COORDS) as [string, [number, number, number]][];
-    }
-    const spec = CONTAINER_SPECS[activeContainer];
-    if (!spec) return Object.entries(CRATE_COORDS) as [string, [number, number, number]][];
-    return (Object.entries(CRATE_COORDS) as [string, [number, number, number]][]).filter(([id]) => spec.crates.includes(id));
-  }, [activeContainer]);
+    if (!spec) return [];
+    return spec.crates.map((id) => [id, CRATE_COORDS[id] || [0, 0, 0]]);
+  }, [spec]);
 
   const selectedCrateAssets = selectedCrateId ? cratesMap.get(selectedCrateId) || [] : [];
-  const activeSpec = CONTAINER_SPECS[activeContainer] || CONTAINER_SPECS['ALL'];
 
   const handleCrateClick = (id: string) => {
     setSelectedCrateId(id);
@@ -128,22 +153,29 @@ export function Container3D({
       {/* Container Selection Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-1.5 overflow-x-auto scroll-thin pb-1">
-          {Object.entries(CONTAINER_SPECS).map(([key, spec]: [string, { name: string; type: string; tempZone: string; color: string; crates: string[] }]) => (
-            <button
-              key={key}
-              onClick={() => setActiveContainer(key)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition border ${
-                activeContainer === key
-                  ? 'bg-blue-600 text-white border-blue-500 shadow-md shadow-blue-500/20'
-                  : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10 hover:text-white'
-              }`}
-            >
-              {key === 'ALL' ? '🌐 All Fleet Bays' : `${key} ${spec.type === 'ColdStore' ? '❄️ ColdStore' : spec.type === 'Hazmat' ? '⚠️ Hazmat' : '📦 Ambient'}`}
-            </button>
-          ))}
+          {availableContainers.map((key) => {
+            const cspec = CONTAINER_SPECS[key];
+            if (!cspec) return null;
+            return (
+              <button
+                key={key}
+                onClick={() => {
+                  setActiveContainer(key);
+                  setSelectedCrateId(null);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition border ${
+                  activeContainer === key
+                    ? 'bg-blue-600 text-white border-blue-500 shadow-md shadow-blue-500/20'
+                    : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                {`${key} ${cspec.type === 'ColdStore' ? '❄️ ColdStore' : cspec.type === 'Hazmat' ? '⚠️ Hazmat' : '📦 Ambient'}`}
+              </button>
+            );
+          })}
         </div>
         <div className="text-[11px] text-white/50 mono font-medium">
-          {activeSpec.tempZone}
+          {spec.tempZone}
         </div>
       </div>
 
@@ -152,9 +184,9 @@ export function Container3D({
         <div className="absolute top-3 left-3 z-10 flex flex-col gap-1 pointer-events-none">
           <div className="text-xs font-bold text-white flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span>{activeSpec.name}</span>
+            <span>{spec.name}</span>
           </div>
-          <div className="text-[10px] text-white/40 mono">Drag to rotate • Pinch to zoom</div>
+          <div className="text-[10px] text-white/40 mono">{spec.crates.length} Crates • Drag to rotate • Pinch to zoom</div>
         </div>
 
         <div className="absolute bottom-3 left-3 z-10 flex items-center gap-3 text-[10px] text-white/60 pointer-events-none bg-black/60 backdrop-blur px-2.5 py-1 rounded-full border border-white/10">
@@ -164,19 +196,22 @@ export function Container3D({
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#F59E0B]" /> Selected</span>
         </div>
 
-        <Canvas camera={{ position: [0, 2.4, 5.5], fov: 48 }} shadows>
-          <ambientLight intensity={0.7} />
+        <Canvas camera={{ position: [0, 2.2, 4.8], fov: 46 }} shadows>
+          <ambientLight intensity={0.75} />
           <directionalLight position={[6, 8, 4]} intensity={0.9} castShadow />
           <pointLight position={[-6, -4, -4]} intensity={0.4} />
-          <OrbitControls enableZoom={true} maxPolarAngle={Math.PI / 2 + 0.1} minDistance={2.5} maxDistance={9} />
+          <OrbitControls enableZoom={true} maxPolarAngle={Math.PI / 2 + 0.1} minDistance={2.2} maxDistance={8} />
 
-          <mesh position={[0, 0.1, 0]}>
-            <boxGeometry args={[3.6, 2.6, 2.8]} />
-            <meshBasicMaterial color="#38BDF8" wireframe opacity={0.2} transparent />
+          {/* ISO-20ft Container Wireframe Enclosure */}
+          <mesh position={[0, 0, 0]}>
+            <boxGeometry args={[3.4, 2.0, 2.4]} />
+            <meshBasicMaterial color="#38BDF8" wireframe opacity={0.25} transparent />
           </mesh>
 
-          <gridHelper args={[6, 6, '#3B82F6', '#1E293B']} position={[0, -1.2, 0]} />
+          {/* Floor grid */}
+          <gridHelper args={[5, 6, '#3B82F6', '#1E293B']} position={[0, -1.0, 0]} />
 
+          {/* Render Crates for the active container only */}
           {cratesToRender.map(([id, pos]) => (
             <CrateMesh
               key={id}
