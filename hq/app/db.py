@@ -115,6 +115,31 @@ def seed_physics_params(cur):
             cur.execute("INSERT OR IGNORE INTO physics_params VALUES (?,?,?,?,?,?)",
                         (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
 
+def _ensure_vessels_sqlite(conn):
+    try:
+        conn.execute("SELECT COUNT(*) FROM vessels").fetchone()
+    except Exception as e:
+        if "no such table" in str(e).lower():
+            try:
+                conn.executescript("CREATE TABLE IF NOT EXISTS vessels (imo TEXT PRIMARY KEY, name TEXT, lat REAL, lon REAL, sog REAL, eta TEXT, station_id TEXT REFERENCES stations(id), last_seen TEXT); CREATE INDEX IF NOT EXISTS idx_vessels_station ON vessels(station_id);")
+                conn.commit()
+            except Exception:
+                pass
+    # ensure indents.vessel_imo column
+    try:
+        cur = conn.execute("PRAGMA table_info(indents)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "vessel_imo" not in cols:
+            conn.execute("ALTER TABLE indents ADD COLUMN vessel_imo TEXT REFERENCES vessels(imo)")
+            conn.commit()
+    except Exception:
+        pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_vessels_station ON vessels(station_id)")
+        conn.commit()
+    except Exception:
+        pass
+
 def init_db():
     global _sqlite_conn
     if USE_PG:
@@ -148,6 +173,19 @@ def init_db():
                             seed_physics_params(cur)
                     except Exception:
                         pass
+                    # Phase 4: vessels + indents.vessel_imo
+                    try:
+                        cur.execute("SELECT COUNT(*) FROM vessels")
+                    except Exception as e:
+                        if "does not exist" in str(e).lower() or "no such table" in str(e).lower():
+                            cur.execute("CREATE TABLE IF NOT EXISTS vessels (imo TEXT PRIMARY KEY, name TEXT, lat REAL, lon REAL, sog REAL, eta TEXT, station_id TEXT REFERENCES stations(id), last_seen TEXT)")
+                            cur.execute("CREATE INDEX IF NOT EXISTS idx_vessels_station ON vessels(station_id)")
+                    try:
+                        cur.execute("SELECT vessel_imo FROM indents LIMIT 0")
+                    except Exception as e:
+                        if "does not exist" in str(e).lower() or "no such column" in str(e).lower() or "column" in str(e).lower():
+                            try: cur.execute("ALTER TABLE indents ADD COLUMN vessel_imo TEXT REFERENCES vessels(imo)")
+                            except Exception: pass
         print(f"[hq] Postgres init ok {DATABASE_URL.split('@')[-1]}")
     else:
         _sqlite_conn = get_sqlite()
@@ -158,6 +196,7 @@ def init_db():
         else:
             _ensure_procurement_targets_sqlite(_sqlite_conn)
             _ensure_physics_params_sqlite(_sqlite_conn)
+            _ensure_vessels_sqlite(_sqlite_conn)
         print(f"[hq] SQLite init ok {HQ_DB_PATH} (fallback, no Docker)")
 
 def seed_procurement_targets(cur):

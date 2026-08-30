@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS indents (
   urgency TEXT CHECK(urgency IN ('LOW','MEDIUM','CRITICAL')),
   status TEXT CHECK(status IN ('DRAFT','APPROVED','DISPATCHED','RECEIVED')) DEFAULT 'DRAFT',
   created_by TEXT,
-  created_at TEXT
+  created_at TEXT,
+  vessel_imo TEXT REFERENCES vessels(imo)
 );
 
 CREATE TABLE IF NOT EXISTS telemetry (
@@ -120,7 +121,19 @@ CREATE TABLE IF NOT EXISTS physics_params (
   K3 REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS vessels (
+  imo TEXT PRIMARY KEY,
+  name TEXT,
+  lat REAL,
+  lon REAL,
+  sog REAL,
+  eta TEXT,
+  station_id TEXT REFERENCES stations(id),
+  last_seen TEXT
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_assets_crate ON assets(crate_id);
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_transactions_asset ON transactions(asset_id);
+CREATE INDEX IF NOT EXISTS idx_vessels_station ON vessels(station_id);
