@@ -249,10 +249,20 @@ export default function HQPage() {
 
   async function updateIndent(id: string, status: string) {
     try {
+      let vessel_imo: string | undefined;
+      if (status === 'DISPATCHED') {
+        try {
+          const vr = await fetch(`${HQ}/vessels?station_id=${selectedStation}`, { headers: headers() });
+          const vlist = await vr.json();
+          if (Array.isArray(vlist) && vlist.length) vessel_imo = vlist[0].imo;
+        } catch {}
+      }
+      const body: any = { status, actor_id: 'NCPOR_ADMIN' };
+      if (vessel_imo) body.vessel_imo = vessel_imo;
       const res = await fetch(`${HQ}/indents/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', ...headers() },
-        body: JSON.stringify({ status, actor_id: 'NCPOR_ADMIN' }),
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {
@@ -998,18 +1008,31 @@ export default function HQPage() {
             </div>
           )}
 
-          {/* TAB 7: 3D CONTAINER TWIN */}
+          {/* TAB 7: 3D CONTAINER TWIN + Phase 4 Vessel Tracker */}
           {tab === 'locate' && (
-            <div className="card p-5 space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="display font-bold text-base text-white">3D Digital Twin — Fleet Container Bay</h2>
-                  <p className="text-xs text-white/50">Real-time crate synchronization mirroring field operations</p>
+            <div className="space-y-4">
+              <div className="card p-5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="display font-bold text-base text-white">Vessel Tracker — Live AIS + Mock Fallback</h2>
+                    <p className="text-xs text-white/50">Adaptive AISHub (live lat/lon/sog/eta) → 429/no key → vessel_schedule.json mock — sync-gateway DOWNSTREAM_DELTA to field</p>
+                  </div>
+                  <span className="text-xs font-mono text-blue-400">{stationNameMap[selectedStation] || selectedStation}</span>
                 </div>
-                <span className="text-xs font-mono text-blue-400">{stationNameMap[selectedStation] || selectedStation}</span>
+                <VesselMapWrap stationId={selectedStation} />
               </div>
 
-              <LocatorWrap assets={assets} highlight={null} />
+              <div className="card p-5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="display font-bold text-base text-white">3D Digital Twin — Fleet Container Bay</h2>
+                    <p className="text-xs text-white/50">Real-time crate synchronization mirroring field operations</p>
+                  </div>
+                  <span className="text-xs font-mono text-blue-400">{stationNameMap[selectedStation] || selectedStation}</span>
+                </div>
+
+                <LocatorWrap assets={assets} highlight={null} />
+              </div>
             </div>
           )}
         </main>
@@ -1108,4 +1131,13 @@ function LocatorWrap({ assets, highlight }: { assets: any[]; highlight: string |
       </div>
     );
   return <Comp assets={assets} highlight={highlight} />;
+}
+
+function VesselMapWrap({ stationId }: { stationId: string }) {
+  const [Comp, setComp] = useState<any>(null);
+  useEffect(() => {
+    import('../components/VesselMap').then((m) => setComp(() => m.VesselMap));
+  }, []);
+  if (!Comp) return <div className="text-xs text-white/30 h-48 flex items-center justify-center bg-black/40 rounded-2xl border border-white/10">Loading vessel tracker…</div>;
+  return <Comp stationId={stationId} />;
 }
