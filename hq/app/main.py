@@ -84,6 +84,12 @@ async def lifespan(app: FastAPI):
         start_poller()
     except Exception as e:
         logger.warning(f"[poller] start failed: {e}")
+    # Phase 4: vessel poller (AIS adaptive + mock fallback)
+    try:
+        from .vessel_poller import start_poller as start_vessel_poller
+        start_vessel_poller()
+    except Exception as e:
+        logger.warning(f"[vessel_poller] start failed: {e}")
     yield
 
 app = FastAPI(title="POLARIS HQ — NCPOR Command", version="0.1.0", docs_url="/docs", redoc_url="/redoc", lifespan=lifespan)
@@ -236,10 +242,10 @@ def create_indent(body: IndentCreate):
     if USE_PG:
         with conn:
             with conn.cursor() as cur:
-                cur.execute(q("INSERT INTO indents VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, body.station_id, body.asset_id, body.qty_requested, body.urgency, body.status, body.created_by, now))
+                cur.execute(q("INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, body.station_id, body.asset_id, body.qty_requested, body.urgency, body.status, body.created_by, now, None))
                 cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (iid, body.created_by, "INDENT_CREATE_HQ", "indents", None, str(body.model_dump()), now))
     else:
-        conn.execute("INSERT OR IGNORE INTO indents VALUES (?,?,?,?,?,?,?,?)", (iid, body.station_id, body.asset_id, body.qty_requested, body.urgency, body.status, body.created_by, now))
+        conn.execute("INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?)", (iid, body.station_id, body.asset_id, body.qty_requested, body.urgency, body.status, body.created_by, now, None))
         conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (iid, body.created_by, "INDENT_CREATE_HQ", "indents", None, str(body.model_dump()), now))
         conn.commit()
     notify_gateway(body.station_id, "indents", iid, "UPSERT", {
@@ -257,6 +263,7 @@ def create_indent(body: IndentCreate):
 class IndentPatch(BaseModel):
     status: str
     actor_id: str = "NCPOR_ADMIN"
+    vessel_imo: str | None = None
 
 @app.patch("/indents/{indent_id}")
 async def patch_indent(indent_id: str, body: IndentPatch, user: dict = Depends(require_role("STATION_LEAD"))):
@@ -266,7 +273,7 @@ async def patch_indent(indent_id: str, body: IndentPatch, user: dict = Depends(r
     except AttributeError:
         utc = datetime.timezone.utc
     now=datetime.datetime.now(utc).isoformat()
-    row=_fetch_one("SELECT id, station_id, asset_id, status FROM indents WHERE id=?", (indent_id,))
+    row=_fetch_one("SELECT id, station_id, asset_id, status, vessel_imo FROM indents WHERE id=?", (indent_id,))
     if not row: raise HTTPException(404, "indent not found")
     cur_status=row["status"]
     station_id=row.get("station_id") or "ST-BHARATI"
@@ -275,19 +282,31 @@ async def patch_indent(indent_id: str, body: IndentPatch, user: dict = Depends(r
     is_offline_shortcut = (cur_status == "DRAFT" and body.status == "RECEIVED")
     if body.status not in allowed and not is_offline_shortcut:
         raise HTTPException(400, f"invalid transition {cur_status}->{body.status}")
+    # Phase 4: validate vessel_imo if provided
+    if body.vessel_imo is not None:
+        v = _fetch_one("SELECT imo FROM vessels WHERE imo=?", (body.vessel_imo,))
+        if not v:
+            raise HTTPException(404, f"vessel {body.vessel_imo} not found")
     if USE_PG:
         with conn:
             with conn.cursor() as cur:
-                cur.execute(q("UPDATE indents SET status=? WHERE id=?"), (body.status, indent_id))
-                cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (indent_id+body.status, body.actor_id, f"INDENT_{body.status}", "indents", str({"status":cur_status}), str({"status":body.status}), now))
+                if body.vessel_imo is not None:
+                    cur.execute(q("UPDATE indents SET status=?, vessel_imo=? WHERE id=?"), (body.status, body.vessel_imo, indent_id))
+                else:
+                    cur.execute(q("UPDATE indents SET status=? WHERE id=?"), (body.status, indent_id))
+                cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (indent_id+body.status, body.actor_id, f"INDENT_{body.status}", "indents", str({"status":cur_status}), str({"status":body.status, "vessel_imo": body.vessel_imo}), now))
     else:
         # relaxed for M2 demo: allow any forward in SQLite fallback
-        conn.execute("UPDATE indents SET status=? WHERE id=?", (body.status, indent_id))
-        conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (indent_id+body.status, body.actor_id, f"INDENT_{body.status}", "indents", str({"status":cur_status}), str({"status":body.status}), now))
+        if body.vessel_imo is not None:
+            conn.execute("UPDATE indents SET status=?, vessel_imo=? WHERE id=?", (body.status, body.vessel_imo, indent_id))
+        else:
+            conn.execute("UPDATE indents SET status=? WHERE id=?", (body.status, indent_id))
+        conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (indent_id+body.status, body.actor_id, f"INDENT_{body.status}", "indents", str({"status":cur_status}), str({"status":body.status, "vessel_imo": body.vessel_imo}), now))
         conn.commit()
     notify_gateway(station_id, "indents", indent_id, "STATUS_CHANGE", {
         "id": indent_id,
         "status": body.status,
+        "vessel_imo": body.vessel_imo,
         "updated_at": now
     })
     return {"id": indent_id, "old": cur_status, "new": body.status}
@@ -412,10 +431,10 @@ def check_and_escalate(station_id: str, tele):
             if USE_PG:
                 with conn:
                     with conn.cursor() as cur:
-                        cur.execute(q("INSERT INTO indents VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, station_id, asset_id, 500, "CRITICAL", "DRAFT", "FORECAST_AUTO", now))
+                        cur.execute(q("INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, station_id, asset_id, 500, "CRITICAL", "DRAFT", "FORECAST_AUTO", now, None))
                         cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (iid, "FORECAST_AUTO", "INDENT_AUTO_CRITICAL", "indents", None, f"forecast {days:.1f}d", now))
             else:
-                conn.execute("INSERT OR IGNORE INTO indents VALUES (?,?,?,?,?,?,?,?)", (iid, station_id, asset_id, 500, "CRITICAL", "DRAFT", "FORECAST_AUTO", now))
+                conn.execute("INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?)", (iid, station_id, asset_id, 500, "CRITICAL", "DRAFT", "FORECAST_AUTO", now, None))
                 conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (iid, "FORECAST_AUTO", "INDENT_AUTO_CRITICAL", "indents", None, f"forecast {days:.1f}d", now))
                 conn.commit()
             notify_gateway(station_id, "indents", iid, "UPSERT", {
@@ -444,10 +463,10 @@ def check_and_escalate(station_id: str, tele):
                 if USE_PG:
                     with conn:
                         with conn.cursor() as cur:
-                            cur.execute(q("INSERT INTO indents VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, station_id, brg_id, 4, "CRITICAL", "DRAFT", "ACOUSTIC_AI", now))
+                            cur.execute(q("INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, station_id, brg_id, 4, "CRITICAL", "DRAFT", "ACOUSTIC_AI", now, None))
                             cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (iid, "ACOUSTIC_AI", "INDENT_ACOUSTIC_CRITICAL", "indents", None, "bearing whine > 90%", now))
                 else:
-                    conn.execute("INSERT OR IGNORE INTO indents VALUES (?,?,?,?,?,?,?,?)", (iid, station_id, brg_id, 4, "CRITICAL", "DRAFT", "ACOUSTIC_AI", now))
+                    conn.execute("INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?)", (iid, station_id, brg_id, 4, "CRITICAL", "DRAFT", "ACOUSTIC_AI", now, None))
                     conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (iid, "ACOUSTIC_AI", "INDENT_ACOUSTIC_CRITICAL", "indents", None, "bearing whine > 90%", now))
                     conn.commit()
                 notify_gateway(station_id, "indents", iid, "UPSERT", {
@@ -490,6 +509,38 @@ def get_physics(station_id: str):
         return {"station_id": station_id, "T_INSIDE": ph["T_INSIDE"], "BASE": ph["BASE"], "K1": ph["K1"], "K2": ph["K2"], "K3": ph["K3"], "source": "global_fallback"}
     except Exception as e:
         raise HTTPException(404, f"physics not found for {station_id}")
+
+# --- Phase 4: Vessel tracking (AIS adaptive + mock fallback) ---
+@app.get("/vessels")
+def list_vessels(station_id: str | None = None):
+    """List vessels. Filter by station_id if given. Returns source:live|mock."""
+    if station_id:
+        rows = _fetch_all("SELECT imo, name, lat, lon, sog, eta, station_id, last_seen FROM vessels WHERE station_id=? ORDER BY last_seen DESC", (station_id,))
+    else:
+        rows = _fetch_all("SELECT imo, name, lat, lon, sog, eta, station_id, last_seen FROM vessels ORDER BY last_seen DESC")
+    # annotate source based on recent poller status
+    try:
+        from .vessel_poller import get_status
+        st = get_status()
+        src = st.get("last", {}).get("source", "mock")
+    except Exception:
+        src = "mock"
+    for r in rows:
+        r["source"] = src
+    return rows
+
+@app.get("/vessels/{imo}")
+def get_vessel(imo: str):
+    row = _fetch_one("SELECT imo, name, lat, lon, sog, eta, station_id, last_seen FROM vessels WHERE imo=?", (imo,))
+    if not row:
+        raise HTTPException(404, "vessel not found")
+    try:
+        from .vessel_poller import get_status
+        st = get_status()
+        row["source"] = st.get("last", {}).get("source", "mock")
+    except Exception:
+        row["source"] = "mock"
+    return row
 
 @app.get("/procurement/targets")
 def list_procurement_targets():
@@ -686,9 +737,14 @@ def ingest(frame: DeltaFrame, request: Request):
                     cur.execute(q("SELECT 1 FROM indents WHERE id=?"), (indent_id,))
                     exists=cur.fetchone()
                     if not exists and "station_id" in p:
-                        cur.execute(q("INSERT INTO indents VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (indent_id, p.get("station_id"), p.get("asset_id"), p.get("qty_requested"), p.get("urgency","MEDIUM"), p.get("status","DRAFT"), p.get("created_by", frame.device_id), p.get("created_at", now)))
-                    elif exists and "status" in p:
-                        cur.execute(q("UPDATE indents SET status=? WHERE id=?"), (p["status"], indent_id))
+                        cur.execute(q("INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (indent_id, p.get("station_id"), p.get("asset_id"), p.get("qty_requested"), p.get("urgency","MEDIUM"), p.get("status","DRAFT"), p.get("created_by", frame.device_id), p.get("created_at", now), p.get("vessel_imo")))
+                    elif exists:
+                        if "vessel_imo" in p and "status" in p:
+                            cur.execute(q("UPDATE indents SET status=?, vessel_imo=? WHERE id=?"), (p["status"], p["vessel_imo"], indent_id))
+                        elif "vessel_imo" in p:
+                            cur.execute(q("UPDATE indents SET vessel_imo=? WHERE id=?"), (p["vessel_imo"], indent_id))
+                        elif "status" in p:
+                            cur.execute(q("UPDATE indents SET status=? WHERE id=?"), (p["status"], indent_id))
                     cur.execute(q("INSERT INTO dedupe (ulid, processed_at) VALUES (?,?)"), (ulid, now))
                     cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (ulid, frame.device_id, f"SYNC_INDENT_{p.get('status','UPSERT')}", "indents", None, str(p), now))
                     cur.execute(q("SELECT last_server_version FROM sync_state WHERE device_id=?"), (frame.device_id,))
@@ -734,9 +790,14 @@ def ingest(frame: DeltaFrame, request: Request):
                 cur2=conn.execute("SELECT 1 FROM indents WHERE id=?", (indent_id,))
                 exists=cur2.fetchone()
                 if not exists and "station_id" in p:
-                    conn.execute("INSERT OR IGNORE INTO indents VALUES (?,?,?,?,?,?,?,?)", (indent_id, p.get("station_id"), p.get("asset_id"), p.get("qty_requested"), p.get("urgency","MEDIUM"), p.get("status","DRAFT"), p.get("created_by", frame.device_id), p.get("created_at", now)))
-                elif exists and "status" in p:
-                    conn.execute("UPDATE indents SET status=? WHERE id=?", (p["status"], indent_id))
+                    conn.execute("INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?)", (indent_id, p.get("station_id"), p.get("asset_id"), p.get("qty_requested"), p.get("urgency","MEDIUM"), p.get("status","DRAFT"), p.get("created_by", frame.device_id), p.get("created_at", now), p.get("vessel_imo")))
+                elif exists:
+                    if "vessel_imo" in p and "status" in p:
+                        conn.execute("UPDATE indents SET status=?, vessel_imo=? WHERE id=?", (p["status"], p["vessel_imo"], indent_id))
+                    elif "vessel_imo" in p:
+                        conn.execute("UPDATE indents SET vessel_imo=? WHERE id=?", (p["vessel_imo"], indent_id))
+                    elif "status" in p:
+                        conn.execute("UPDATE indents SET status=? WHERE id=?", (p["status"], indent_id))
                 conn.execute("INSERT INTO dedupe (ulid, processed_at) VALUES (?,?)", (ulid, now))
                 conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (ulid, frame.device_id, f"SYNC_INDENT_{p.get('status','UPSERT')}", "indents", None, str(p), now))
                 conn.execute("INSERT OR IGNORE INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,?)", (frame.device_id, ulid, 0))

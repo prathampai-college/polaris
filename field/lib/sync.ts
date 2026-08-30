@@ -54,11 +54,13 @@ export class SyncWorker {
         // 1. Handle downstream real-time delta pushes (HQ -> Field via Gateway)
         if (frame.type === 'DOWNSTREAM_DELTA') {
           this.stats.receivedDeltas++;
-          const { applyDownstreamIndent, applyDownstreamAsset } = await import('./db');
+          const { applyDownstreamIndent, applyDownstreamAsset, applyDownstreamVessel } = await import('./db');
           if (frame.entity === 'indents') {
             await applyDownstreamIndent(String(frame.entity_id), frame.patch as Record<string, unknown>);
           } else if (frame.entity === 'assets') {
             await applyDownstreamAsset(String(frame.entity_id), frame.patch as Record<string, unknown>);
+          } else if (frame.entity === 'vessels') {
+            await applyDownstreamVessel(String(frame.entity_id), frame.patch as Record<string, unknown>);
           }
           this.onDownstreamDelta?.(frame);
           return;
