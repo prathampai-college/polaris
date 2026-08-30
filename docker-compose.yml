@@ -44,6 +44,9 @@ services:
       TELEMETRY_SOURCE: "${TELEMETRY_SOURCE:-both}"
       IMD_API_KEY: "${IMD_API_KEY:-}"
       TELEMETRY_POLL_SEC: "${TELEMETRY_POLL_SEC:-900}"
+      AIS_API_KEY: "${AIS_API_KEY:-}"
+      VESSEL_MODE: "${VESSEL_MODE:-auto}"
+      VESSEL_POLL_SEC: "${VESSEL_POLL_SEC:-900}"
     depends_on:
       db:
         condition: service_healthy
