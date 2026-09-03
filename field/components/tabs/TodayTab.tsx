@@ -1,7 +1,7 @@
 'use client';
 import { Icons } from '../Icons';
 
-export function TodayTab({ forecast, assets, indents, sendTelemetry, setTab, setInvFilter, glove }: any) {
+export function TodayTab({ forecast, snn, assets, indents, sendTelemetry, setTab, setInvFilter, glove }: any) {
   const criticalCount = assets.filter((a: any) => a.criticality === 'CRITICAL' && a.qty <= 5).length;
   const expiringCount = assets.filter((a: any) => {
     if (!a.expiry_date) return false;
@@ -30,6 +30,12 @@ export function TodayTab({ forecast, assets, indents, sendTelemetry, setTab, set
               </div>
               <div className="mt-3 h-2 bg-white/10 rounded-full overflow-hidden max-w-[480px]"><div className="h-full bg-gradient-to-r from-emerald-500 via-amber-500 to-red-500 transition-all duration-500" style={{ width: `${Math.min(100, forecast.days_to_stockout * 2.2)}%` }} /></div>
               <div className="mt-1.5 text-[11px] text-white/40">Physics-informed hybrid inference • Sub-200ms latency on edge tablet</div>
+              {snn && (
+                <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-bold border bg-cyan-500/10 text-cyan-300 border-cyan-500/30">
+                  <span className={`w-2 h-2 rounded-full ${snn.snn_active ? 'bg-cyan-400 animate-pulse' : 'bg-white/40'}`} />
+                  ⚡ SNN {snn.snn_active ? `Active • ${snn.spike_count} spikes • ${snn.snn_residual} L/d` : 'Idle (event-gated)'} • 0.8mW vs 8.2mW ANN ({snn.saved_pct ?? 90}% saved)
+                </div>
+              )}
             </div>
             <div className="flex sm:flex-row lg:flex-col gap-2 shrink-0">
               <button onClick={() => sendTelemetry({ ts: new Date().toISOString(), station_id: forecast.station_id || 'ST-BHARATI', temp_outside: -15, wind_speed: 5, pressure: 1013, dg_load: 0.7, acoustic_anomaly: 0.1 })} className="flex-1 lg:w-[190px] bg-white/10 hover:bg-white/20 border border-white/10 text-white rounded-xl py-2.5 px-3 text-xs font-bold transition">☀️ Calm Baseline</button>

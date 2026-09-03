@@ -33,9 +33,9 @@ fieldDb.exec(`INSERT OR IGNORE INTO containers VALUES ('C1','ST-BHARATI','ISO_20
 for(const r of [['C1-K1','C1','{"x":0,"y":0}','AMBIENT'],['C1-K2','C1','{"x":1,"y":0}','AMBIENT'],['C2-K1','C2','{"x":0,"y":1}','COLD'],['C2-K2','C2','{"x":1,"y":1}','COLD'],['C2-K3','C2','{"x":0,"y":2}','COLD'],['C3-K1','C3','{"x":0,"y":0}','AMBIENT'],['C3-K2','C3','{"x":0,"y":1}','HAZMAT']]) fieldDb.prepare('INSERT OR IGNORE INTO crates VALUES (?,?,?,?)').run(...r);
 const now=new Date().toISOString();
 const assets=[['A1','FUEL-DIESEL-001','Diesel (Winter Grade)','FUEL_DIESEL',4200,'L',null,'CRITICAL','C1-K1','FUEL-DIESEL-001',1,now],['A2','FUEL-KERO-JP8-002','Kerosene','FUEL_KEROSENE',1800,'L',null,'CRITICAL','C1-K2','FUEL-KERO-JP8-002',1,now],['A3','O2-CYL-47L-003','Oxygen','OXYGEN',24,'cyl','2026-09-15','CRITICAL','C2-K1','O2-CYL-47L-003',1,now],['A5','MED-ANTIBIOTIC-005','Antibiotic','MEDICAL',12,'kits','2026-09-20','CRITICAL','C2-K3','MED-ANTIBIOTIC-005',1,now],['A6','MED-TRAUMA-006','Trauma','MEDICAL',6,'kits','2026-10-10','CRITICAL','C2-K3','MED-TRAUMA-006',1,now],['A7','SPARE-BRG-6205-007','Bearing','SPARES_DG',8,'pcs',null,'HIGH','C3-K1','SPARE-BRG-6205-007',1,now]];
-for(const a of assets) fieldDb.prepare('INSERT OR IGNORE INTO assets VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(...a);
+for(const a of assets) fieldDb.prepare('INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(...a);
 // add expired asset for expiry test
-fieldDb.prepare('INSERT OR IGNORE INTO assets VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run('A99','MED-EXPIRED-099','Expired Med','MEDICAL',5,'kits','2025-01-01','CRITICAL','C2-K3','MED-EXPIRED-099',1,now);
+fieldDb.prepare('INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run('A99','MED-EXPIRED-099','Expired Med','MEDICAL',5,'kits','2025-01-01','CRITICAL','C2-K3','MED-EXPIRED-099',1,now);
 fieldDb.prepare("INSERT OR IGNORE INTO sync_state VALUES ('BHARATI-TABLET-01',NULL,0)").run();
 console.log(' seeded field assets', fieldDb.prepare('SELECT COUNT(*) as c FROM assets').get().c);
 
@@ -228,3 +228,4 @@ console.log(`   replay dedupe ACKs=${acks.filter(a=>a.status==='DEDUPED').length
 ws.close(); hqProc.kill(); gwProc.kill();
 console.log('\n=== M2 VERIFY PASS ===');
 console.log('QR scan→consume→indent→approve→dispatch→receive ✓  expiry override ✓  audit ✓  overview ✓  2D loc {x,y} ✓');
+

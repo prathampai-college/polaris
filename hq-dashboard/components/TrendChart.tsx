@@ -24,30 +24,9 @@ export function TrendChart({
 }) {
   const [metric, setMetric] = useState<'fuel' | 'temp' | 'load'>('fuel');
 
-  // Phase 1.3: empty state unless ?demo=1 — prevents fake trend when DB empty
-  const demoMode = React.useMemo(() => {
-    if (typeof window === 'undefined') return false;
-    try {
-      return new URLSearchParams(window.location.search).get('demo') === '1';
-    } catch {
-      return false;
-    }
-  }, []); // search change triggers full reload, no need for reactive dep
   const isEmpty = !data || data.length === 0;
-  // Normalize data rows to ensure keys exist
   const normalizedData = React.useMemo(() => {
-    if (isEmpty) {
-      if (!demoMode) return [];
-      return [
-        { day: 'D-6', qty: 4700, forecast: 4680, avg_temp: -14, avg_load: 0.68, wind: 6 },
-        { day: 'D-5', qty: 4580, forecast: 4560, avg_temp: -16, avg_load: 0.70, wind: 8 },
-        { day: 'D-4', qty: 4450, forecast: 4430, avg_temp: -15, avg_load: 0.69, wind: 7 },
-        { day: 'D-3', qty: 4320, forecast: 4290, avg_temp: -22, avg_load: 0.74, wind: 12 },
-        { day: 'D-2', qty: 4180, forecast: 4140, avg_temp: -28, avg_load: 0.81, wind: 18 },
-        { day: 'D-1', qty: 4010, forecast: 3960, avg_temp: -35, avg_load: 0.88, wind: 24 },
-        { day: 'Today', qty: 3850, forecast: 3750, avg_temp: -38, avg_load: 0.92, wind: 28 },
-      ];
-    }
+    if (isEmpty) return [];
 
     return data.map((d, i) => {
       // Calculate realistic fallback qty from initial ~4200 down if not present
@@ -62,7 +41,7 @@ export function TrendChart({
         wind: d.wind_speed != null ? Number(d.wind_speed) : 8 + (i % 5) * 3,
       };
     });
-  }, [data, demoMode, isEmpty]);
+  }, [data, isEmpty]);
 
   return (
     <div className="w-full bg-slate-950/70 rounded-2xl p-4 border border-white/10 flex flex-col gap-3">
@@ -118,12 +97,11 @@ export function TrendChart({
         </div>
       </div>
 
-      {/* Chart Canvas — Phase 1.3 empty state */}
-      {isEmpty && !demoMode ? (
+      {isEmpty ? (
         <div className="w-full h-48 sm:h-52 grid place-items-center rounded-xl border border-dashed border-white/15 bg-black/20">
           <div className="text-center space-y-1">
             <div className="text-xs font-bold text-white/70">No telemetry yet</div>
-            <div className="text-[11px] text-white/40">Post first telemetry via HQ or add <span className="font-mono text-white/60">?demo=1</span> for sample trend</div>
+            <div className="text-[11px] text-white/40">Post first telemetry via HQ — telemetry poller or field tablet</div>
           </div>
         </div>
       ) : (

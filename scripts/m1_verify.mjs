@@ -52,7 +52,7 @@ const assets = [
   ['A4','RATION-FD-30D-004','Freeze-Dried Rations','FOOD',90,'packs','2027-06-01','HIGH','C2-K2','RATION-FD-30D-004',1,new Date().toISOString()],
   ['A5','MED-ANTIBIOTIC-005','Antibiotic Kit','MEDICAL',12,'kits','2026-09-20','CRITICAL','C2-K3','MED-ANTIBIOTIC-005',1,new Date().toISOString()],
 ];
-for(const a of assets) fieldDb.prepare('INSERT OR IGNORE INTO assets VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(...a);
+for(const a of assets) fieldDb.prepare('INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(...a);
 fieldDb.prepare("INSERT OR IGNORE INTO sync_state VALUES ('BHARATI-TABLET-01', NULL, 0)").run();
 console.log('   seeded', fieldDb.prepare('SELECT COUNT(*) as c FROM assets').get().c, 'assets');
 
@@ -171,3 +171,4 @@ console.log(`   full row JSON ${fullRowJson}B vs delta mp ${mpLen}B saving ${(10
 ws.close(); hqProc.kill(); gwProc.kill();
 console.log('\n=== M1 VERIFY PASS ===');
 console.log('Done when: write→outbox→ws(msgpack+CRC+AES)→HQ Postgres ✓  dedupe ✓  WAL recovery ✓  budgets ✓');
+
