@@ -14,7 +14,9 @@
     "lint:fix": "eslint shared/src sync-gateway/src --ext .ts --fix",
     "typecheck": "npx tsc -p shared/tsconfig.json --noEmit && npx tsc -p sync-gateway/tsconfig.json --noEmit && npx tsc -p field/tsconfig.json --noEmit && npx tsc -p hq-dashboard/tsconfig.json --noEmit",
     "build": "npm --prefix shared run build && npm --prefix sync-gateway run build",
-    "verify": "node scripts/m1_verify.mjs && node scripts/m2_verify.mjs && node scripts/m3_verify.mjs && node scripts/m4_verify.mjs && node scripts/m5_verify.mjs"
+    "verify": "node scripts/m1_verify.mjs && node scripts/m2_verify.mjs && node scripts/m3_verify.mjs && node scripts/m4_verify.mjs && node scripts/m5_verify.mjs",
+    "verify:extreme": "npm --prefix shared test && pytest hq/tests -q && node scripts/dtn_verify.mjs && node scripts/snn_verify.mjs && node scripts/tracking_verify.mjs",
+    "verify:all": "npm run verify && npm run verify:extreme"
   },
   "devDependencies": {
     "@msgpack/msgpack": "^3.0.0",
