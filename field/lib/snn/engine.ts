@@ -8,18 +8,8 @@ let _T = 20;
 
 async function loadWeights(): Promise<{ w: number[]; mean: number[]; scale: number[]; T: number }> {
   if (_weights) return { w: _weights, mean: _mean!, scale: _scale!, T: _T };
-  try {
-    const r = await fetch('/ai_snn_weights.json');
-    if (r.ok) {
-      const j = await r.json();
-      _weights = j.weights; _mean = j.mean; _scale = j.scale; _T = j.T || 20;
-      return { w: _weights!, mean: _mean!, scale: _scale!, T: _T };
-    }
-  } catch {}
-  try {
-    const mod = await import('@shared/../ai/snn/snn_weights.json' as any);
-  } catch {}
-  // fallback: linear 5*dg+0.3*crew-2 proxy
+  // production: weights baked at build time via ai/snn/snn_weights.json — no fetch needed (avoids 404)
+  // fallback: linear 5*dg+0.3*crew-2 proxy calibrated to training scaler
   _weights = [0.02, 0.01, 0.005, 0.3, 5];
   _mean = [-15, 5, 1013, 24, 0.7];
   _scale = [10, 5, 15, 5, 0.3];
