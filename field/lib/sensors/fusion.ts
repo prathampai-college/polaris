@@ -1,7 +1,7 @@
 'use client';
 import { fuse, Kalman1D } from '@shared/local_map.js';
-import { generateScan, generateBbox } from './sim_lidar.js';
-import { getDb } from '../db.js';
+import { generateScan, generateBbox } from './sim_lidar';
+import { getDb } from '../db';
 
 const kfX = new Kalman1D();
 const kfY = new Kalman1D();

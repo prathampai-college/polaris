@@ -1,7 +1,7 @@
 'use client';
 import { createBundle, bundleToBase64, bundleFromBase64, isBundleExpired } from '@shared/dtn/bundle.js';
 import type { Bundle } from '@shared/dtn/bundle.js';
-import { saveBundle, listBundles } from './store.js';
+import { saveBundle, listBundles } from './store';
 import { decode } from '@msgpack/msgpack';
 
 // BroadcastChannel sim for tablet-to-tablet in same origin (simulates BLE mesh)
@@ -74,7 +74,7 @@ export async function pushBundlesToHQ(hqUrl: string): Promise<{ pushed: number; 
   if (!res.ok) throw new Error(`HQ bulk ingest ${res.status}`);
   const j = await res.json();
   // on success, delete pushed bundles (custody transferred)
-  const { deleteBundle } = await import('./store.js');
+  const { deleteBundle } = await import('./store');
   for (const b of bundles) await deleteBundle(b.bundleId);
   return { pushed: bundles.length, results: j.results ?? [] };
 }

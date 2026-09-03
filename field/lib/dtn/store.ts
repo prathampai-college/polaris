@@ -1,7 +1,7 @@
 'use client';
 import type { Bundle } from '@shared/dtn/bundle.js';
 import { encodeBundle } from '@shared/dtn/bundle.js';
-import { getDb } from '../db.js';
+import { getDb } from '../db';
 
 export async function saveBundle(b: Bundle): Promise<void> {
   const db = await getDb();

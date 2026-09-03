@@ -1041,13 +1041,11 @@ def tracking_update(body: Dict[str, Any]):
     if not asset_id: raise HTTPException(400, "asset_id required")
     x = body.get("x", 0); y = body.get("y", 0); theta = body.get("theta", 0); conf = body.get("conf", 0.75)
     station_id = body.get("station_id") or body.get("stationId") or "ST-BHARATI"
-    now = _now_iso() if '_now_iso' in globals() else datetime.datetime.now(datetime.timezone.utc).isoformat()
-    # use helper
     try:
-        from datetime import timezone as _tz
-        now2 = datetime.datetime.now(_tz.utc).isoformat()
-        now = now2
-    except: pass
+        utc = datetime.UTC
+    except AttributeError:
+        utc = datetime.timezone.utc
+    now = datetime.datetime.now(utc).isoformat()
     conn = get_conn()
     if USE_PG:
         import psycopg

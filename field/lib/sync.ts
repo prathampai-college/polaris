@@ -127,7 +127,7 @@ export class SyncWorker {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         const rows = db.selectObjects("SELECT * FROM outbox WHERE status IN ('PENDING','SENT') ORDER BY created_at LIMIT 20") as Array<Record<string, unknown>>;
         if (rows.length) {
-          const { createAndSaveMuleBundle } = await import('./dtn/mule.js');
+          const { createAndSaveMuleBundle } = await import('./dtn/mule');
           for (const r of rows) {
             const { decode } = await import('@msgpack/msgpack');
             const patch = decode(r.patch as Uint8Array) as Record<string, unknown>;
@@ -145,7 +145,7 @@ export class SyncWorker {
       this.stats.bundled = db.selectValue("SELECT COUNT(*) FROM dtn_bundles") as number;
       // Try push bundles via HTTP when online (DTN mule flush)
       try {
-        const { pushBundlesToHQ } = await import('./dtn/mule.js');
+        const { pushBundlesToHQ } = await import('./dtn/mule');
         const hqUrl = process.env.NEXT_PUBLIC_HQ_URL || 'http://localhost:8000';
         const bundled = db.selectValue("SELECT COUNT(*) FROM dtn_bundles") as number;
         if (bundled > 0) {
