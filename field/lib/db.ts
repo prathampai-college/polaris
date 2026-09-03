@@ -13,7 +13,7 @@ PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS stations (id TEXT PRIMARY KEY, name TEXT CHECK(name IN ('Bharati','Maitri','Himadri')), location TEXT, winter_crew_count INTEGER);
 CREATE TABLE IF NOT EXISTS containers (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), type TEXT CHECK(type IN ('ISO_20ft','ColdStore','Hazmat')), position_2d TEXT);
 CREATE TABLE IF NOT EXISTS crates (id TEXT PRIMARY KEY, container_id TEXT REFERENCES containers(id), coords TEXT, temp_zone TEXT);
-CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, sku TEXT UNIQUE, name TEXT, category TEXT, qty REAL, unit TEXT, expiry_date TEXT, criticality TEXT, crate_id TEXT REFERENCES crates(id), barcode TEXT, version INTEGER DEFAULT 1, updated_at TEXT);
+CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, sku TEXT UNIQUE, name TEXT, category TEXT, qty REAL, unit TEXT, expiry_date TEXT, criticality TEXT, crate_id TEXT REFERENCES crates(id), barcode TEXT, version INTEGER DEFAULT 1, updated_at TEXT, vector_clock TEXT, local_coord TEXT);
 CREATE TABLE IF NOT EXISTS transactions (id TEXT PRIMARY KEY, asset_id TEXT REFERENCES assets(id), type TEXT CHECK(type IN ('IN','OUT','CONSUME','ADJUST')), qty_delta REAL, actor_id TEXT, ts TEXT, sync_status TEXT DEFAULT 'PENDING');
 CREATE TABLE IF NOT EXISTS vessels (imo TEXT PRIMARY KEY, name TEXT, lat REAL, lon REAL, sog REAL, eta TEXT, station_id TEXT REFERENCES stations(id), last_seen TEXT);
 CREATE TABLE IF NOT EXISTS indents (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), asset_id TEXT REFERENCES assets(id), qty_requested REAL, urgency TEXT, status TEXT DEFAULT 'DRAFT', created_by TEXT, created_at TEXT, vessel_imo TEXT REFERENCES vessels(imo));
@@ -21,12 +21,17 @@ CREATE TABLE IF NOT EXISTS telemetry (ts TEXT, station_id TEXT, temp_outside REA
 CREATE TABLE IF NOT EXISTS audit_log (id TEXT PRIMARY KEY, actor_id TEXT, action TEXT, entity TEXT, before TEXT, after TEXT, ts TEXT);
 CREATE TABLE IF NOT EXISTS procurement_targets (sku TEXT PRIMARY KEY, target_qty REAL NOT NULL, cost_per_unit REAL NOT NULL, unit TEXT NOT NULL, eta TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS physics_params (station_id TEXT PRIMARY KEY, T_INSIDE REAL NOT NULL, BASE REAL NOT NULL, K1 REAL NOT NULL, K2 REAL NOT NULL, K3 REAL NOT NULL);
-CREATE TABLE IF NOT EXISTS outbox (ulid TEXT PRIMARY KEY, device_id TEXT, entity TEXT, entity_id TEXT, op TEXT CHECK(op IN ('UPSERT','DELETE','CONSUME','IN','OUT','ADJUST')), patch BLOB, base_version INTEGER, retry_count INTEGER DEFAULT 0, created_at TEXT, status TEXT CHECK(status IN ('PENDING','SENT','ACKED','FAILED')) DEFAULT 'PENDING');
+CREATE TABLE IF NOT EXISTS outbox (ulid TEXT PRIMARY KEY, device_id TEXT, entity TEXT, entity_id TEXT, op TEXT CHECK(op IN ('UPSERT','DELETE','CONSUME','IN','OUT','ADJUST')), patch BLOB, base_version INTEGER, retry_count INTEGER DEFAULT 0, created_at TEXT, status TEXT CHECK(status IN ('PENDING','SENT','ACKED','FAILED','BUNDLED')) DEFAULT 'PENDING', vector_clock TEXT, local_coord TEXT);
 CREATE TABLE IF NOT EXISTS sync_state (device_id TEXT PRIMARY KEY, last_acked_ulid TEXT, last_server_version INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS dedupe (ulid TEXT PRIMARY KEY, processed_at TEXT);
+CREATE TABLE IF NOT EXISTS dtn_bundles (bundle_id TEXT PRIMARY KEY, src TEXT, dst_station TEXT, payload BLOB, vc TEXT, custody INTEGER DEFAULT 1, created_at TEXT, ttl INTEGER DEFAULT 86400);
+CREATE TABLE IF NOT EXISTS asset_positions (asset_id TEXT PRIMARY KEY, x REAL, y REAL, theta REAL, conf REAL, last_sensor_ts TEXT, station_id TEXT REFERENCES stations(id));
+CREATE TABLE IF NOT EXISTS snn_state (device_id TEXT PRIMARY KEY, last_features TEXT, spike_count INTEGER DEFAULT 0, last_infer_ts TEXT, total_saved_mw REAL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS idx_assets_crate ON assets(crate_id);
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_vessels_station ON vessels(station_id);
+CREATE INDEX IF NOT EXISTS idx_dtn_bundles_dst ON dtn_bundles(dst_station, created_at);
+CREATE INDEX IF NOT EXISTS idx_asset_positions_station ON asset_positions(station_id);
 `;
 
 export async function getDb(): Promise<any> {
@@ -107,6 +112,21 @@ export async function listIndents() {
 export { isExpiringSoon, isExpired } from '@shared/expiry.js';
 import { isExpired as _isExpired } from '@shared/expiry.js';
 
+// ——— Phase 0: Vector Clock helpers ———
+export function getVC(deviceId: string): Record<string, number> {
+  try {
+    const db = _db; if (!db) return {};
+    const row = db.selectObjects('SELECT vector_clock FROM sync_state WHERE device_id=?', [deviceId])[0];
+    if (row?.vector_clock) return JSON.parse(row.vector_clock);
+  } catch {}
+  return {};
+}
+export function bumpVC(deviceId: string, vc: Record<string, number>): Record<string, number> {
+  const next = { ...vc, [deviceId]: (vc[deviceId] ?? 0) + 1 };
+  try { const db = _db; db?.exec({ sql: "UPDATE sync_state SET vector_clock=? WHERE device_id=?", bind: [JSON.stringify(next), deviceId] }); } catch {}
+  return next;
+}
+
 // Atomic transaction: update asset + insert transaction + outbox + audit
 // Expiry: cannot CONSUME expired MEDICAL without override + audit entry (PLAN §3.2)
 export async function consumeAsset(opts: { assetId: string; delta: number; type: 'CONSUME'|'IN'|'OUT'|'ADJUST'; actorId: string; deviceId: string; overrideExpired?: boolean }) {
@@ -133,15 +153,20 @@ export async function consumeAsset(opts: { assetId: string; delta: number; type:
   const ts = new Date().toISOString();
   const outboxUlid = ulid();
   const auditAction = opts.overrideExpired ? `${opts.type}_OVERRIDE_EXPIRED` : opts.type;
+  // VC stamp
+  let vc: Record<string, number> = {};
+  try { const row = db.selectObjects('SELECT vector_clock FROM assets WHERE id=?', [opts.assetId])[0]; if (row?.vector_clock) vc = JSON.parse(row.vector_clock); } catch {}
+  vc[opts.deviceId] = (vc[opts.deviceId] ?? 0) + 1;
+  const vcStr = JSON.stringify(vc);
   try {
-    db.exec({ sql: 'UPDATE assets SET qty=?, version=?, updated_at=? WHERE id=?', bind: [newQty, patch.version, patch.updated_at, opts.assetId] });
+    db.exec({ sql: 'UPDATE assets SET qty=?, version=?, updated_at=?, vector_clock=? WHERE id=?', bind: [newQty, patch.version, patch.updated_at, vcStr, opts.assetId] });
     db.exec({ sql: 'INSERT INTO transactions (id, asset_id, type, qty_delta, actor_id, ts, sync_status) VALUES (?,?,?,?,?,?,?)', bind: [id, opts.assetId, opts.type, opts.delta, opts.actorId, ts, 'PENDING'] });
-    db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at) VALUES (?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'assets', opts.assetId, opts.type, patchBytes, asset.version, ts] });
+    db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, vector_clock) VALUES (?,?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'assets', opts.assetId, opts.type, patchBytes, asset.version, ts, vcStr] });
     db.exec({ sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)', bind: [id, opts.actorId, auditAction, 'assets', JSON.stringify({ qty: asset.qty, version: asset.version }), JSON.stringify(patch), ts] });
     db.exec('COMMIT');
   } catch (e) {
  db.exec('ROLLBACK'); throw e; }
-  return { newQty, outboxUlid, patch };
+  return { newQty, outboxUlid, patch, vector_clock: vc };
 }
 
 export async function createIndent(opts: { stationId: string; assetId: string; qty: number; urgency: string; createdBy: string; deviceId: string; }) {
@@ -155,11 +180,12 @@ export async function createIndent(opts: { stationId: string; assetId: string; q
   const indent = { id, station_id: opts.stationId, asset_id: opts.assetId, qty_requested: opts.qty, urgency: opts.urgency, status: 'DRAFT', created_by: opts.createdBy, created_at: ts };
   const patch = indent; // full row for indents
   const patchBytes = encode(patch);
+  const vc: Record<string, number> = { [opts.deviceId]: 1 };
   db.exec('BEGIN');
   try {
     db.exec({ sql: 'INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at) VALUES (?,?,?,?,?,?,?,?)', bind: [id, opts.stationId, opts.assetId, opts.qty, opts.urgency, 'DRAFT', opts.createdBy, ts] });
     db.exec({ sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)', bind: [ulid(), opts.createdBy, 'INDENT_CREATE', 'indents', null, JSON.stringify(indent), ts] });
-    db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, status) VALUES (?,?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'indents', id, 'UPSERT', patchBytes, 0, ts, 'PENDING'] });
+    db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, status, vector_clock) VALUES (?,?,?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'indents', id, 'UPSERT', patchBytes, 0, ts, 'PENDING', JSON.stringify(vc)] });
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); throw e; }
   return { id, outboxUlid };
@@ -259,13 +285,31 @@ export async function applyDownstreamAsset(assetId: string, patch: Record<string
   const now = new Date().toISOString();
   const existing = db.selectObjects('SELECT * FROM assets WHERE id=?', [assetId])[0];
   if (!existing) return { applied: false };
+  // LWW+VC check if vector_clock present
+  if (patch.vector_clock || existing.vector_clock) {
+    try {
+      const { compare } = await import('@shared/dtn/vector_clock.js');
+      const localVC = existing.vector_clock ? JSON.parse(existing.vector_clock) : {};
+      const remoteVC = typeof patch.vector_clock === 'string' ? JSON.parse(patch.vector_clock) : (patch.vector_clock || {});
+      const c = compare(localVC, remoteVC);
+      if (c === 'gt') { return { applied: false, reason: 'vc_local_newer' }; }
+      if (c === 'equal') { /* allow */ }
+      // concurrent -> LWW ts wins: if remote ts older, skip
+      if (c === 'concurrent' && patch.updated_at && existing.updated_at && patch.updated_at <= existing.updated_at) {
+        return { applied: false, reason: 'lww_local_newer' };
+      }
+      const merged = { ...localVC }; for (const [k,v] of Object.entries(remoteVC as Record<string,number>)) merged[k]=Math.max(merged[k]??0, v as number);
+      patch._mergedVC = merged;
+    } catch {}
+  }
   db.exec('BEGIN');
   try {
     const newQty = patch.qty !== undefined ? patch.qty : existing.qty;
     const newVer = patch.version !== undefined ? patch.version : (existing.version || 1) + 1;
+    const vcStr = (patch as any)._mergedVC ? JSON.stringify((patch as any)._mergedVC) : existing.vector_clock;
     db.exec({
-      sql: 'UPDATE assets SET qty=?, version=?, updated_at=? WHERE id=?',
-      bind: [newQty, newVer, now, assetId]
+      sql: 'UPDATE assets SET qty=?, version=?, updated_at=?, vector_clock=? WHERE id=?',
+      bind: [newQty, newVer, now, vcStr, assetId]
     });
     db.exec('COMMIT');
     return { applied: true, assetId, qty: newQty };

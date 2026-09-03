@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS assets (
   crate_id TEXT REFERENCES crates(id),
   barcode TEXT,
   version INTEGER DEFAULT 1,
-  updated_at TEXT
+  updated_at TEXT,
+  vector_clock TEXT,
+  local_coord TEXT
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -101,7 +103,9 @@ CREATE TABLE IF NOT EXISTS outbox (
   base_version INTEGER,
   retry_count INTEGER DEFAULT 0,
   created_at TEXT,
-  status TEXT CHECK(status IN ('PENDING','SENT','ACKED','FAILED')) DEFAULT 'PENDING'
+  status TEXT CHECK(status IN ('PENDING','SENT','ACKED','FAILED','BUNDLED')) DEFAULT 'PENDING',
+  vector_clock TEXT,
+  local_coord TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sync_state (
@@ -132,8 +136,39 @@ CREATE TABLE IF NOT EXISTS physics_params (
   K3 REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS dtn_bundles (
+  bundle_id TEXT PRIMARY KEY,
+  src TEXT,
+  dst_station TEXT,
+  payload BLOB,
+  vc TEXT,
+  custody INTEGER DEFAULT 1,
+  created_at TEXT,
+  ttl INTEGER DEFAULT 86400
+);
+
+CREATE TABLE IF NOT EXISTS asset_positions (
+  asset_id TEXT PRIMARY KEY,
+  x REAL,
+  y REAL,
+  theta REAL,
+  conf REAL,
+  last_sensor_ts TEXT,
+  station_id TEXT REFERENCES stations(id)
+);
+
+CREATE TABLE IF NOT EXISTS snn_state (
+  device_id TEXT PRIMARY KEY,
+  last_features TEXT,
+  spike_count INTEGER DEFAULT 0,
+  last_infer_ts TEXT,
+  total_saved_mw REAL DEFAULT 0
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_assets_crate ON assets(crate_id);
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_transactions_asset ON transactions(asset_id);
 CREATE INDEX IF NOT EXISTS idx_vessels_station ON vessels(station_id);
+CREATE INDEX IF NOT EXISTS idx_dtn_bundles_dst ON dtn_bundles(dst_station, created_at);
+CREATE INDEX IF NOT EXISTS idx_asset_positions_station ON asset_positions(station_id);
