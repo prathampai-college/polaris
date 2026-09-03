@@ -269,7 +269,7 @@ def seed_sqlite(conn):
         for r in s["crates"]: conn.execute("INSERT OR IGNORE INTO crates VALUES (?,?,?,?)", r)
         import datetime
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        for a in s["assets"]: conn.execute("INSERT OR IGNORE INTO assets VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (*a, 1, now))
+        for a in s["assets"]: conn.execute("INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (*a, 1, now))
         for row in PROCUREMENT_SEED:
             conn.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
         for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:

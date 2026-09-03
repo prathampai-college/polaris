@@ -30,7 +30,7 @@ console.log('Profile: 20 kbps / 500ms / 5% loss (throttled), WAL, dedupe, budget
 const db=new DatabaseSync(FIELD_DB); db.exec(schema);
 db.exec(`INSERT OR IGNORE INTO stations VALUES ('ST-BHARATI','Bharati','a',24)`); db.exec(`INSERT OR IGNORE INTO containers VALUES ('C1','ST-BHARATI','ISO_20ft','A1')`); db.prepare('INSERT OR IGNORE INTO crates VALUES (?,?,?,?)').run('C1-K1','C1','{"x":0,"y":0}','AMBIENT');
 const now=new Date().toISOString();
-db.prepare('INSERT OR IGNORE INTO assets VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run('A1','FUEL-DIESEL-001','Diesel','FUEL_DIESEL',4200,'L',null,'CRITICAL','C1-K1','FUEL-DIESEL-001',1,now);
+db.prepare('INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run('A1','FUEL-DIESEL-001','Diesel','FUEL_DIESEL',4200,'L',null,'CRITICAL','C1-K1','FUEL-DIESEL-001',1,now);
 db.prepare("INSERT OR IGNORE INTO sync_state VALUES ('DEV-01',NULL,0)").run();
 console.log(' field seeded');
 
@@ -66,7 +66,7 @@ const tdb=new DatabaseSync(tmpDB); tdb.exec(schema);
 tdb.prepare('INSERT OR IGNORE INTO stations VALUES (?,?,?,?,?)'.replace('VALUES (?,?,?,?,?)','VALUES (\'ST-BHARATI\',\'Bharati\',\'a\',24)')).run?.() ; // fallback
 try{ tdb.exec(`INSERT OR IGNORE INTO stations VALUES ('ST-BHARATI','Bharati','a',24)`);}catch{}
 tdb.exec(`INSERT OR IGNORE INTO containers VALUES ('C1','ST-BHARATI','ISO_20ft','A1')`); tdb.prepare('INSERT OR IGNORE INTO crates VALUES (?,?,?,?)').run('C1-K1','C1','{"x":0,"y":0}','AMBIENT');
-tdb.prepare('INSERT OR IGNORE INTO assets VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run('A1','FUEL-DIESEL-001','Diesel','FUEL_DIESEL',4200,'L',null,'CRITICAL','C1-K1','FUEL-DIESEL-001',1,new Date().toISOString());
+tdb.prepare('INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run('A1','FUEL-DIESEL-001','Diesel','FUEL_DIESEL',4200,'L',null,'CRITICAL','C1-K1','FUEL-DIESEL-001',1,new Date().toISOString());
 for(let i=0;i<10000;i++){
   tdb.prepare('INSERT INTO transactions VALUES (?,?,?,?,?,?,?)').run(ulid(),'A1','CONSUME',-1,'OP',new Date().toISOString(),'PENDING');
   if(i%1000===0) tdb.prepare('INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)').run(ulid(),'OP','CONSUME','assets','{}','{}',new Date().toISOString());
@@ -140,3 +140,4 @@ console.log('  Size logged per frame: JSON vs msgpack saving, polaris.db <5MB, f
 
 ws.close(); hq.kill(); gw.kill();
 console.log('\n=== M4 VERIFY PASS === All 3 chaos + budgets + RBAC/AES/audit + ML ===');
+

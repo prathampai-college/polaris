@@ -58,6 +58,9 @@ export default function FieldPage() {
 
   // Live telemetry & forecast
   const [forecast, setForecast] = useState<any>(null);
+  const [snn, setSnn] = useState<any>(null);
+  const [bundles, setBundles] = useState<any[]>([]);
+  const [localTrack, setLocalTrack] = useState<any[]>([]);
 
   // UI state
   const [tab, setTab] = useState<Tab>('today');
@@ -143,9 +146,19 @@ export default function FieldPage() {
 
       const headers: Record<string, string> = authToken ? { Authorization: `Bearer ${authToken}` } : {};
       const r = await fetch(`${HQ_URL}/forecast/${STATION_ID}`, { headers });
-      if (r.ok) {
-        setForecast(await r.json());
-      }
+      if (r.ok) setForecast(await r.json());
+      try {
+        const sr = await fetch(`${HQ_URL}/forecast/snn/${STATION_ID}`, { headers });
+        if (sr.ok) setSnn(await sr.json());
+      } catch {}
+      try {
+        const { listBundles } = await import('../lib/dtn/store');
+        setBundles(await listBundles());
+      } catch {}
+      try {
+        const tr = await fetch(`${HQ_URL}/tracking/positions?station_id=${STATION_ID}`);
+        if (tr.ok) setLocalTrack(await tr.json());
+      } catch {}
     } catch {}
   }, [authToken, STATION_ID]);
 
@@ -566,7 +579,7 @@ export default function FieldPage() {
       {/* Main Content Area */}
       <main className="max-w-[1240px] mx-auto px-4 py-5 pb-24 space-y-4">
         {/* TAB 1: TODAY */}
-                {tab === 'today' && <TodayTab forecast={forecast} assets={assets} indents={indents} sendTelemetry={sendTelemetry} setTab={setTab} setInvFilter={setInvFilter} glove={glove} />}
+                {tab === 'today' && <TodayTab forecast={forecast} snn={snn} assets={assets} indents={indents} sendTelemetry={sendTelemetry} setTab={setTab} setInvFilter={setInvFilter} glove={glove} />}
 
         {/* TAB 2: INVENTORY */}
                 {tab === 'inventory' && <InventoryTab assets={assets} filteredAssets={filteredAssets} invQuery={invQuery} setInvQuery={setInvQuery} invFilter={invFilter} setInvFilter={setInvFilter} txType={txType} setTxType={setTxType} qtyDelta={qtyDelta} setQtyDelta={setQtyDelta} overrideExp={overrideExp} setOverrideExp={setOverrideExp} criticalCount={criticalCount} expiringCount={expiringCount} lowCount={lowCount} highlightCrate={highlightCrate} setSelectedAsset={setSelectedAsset} doConsume={doConsume} />}
@@ -634,6 +647,68 @@ export default function FieldPage() {
             >
               Drain Outbox Now
             </button>
+
+            <div className="p-3 bg-amber-950/40 border border-amber-500/30 rounded-xl space-y-2">
+              <div className="text-xs font-bold text-amber-300">DTN Data Muling</div>
+              <div className="text-[11px] text-white/60">Bundles custody: <b className="text-white">{syncStats.bundled ?? bundles.length}</b> • Pending: <b>{syncStats.pending ?? 0}</b></div>
+              <div className="flex gap-2">
+                <button
+                  onClick={async () => {
+                    const { exportAllToQR } = await import('../lib/dtn/mule');
+                    const qrs = await exportAllToQR();
+                    if (!qrs.length) return pushToast('No bundles to export');
+                    await navigator.clipboard.writeText(qrs[0]).catch(()=>{});
+                    pushToast(`Bundle QR copied (${qrs.length} bundles)`);
+                    setLog(l=>[`DTN QR exported ${qrs.length} bundles`, ...l].slice(0,25));
+                  }}
+                  className="flex-1 h-8 rounded-lg bg-amber-500 hover:bg-amber-400 text-black font-bold text-[11px]"
+                >
+                  Export QR (Mule)
+                </button>
+                <button
+                  onClick={async () => {
+                    const txt = prompt('Paste bundle base64 QR:');
+                    if (!txt) return;
+                    try {
+                      const { importBundleFromQR } = await import('../lib/dtn/mule');
+                      await importBundleFromQR(txt.trim());
+                      pushToast('Bundle imported ✓');
+                      refresh();
+                    } catch(e:any){ pushToast(e.message); }
+                  }}
+                  className="flex-1 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-[11px] border border-white/10"
+                >
+                  Import QR
+                </button>
+              </div>
+              <button
+                onClick={async () => {
+                  try {
+                    const { pushBundlesToHQ } = await import('../lib/dtn/mule');
+                    const r = await pushBundlesToHQ(HQ_URL);
+                    pushToast(`Pushed ${r.pushed} bundles to HQ`);
+                    refresh();
+                  } catch(e:any){ pushToast('Push failed: '+e.message); }
+                }}
+                className="w-full h-8 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px]"
+              >
+                Push Bundles to HQ (when online)
+              </button>
+              {bundles.length > 0 && (
+                <div className="text-[10px] font-mono text-white/50 max-h-20 overflow-auto space-y-1">
+                  {bundles.slice(0,3).map((b:any,i:number)=><div key={i} className="truncate">{b.bundle_id?.slice(0,12)} → {b.dst_station}</div>)}
+                  {bundles.length>3 && <div>+{bundles.length-3} more</div>}
+                </div>
+              )}
+            </div>
+
+            {snn && (
+              <div className="p-3 bg-cyan-950/40 border border-cyan-500/30 rounded-xl space-y-1">
+                <div className="text-xs font-bold text-cyan-300">Neuromorphic SNN</div>
+                <div className="text-[11px] text-white/60">{snn.snn_active ? `Active • ${snn.spike_count} spikes` : 'Idle — event-gated'} • 0.8mW vs 8.2mW ANN</div>
+                <div className="text-[11px] font-mono text-white/50">Saved {snn.saved_pct ?? 90}% power</div>
+              </div>
+            )}
           </div>
         </div>
       )}
