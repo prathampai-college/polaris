@@ -30,6 +30,8 @@ export interface AuditLog { id: string; actor_id: string; action: string; entity
 export interface OutboxRow { ulid: string; device_id: string; entity: string; entity_id: string; op: OutboxOp; patch: Uint8Array; base_version: number; retry_count: number; created_at: string; status: OutboxStatus; }
 export interface SyncState { device_id: string; last_acked_ulid: string | null; last_server_version: number; }
 
+export type VectorClock = Record<string, number>;
+
 export interface DeltaFrame {
   type?: 'DELTA';
   ulid: string;
@@ -40,6 +42,8 @@ export interface DeltaFrame {
   patch: Record<string, unknown>;
   base_version: number;
   ts: string;
+  vector_clock?: VectorClock;
+  local_coord?: [number, number, number];
 }
 
 export interface AckFrame {
@@ -54,11 +58,12 @@ export interface DownstreamDeltaFrame {
   type: 'DOWNSTREAM_DELTA';
   ulid: string;
   station_id: string;
-  entity: 'indents' | 'assets' | 'telemetry';
+  entity: 'indents' | 'assets' | 'telemetry' | 'vessels';
   entity_id: string;
   op: 'UPSERT' | 'STATUS_CHANGE' | 'DELETE';
   patch: Record<string, unknown>;
   ts: string;
+  vector_clock?: VectorClock;
 }
 
 export interface SyncInitFrame {
@@ -73,6 +78,7 @@ export interface SyncInitRespFrame {
   station_id: string;
   server_time: string;
   indents: Indent[];
+  bundles?: unknown[];
 }
 
 export type WireFrame = DeltaFrame | AckFrame | DownstreamDeltaFrame | SyncInitFrame | SyncInitRespFrame;

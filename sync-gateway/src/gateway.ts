@@ -70,6 +70,33 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // DTN exchange endpoint: field mule pushes bundles when back online
+  if (req.method === 'POST' && (req.url === '/dtn/exchange' || req.url === '/api/dtn/exchange')) {
+    try {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const raw = Buffer.concat(chunks).toString('utf8');
+      const body = JSON.parse(raw);
+      const bundles = body.bundles || body.bundle ? (Array.isArray(body.bundles) ? body.bundles : [body.bundle || body]) : [body];
+      // forward to HQ /dtn/ingest_bulk
+      const hqRes = await fetch(`${HQ_URL}/dtn/ingest_bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bundles }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const j = await hqRes.json().catch(() => ({}));
+      res.writeHead(hqRes.ok ? 200 : 500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(j));
+      return;
+    } catch (e: unknown) {
+      log('error', 'dtn exchange error', { error: (e as Error).message });
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: (e as Error).message }));
+      return;
+    }
+  }
+
   // Internal endpoint for HQ to trigger real-time downstream pushes to connected field tablets
   if (req.method === 'POST' && (req.url === '/internal/broadcast_delta' || req.url === '/api/notify_downstream')) {
     // ponytail: gateway internal endpoint must be authenticated — check PSK header (HQ -> gateway)
@@ -182,15 +209,18 @@ wss.on('connection', (ws: WebSocket) => {
       log('info', 'sync init handshake', { device: initFrame.device_id, station: initFrame.station_id });
 
       try {
-        const hqRes = await fetch(`${HQ_URL}/indents?station_id=${initFrame.station_id || 'ST-BHARATI'}`, {
-          signal: AbortSignal.timeout(5000)
-        });
-        const indents = hqRes.ok ? await hqRes.json() : [];
+        const [hqRes, bundleRes] = await Promise.all([
+          fetch(`${HQ_URL}/indents?station_id=${initFrame.station_id || 'ST-BHARATI'}`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
+          fetch(`${HQ_URL}/dtn/bundles?dst_station=${initFrame.station_id || 'ST-BHARATI'}&limit=20`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
+        ]);
+        const indents = hqRes && hqRes.ok ? await hqRes.json() : [];
+        const bundles = bundleRes && bundleRes.ok ? await bundleRes.json() : [];
         const resp: SyncInitRespFrame = {
           type: 'SYNC_INIT_RESP',
           station_id: initFrame.station_id || 'ST-BHARATI',
           server_time: new Date().toISOString(),
           indents: indents || [],
+          bundles: bundles || [],
         };
         const wireResp = toWire(resp, PSK_HEX);
         try {

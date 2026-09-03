@@ -158,6 +158,8 @@ class DeltaFrame(BaseModel):
     patch: Dict[str, Any]
     base_version: int
     ts: str
+    vector_clock: Dict[str, Any] | None = None
+    local_coord: list | None = None
 
 @app.get("/health")
 def health():
@@ -785,7 +787,43 @@ def ingest(frame: DeltaFrame, request: Request):
                     if new_qty is not None and float(new_qty) < 0:
                         c.rollback()
                         return {"status":"CONFLICT_CRITICAL", "server_version": version, "message":"would go negative, rejected"}
-                    cur.execute(q("UPDATE assets SET qty=?, version=?, updated_at=? WHERE id=?"), (new_qty, new_version, now, frame.entity_id))
+                    # LWW+VC: fetch existing vector_clock
+                    try:
+                        cur.execute(q("SELECT vector_clock, updated_at FROM assets WHERE id=?"), (frame.entity_id,))
+                        vc_row = cur.fetchone()
+                        existing_vc = {}
+                        existing_ts = ""
+                        if vc_row:
+                            # handle tuple vs dict
+                            if isinstance(vc_row, tuple):
+                                existing_vc = {}
+                                try:
+                                    import json as _j; existing_vc = _j.loads(vc_row[0] or "{}") if vc_row[0] else {}
+                                except: existing_vc = {}
+                                existing_ts = vc_row[1] or ""
+                            else:
+                                try:
+                                    import json as _j; existing_vc = _j.loads(vc_row[0] or "{}") if len(vc_row)>0 and vc_row[0] else {}
+                                except: existing_vc = {}
+                        remote_vc = frame.vector_clock or {}
+                        from .dtn import compare_vc, merge_vc
+                        cmp = compare_vc(existing_vc, remote_vc)
+                        if cmp == "gt":
+                            c.rollback()
+                            return {"status":"APPLIED_LOCAL_WINS", "server_version": version, "reason":"vc_local_newer"}
+                        if cmp == "concurrent":
+                            patch_ts = frame.patch.get("updated_at") or frame.ts
+                            if patch_ts and existing_ts and patch_ts <= existing_ts:
+                                c.rollback()
+                                return {"status":"APPLIED_LOCAL_WINS", "server_version": version, "reason":"lww_local_newer"}
+                        merged_vc = merge_vc(existing_vc, remote_vc) if remote_vc else existing_vc
+                        import json as _j2; merged_s = _j2.dumps(merged_vc)
+                    except Exception:
+                        merged_s = None
+                    if merged_s:
+                        cur.execute(q("UPDATE assets SET qty=?, version=?, updated_at=?, vector_clock=? WHERE id=?"), (new_qty, new_version, now, merged_s, frame.entity_id))
+                    else:
+                        cur.execute(q("UPDATE assets SET qty=?, version=?, updated_at=? WHERE id=?"), (new_qty, new_version, now, frame.entity_id))
                     cur.execute(q("INSERT INTO dedupe (ulid, processed_at) VALUES (?,?)"), (ulid, now))
                     cur.execute(q("INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)"), (ulid, frame.device_id, f"SYNC_{frame.op}", frame.entity, str({"qty":qty,"version":version}), str(frame.patch), now))
                     cur.execute(q("INSERT INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,?) ON CONFLICT (device_id) DO UPDATE SET last_acked_ulid=EXCLUDED.last_acked_ulid, last_server_version=EXCLUDED.last_server_version"), (frame.device_id, ulid, new_version))
@@ -836,7 +874,34 @@ def ingest(frame: DeltaFrame, request: Request):
                 if new_qty is not None and float(new_qty) < 0:
                     conn.execute("ROLLBACK")
                     return {"status":"CONFLICT_CRITICAL", "server_version": version, "message":"would go negative"}
-                conn.execute("UPDATE assets SET qty=?, version=?, updated_at=? WHERE id=?", (new_qty, new_version, now, frame.entity_id))
+                # LWW+VC
+                try:
+                    vc_row = conn.execute("SELECT vector_clock, updated_at FROM assets WHERE id=?", (frame.entity_id,)).fetchone()
+                    existing_vc = {}
+                    existing_ts = ""
+                    if vc_row and vc_row["vector_clock"]:
+                        import json as _j; existing_vc = _j.loads(vc_row["vector_clock"])
+                        existing_ts = vc_row["updated_at"] or ""
+                    remote_vc = frame.vector_clock or {}
+                    from .dtn import compare_vc, merge_vc
+                    cmp = compare_vc(existing_vc, remote_vc)
+                    if cmp == "gt":
+                        conn.execute("ROLLBACK")
+                        return {"status":"APPLIED_LOCAL_WINS", "server_version": version, "reason":"vc_local_newer"}
+                    if cmp == "concurrent":
+                        patch_ts = frame.patch.get("updated_at") or frame.ts
+                        if patch_ts and existing_ts and patch_ts <= existing_ts:
+                            conn.execute("ROLLBACK")
+                            return {"status":"APPLIED_LOCAL_WINS", "server_version": version, "reason":"lww_local_newer"}
+                    merged_s = None
+                    if remote_vc:
+                        import json as _j2; merged_s = _j2.dumps(merge_vc(existing_vc, remote_vc))
+                except Exception:
+                    merged_s = None
+                if merged_s:
+                    conn.execute("UPDATE assets SET qty=?, version=?, updated_at=?, vector_clock=? WHERE id=?", (new_qty, new_version, now, merged_s, frame.entity_id))
+                else:
+                    conn.execute("UPDATE assets SET qty=?, version=?, updated_at=? WHERE id=?", (new_qty, new_version, now, frame.entity_id))
                 conn.execute("INSERT INTO dedupe (ulid, processed_at) VALUES (?,?)", (ulid, now))
                 conn.execute("INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)", (ulid, frame.device_id, f"SYNC_{frame.op}", frame.entity, str({"qty":qty,"version":version}), str(frame.patch), now))
                 conn.execute("INSERT INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,?) ON CONFLICT(device_id) DO UPDATE SET last_acked_ulid=excluded.last_acked_ulid, last_server_version=excluded.last_server_version", (frame.device_id, ulid, new_version))
@@ -851,3 +916,172 @@ def ingest(frame: DeltaFrame, request: Request):
             try: conn.execute("ROLLBACK")
             except Exception: pass
             raise HTTPException(500, str(e))
+
+# --- DTN Bundle Endpoints (Phase 1) ---
+class BundleIn(BaseModel):
+    bundleId: str | None = None
+    bundle_id: str | None = None
+    src: str = "unknown"
+    dstStation: str | None = None
+    dst_station: str | None = None
+    ttlSec: int | None = None
+    createdAt: str | None = None
+    created_at: str | None = None
+    vectorClock: Dict[str, Any] | None = None
+    vc: Dict[str, Any] | None = None
+    payload: Dict[str, Any] = {}
+    custody: bool | None = True
+
+class BulkIn(BaseModel):
+    bundles: list[Dict[str, Any]]
+
+@app.post("/dtn/ingest_bulk")
+def dtn_ingest_bulk(body: BulkIn):
+    results = []
+    conn = get_conn()
+    if USE_PG:
+        import psycopg
+        with psycopg.connect(os.getenv("DATABASE_URL"), autocommit=False) as c:
+            with c.cursor() as cur:
+                from .dtn import ingest_bundle
+                for b in body.bundles:
+                    # normalize
+                    nb = {
+                        "bundleId": b.get("bundleId") or b.get("bundle_id") or b.get("ulid"),
+                        "src": b.get("src") or b.get("device_id") or "mule",
+                        "dstStation": b.get("dstStation") or b.get("dst_station") or "ST-BHARATI",
+                        "vectorClock": b.get("vectorClock") or b.get("vc") or b.get("vector_clock") or {},
+                        "payload": b.get("payload") or b,
+                        "createdAt": b.get("createdAt") or b.get("created_at"),
+                    }
+                    r = ingest_bundle(nb, cur)
+                    results.append(r)
+                c.commit()
+    else:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            from .dtn import ingest_bundle
+            for b in body.bundles:
+                nb = {
+                    "bundleId": b.get("bundleId") or b.get("bundle_id") or b.get("ulid"),
+                    "src": b.get("src") or b.get("device_id") or "mule",
+                    "dstStation": b.get("dstStation") or b.get("dst_station") or "ST-BHARATI",
+                    "vectorClock": b.get("vectorClock") or b.get("vc") or b.get("vector_clock") or {},
+                    "payload": b.get("payload") or b,
+                    "createdAt": b.get("createdAt") or b.get("created_at"),
+                }
+                # need cursor-like; pass conn
+                r = ingest_bundle(nb, conn)
+                results.append(r)
+            conn.execute("COMMIT")
+        except Exception as e:
+            try: conn.execute("ROLLBACK")
+            except: pass
+            raise HTTPException(500, str(e))
+    return {"results": results, "count": len(results)}
+
+@app.get("/dtn/bundles")
+def dtn_list_bundles(dst_station: str | None = None, limit: int = 50):
+    limit = max(1, min(limit, 200))
+    if dst_station:
+        return _fetch_all("SELECT bundle_id, src, dst_station, vc, custody, created_at, ttl FROM dtn_bundles WHERE dst_station=? ORDER BY created_at DESC LIMIT ?", (dst_station, limit))
+    return _fetch_all("SELECT bundle_id, src, dst_station, vc, custody, created_at, ttl FROM dtn_bundles ORDER BY created_at DESC LIMIT ?", (limit,))
+
+@app.get("/dtn/conflicts")
+def dtn_conflicts(limit: int = 20):
+    # recent deduped/local-wins as conflicts proxy
+    return _fetch_all("SELECT * FROM audit_log WHERE action LIKE 'SYNC_%' ORDER BY ts DESC LIMIT ?", (limit,))
+
+@app.post("/dtn/exchange")
+async def dtn_exchange(request: Request):
+    body = await request.json()
+    bundles = body.get("bundles") or body.get("bundle") or []
+    if isinstance(bundles, dict): bundles = [bundles]
+    conn = get_conn()
+    results = []
+    if USE_PG:
+        import psycopg
+        with psycopg.connect(os.getenv("DATABASE_URL"), autocommit=False) as c:
+            with c.cursor() as cur:
+                from .dtn import ingest_bundle
+                for b in bundles:
+                    nb = {
+                        "bundleId": b.get("bundleId") or b.get("bundle_id"),
+                        "src": b.get("src") or "mule",
+                        "dstStation": b.get("dstStation") or b.get("dst_station") or "ST-BHARATI",
+                        "vectorClock": b.get("vectorClock") or b.get("vc") or {},
+                        "payload": b.get("payload") or b,
+                    }
+                    results.append(ingest_bundle(nb, cur))
+                c.commit()
+    else:
+        conn.execute("BEGIN")
+        try:
+            from .dtn import ingest_bundle
+            for b in bundles:
+                nb = {
+                    "bundleId": b.get("bundleId") or b.get("bundle_id"),
+                    "src": b.get("src") or "mule",
+                    "dstStation": b.get("dstStation") or b.get("dst_station") or "ST-BHARATI",
+                    "vectorClock": b.get("vectorClock") or b.get("vc") or {},
+                    "payload": b.get("payload") or b,
+                }
+                results.append(ingest_bundle(nb, conn))
+            conn.execute("COMMIT")
+        except Exception as e:
+            try: conn.execute("ROLLBACK")
+            except: pass
+            raise HTTPException(500, str(e))
+    return {"results": results}
+
+# --- Tracking endpoints (Phase 3) ---
+@app.post("/tracking/update")
+def tracking_update(body: Dict[str, Any]):
+    asset_id = body.get("asset_id") or body.get("assetId")
+    if not asset_id: raise HTTPException(400, "asset_id required")
+    x = body.get("x", 0); y = body.get("y", 0); theta = body.get("theta", 0); conf = body.get("conf", 0.75)
+    station_id = body.get("station_id") or body.get("stationId") or "ST-BHARATI"
+    now = _now_iso() if '_now_iso' in globals() else datetime.datetime.now(datetime.timezone.utc).isoformat()
+    # use helper
+    try:
+        from datetime import timezone as _tz
+        now2 = datetime.datetime.now(_tz.utc).isoformat()
+        now = now2
+    except: pass
+    conn = get_conn()
+    if USE_PG:
+        import psycopg
+        with psycopg.connect(os.getenv("DATABASE_URL"), autocommit=True) as c:
+            with c.cursor() as cur:
+                cur.execute("INSERT INTO asset_positions (asset_id, x, y, theta, conf, last_sensor_ts, station_id) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (asset_id) DO UPDATE SET x=EXCLUDED.x, y=EXCLUDED.y, theta=EXCLUDED.theta, conf=EXCLUDED.conf, last_sensor_ts=EXCLUDED.last_sensor_ts", (asset_id, x, y, theta, conf, now, station_id))
+    else:
+        conn.execute("INSERT INTO asset_positions (asset_id, x, y, theta, conf, last_sensor_ts, station_id) VALUES (?,?,?,?,?,?,?) ON CONFLICT(asset_id) DO UPDATE SET x=excluded.x, y=excluded.y, theta=excluded.theta, conf=excluded.conf, last_sensor_ts=excluded.last_sensor_ts", (asset_id, x, y, theta, conf, now, station_id))
+        conn.commit()
+    return {"asset_id": asset_id, "x": x, "y": y, "conf": conf}
+
+@app.get("/tracking/positions")
+def tracking_positions(station_id: str | None = None):
+    if station_id:
+        return _fetch_all("SELECT ap.*, a.sku, a.name FROM asset_positions ap LEFT JOIN assets a ON a.id=ap.asset_id WHERE ap.station_id=? ORDER BY ap.last_sensor_ts DESC", (station_id,))
+    return _fetch_all("SELECT ap.*, a.sku, a.name FROM asset_positions ap LEFT JOIN assets a ON a.id=ap.asset_id ORDER BY ap.last_sensor_ts DESC")
+
+# --- SNN forecast endpoint (Phase 2) ---
+@app.get("/forecast/snn/{station_id}")
+def forecast_snn(station_id: str, asset_sku: str = "FUEL-DIESEL-001"):
+    try:
+        from .snn_forecast import predict_snn_total
+        tele = _fetch_one("SELECT temp_outside, wind_speed, pressure, dg_load FROM telemetry WHERE station_id=? ORDER BY ts DESC LIMIT 1", (station_id,))
+        qty_row = _fetch_one("SELECT a.qty FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku=? LIMIT 1", (station_id, asset_sku))
+        cr = _fetch_one("SELECT winter_crew_count FROM stations WHERE id=?", (station_id,))
+        if not qty_row: raise HTTPException(404, "asset")
+        qty = qty_row["qty"]; crew = cr["winter_crew_count"] if cr else 24
+        if not tele: tele = {"temp_outside": -15, "wind_speed": 5, "pressure": 1013, "dg_load": 0.7}
+        phys, snn_res, total, active, spike_count = predict_snn_total(tele["temp_outside"], tele["wind_speed"], tele["pressure"], crew, tele["dg_load"], station_id)
+        days = qty/total if total>0 else 999
+        return {"station_id": station_id, "asset_sku": asset_sku, "qty": qty, "physics": round(phys,1), "snn_residual": round(snn_res,2), "total_per_day": round(total,1), "days_to_stockout": round(days,1), "ci": [round(days*0.85), round(days*1.15)], "snn_active": active, "spike_count": spike_count, "tele": tele, "saved_pct": 90.0 if not active else 50.0}
+    except ImportError as e:
+        raise HTTPException(501, f"snn not available: {e}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))

@@ -137,6 +137,33 @@ def _ensure_vessels_sqlite(conn):
     except Exception:
         pass
 
+def _ensure_dtn_sqlite(conn):
+    try:
+        conn.execute("SELECT COUNT(*) FROM dtn_bundles").fetchone()
+    except Exception as e:
+        if "no such table" in str(e).lower():
+            try:
+                conn.executescript("CREATE TABLE IF NOT EXISTS dtn_bundles (bundle_id TEXT PRIMARY KEY, src TEXT, dst_station TEXT, payload BLOB, vc TEXT, custody INTEGER DEFAULT 1, created_at TEXT, ttl INTEGER DEFAULT 86400); CREATE INDEX IF NOT EXISTS idx_dtn_bundles_dst ON dtn_bundles(dst_station, created_at); CREATE TABLE IF NOT EXISTS asset_positions (asset_id TEXT PRIMARY KEY, x REAL, y REAL, theta REAL, conf REAL, last_sensor_ts TEXT, station_id TEXT REFERENCES stations(id)); CREATE INDEX IF NOT EXISTS idx_asset_positions_station ON asset_positions(station_id); CREATE TABLE IF NOT EXISTS snn_state (device_id TEXT PRIMARY KEY, last_features TEXT, spike_count INTEGER DEFAULT 0, last_infer_ts TEXT, total_saved_mw REAL DEFAULT 0);")
+                conn.commit()
+            except Exception:
+                pass
+    # ensure vector_clock cols
+    for tbl, col in [("assets","vector_clock"), ("outbox","vector_clock"), ("outbox","local_coord"), ("assets","local_coord")]:
+        try:
+            cur = conn.execute(f"PRAGMA table_info({tbl})")
+            cols = [r[1] for r in cur.fetchall()]
+            if col not in cols:
+                conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} TEXT")
+                conn.commit()
+        except Exception:
+            pass
+    # allow BUNDLED in outbox status
+    try:
+        # sqlite check constraint needs table rebuild; skip strict check — BUNDLED used via app logic
+        pass
+    except Exception:
+        pass
+
 def init_db():
     global _sqlite_conn
     if USE_PG:
@@ -183,6 +210,22 @@ def init_db():
                         if "does not exist" in str(e).lower() or "no such column" in str(e).lower() or "column" in str(e).lower():
                             try: cur.execute("ALTER TABLE indents ADD COLUMN vessel_imo TEXT REFERENCES vessels(imo)")
                             except Exception: pass
+                    # DTN tables + VC cols
+                    for ddl in [
+                        "CREATE TABLE IF NOT EXISTS dtn_bundles (bundle_id TEXT PRIMARY KEY, src TEXT, dst_station TEXT, payload BYTEA, vc TEXT, custody INTEGER DEFAULT 1, created_at TEXT, ttl INTEGER DEFAULT 86400)",
+                        "CREATE TABLE IF NOT EXISTS asset_positions (asset_id TEXT PRIMARY KEY, x DOUBLE PRECISION, y DOUBLE PRECISION, theta DOUBLE PRECISION, conf DOUBLE PRECISION, last_sensor_ts TEXT, station_id TEXT REFERENCES stations(id))",
+                        "CREATE TABLE IF NOT EXISTS snn_state (device_id TEXT PRIMARY KEY, last_features TEXT, spike_count INTEGER DEFAULT 0, last_infer_ts TEXT, total_saved_mw DOUBLE PRECISION DEFAULT 0)",
+                    ]:
+                        try: cur.execute(ddl)
+                        except Exception: pass
+                    for alter in [
+                        "ALTER TABLE assets ADD COLUMN IF NOT EXISTS vector_clock TEXT",
+                        "ALTER TABLE assets ADD COLUMN IF NOT EXISTS local_coord TEXT",
+                        "ALTER TABLE outbox ADD COLUMN IF NOT EXISTS vector_clock TEXT",
+                        "ALTER TABLE outbox ADD COLUMN IF NOT EXISTS local_coord TEXT",
+                    ]:
+                        try: cur.execute(alter)
+                        except Exception: pass
         print(f"[hq] Postgres init ok {DATABASE_URL.split('@')[-1]}")
     else:
         _sqlite_conn = get_sqlite()
@@ -194,6 +237,7 @@ def init_db():
             _ensure_procurement_targets_sqlite(_sqlite_conn)
             _ensure_physics_params_sqlite(_sqlite_conn)
             _ensure_vessels_sqlite(_sqlite_conn)
+            _ensure_dtn_sqlite(_sqlite_conn)
         print(f"[hq] SQLite init ok {HQ_DB_PATH} (fallback, no Docker)")
 
 def seed_procurement_targets(cur):
