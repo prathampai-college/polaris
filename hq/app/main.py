@@ -10,6 +10,7 @@ from .db import init_db, get_conn, USE_PG
 from .forecast import load_forecast_model, physics_pred, predict_total
 from .config import DEMO_FORECAST, ALLOWED, SECRET_KEY, TOKEN_EXPIRY_DAYS, STATION_PINS
 from .auth import sign_jwt, get_current_user, require_role
+from ._time import utc_now
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("polaris.hq")
@@ -163,12 +164,7 @@ class DeltaFrame(BaseModel):
 
 @app.get("/health")
 def health():
-    # datetime.UTC is 3.11+, fallback to timezone.utc
-    try:
-        utc = datetime.UTC
-    except AttributeError:
-        utc = datetime.timezone.utc
-    return {"status":"ok", "db": "postgres" if USE_PG else "sqlite-fallback", "ts": datetime.datetime.now(utc).isoformat()}
+    return {"status":"ok", "db": "postgres" if USE_PG else "sqlite-fallback", "ts": utc_now()}
 
 class LoginRequest(BaseModel):
     device_id: str
