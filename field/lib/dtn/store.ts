@@ -30,12 +30,8 @@ export async function deleteBundle(bundleId: string): Promise<void> {
 
 export async function clearExpired(): Promise<number> {
   const db = await getDb();
-  const rows = db.selectObjects('SELECT bundle_id, created_at, ttl FROM dtn_bundles');
-  let n = 0;
-  const now = Date.now();
-  for (const r of rows as any[]) {
-    const t = Date.parse(r.created_at);
-    if (now - t > (r.ttl as number) * 1000) { db.exec({ sql: 'DELETE FROM dtn_bundles WHERE bundle_id=?', bind: [r.bundle_id] }); n++; }
-  }
+  // SQL-side expiry to avoid per-row JS loop (still SQLite, but fewer round-trips)
+  const n = db.selectValue("SELECT COUNT(*) FROM dtn_bundles WHERE (strftime('%s','now') - strftime('%s', created_at)) > ttl") as number;
+  if (n > 0) db.exec("DELETE FROM dtn_bundles WHERE (strftime('%s','now') - strftime('%s', created_at)) > ttl");
   return n;
 }

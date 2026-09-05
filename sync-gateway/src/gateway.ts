@@ -1,12 +1,11 @@
 import http from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { toWire, fromWire, ulid, sizeReport } from '@polaris/shared';
+import { toWire, fromWire, ulid, sizeReport, MAX_WIRE_SIZE } from '@polaris/shared';
 import type { DownstreamDeltaFrame, SyncInitFrame, SyncInitRespFrame, AckFrame } from '@polaris/shared';
 
 const PORT = Number(process.env.GATEWAY_PORT || 8787);
 const HQ_URL = process.env.HQ_URL || 'http://localhost:8000';
 const PSK_HEX = process.env.PSK_HEX || 'a'.repeat(64);
-const MAX_WIRE_SIZE = 2048; // strict 2KB frame budget
 
 if (!/^[0-9a-fA-F]{64}$/.test(PSK_HEX)) {
   console.warn('[polaris-gateway] WARNING: PSK_HEX must be 64 hex chars (32B). Using fallback is insecure for production.');
@@ -15,6 +14,12 @@ if (!/^[0-9a-fA-F]{64}$/.test(PSK_HEX)) {
 function log(level: string, msg: string, extra: Record<string, unknown> = {}) {
   const ts = new Date().toISOString();
   console.log(JSON.stringify({ ts, level, service: 'polaris-gateway', msg, ...extra }));
+}
+
+async function readJson(req: http.IncomingMessage): Promise<any> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
 interface ClientMeta {
@@ -73,10 +78,7 @@ const server = http.createServer(async (req, res) => {
   // DTN exchange endpoint: field mule pushes bundles when back online
   if (req.method === 'POST' && (req.url === '/dtn/exchange' || req.url === '/api/dtn/exchange')) {
     try {
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      const raw = Buffer.concat(chunks).toString('utf8');
-      const body = JSON.parse(raw);
+      const body = await readJson(req);
       const bundles = body.bundles || body.bundle ? (Array.isArray(body.bundles) ? body.bundles : [body.bundle || body]) : [body];
       // forward to HQ /dtn/ingest_bulk
       const hqRes = await fetch(`${HQ_URL}/dtn/ingest_bulk`, {
@@ -105,10 +107,7 @@ const server = http.createServer(async (req, res) => {
     if (hdr && hdr !== expected) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'invalid psk' })); return; }
     // also allow same-origin without header when inside docker network (HQ_URL), but log
     try {
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      const raw = Buffer.concat(chunks).toString('utf8');
-      const body = JSON.parse(raw);
+      const body = await readJson(req);
 
       if (!body.entity || !body.entity_id) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
