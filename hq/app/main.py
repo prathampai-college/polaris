@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 from .db import init_db, get_conn, USE_PG
 from .forecast import load_forecast_model, physics_pred, predict_total
-from .config import DEMO_FORECAST, ALLOWED, SECRET_KEY, TOKEN_EXPIRY_DAYS, STATION_PINS
+from .config import ALLOWED, SECRET_KEY, TOKEN_EXPIRY_DAYS, STATION_PINS
 from .auth import sign_jwt, get_current_user, require_role
 from ._time import utc_now
 

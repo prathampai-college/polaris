@@ -13,10 +13,6 @@ if _psk and _secret == _psk and os.getenv("DATABASE_URL"):
 SECRET_KEY = _secret
 TOKEN_EXPIRY_DAYS = int(os.getenv("TOKEN_EXPIRY_DAYS", "30"))
 
-DEMO_FORECAST = {
-    "baseline": {"days": 42, "ci": [38, 47]},
-    "blizzard": {"days": 18, "ci": [15, 22]},
-}
 ALLOWED = {
     "DRAFT": ["APPROVED"],
     "APPROVED": ["DISPATCHED"],
