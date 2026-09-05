@@ -2,29 +2,8 @@ import json, datetime, os
 from typing import Any
 
 from .db import get_conn, USE_PG
-
-def _now_iso():
-    try:
-        import datetime as dt
-        utc = dt.UTC
-    except AttributeError:
-        utc = dt.timezone.utc
-    return dt.datetime.now(utc).isoformat()
-
-def compare_vc(a: dict, b: dict) -> str:
-    keys = set(list(a.keys()) + list(b.keys()))
-    a_gt = any((a.get(k,0) > b.get(k,0)) for k in keys)
-    b_gt = any((b.get(k,0) > a.get(k,0)) for k in keys)
-    if not a_gt and not b_gt: return "equal"
-    if a_gt and not b_gt: return "gt"
-    if not a_gt and b_gt: return "lt"
-    return "concurrent"
-
-def merge_vc(a: dict, b: dict) -> dict:
-    out = dict(a)
-    for k,v in b.items():
-        out[k] = max(out.get(k,0), v)
-    return out
+from ._time import utc_now as _now_iso
+from ._vc import compare_vc, merge_vc
 
 def ingest_bundle(bundle: dict, cur) -> dict:
     """

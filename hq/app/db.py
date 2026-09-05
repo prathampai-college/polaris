@@ -66,42 +66,36 @@ def _pg_schema_sql():
     sql = sql.replace(" BLOB", " BYTEA").replace("\tBLOB", "\tBYTEA")
     return sql
 
-def _ensure_procurement_targets_sqlite(conn):
+def _ensure_table_seeded(conn, table: str, create_sql: str, seed_fn):
+    """Generic ensure: if table missing create it, if empty seed it."""
     try:
-        cur = conn.execute("SELECT COUNT(*) FROM procurement_targets")
+        cur = conn.execute(f"SELECT COUNT(*) FROM {table}")
         if cur.fetchone()[0] == 0:
-            for row in PROCUREMENT_SEED:
-                conn.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
+            seed_fn(conn)
             conn.commit()
     except Exception as e:
-        # Table may not exist on old DBs — create via executescript already handled; silently seed if needed
         if "no such table" in str(e).lower():
             try:
-                conn.executescript("CREATE TABLE IF NOT EXISTS procurement_targets (sku TEXT PRIMARY KEY, target_qty REAL NOT NULL, cost_per_unit REAL NOT NULL, unit TEXT NOT NULL, eta TEXT NOT NULL);")
-                for row in PROCUREMENT_SEED:
-                    conn.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
+                conn.executescript(create_sql)
+                seed_fn(conn)
                 conn.commit()
             except Exception:
                 pass
 
+def _ensure_procurement_targets_sqlite(conn):
+    def _seed(c):
+        for row in PROCUREMENT_SEED:
+            c.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
+    _ensure_table_seeded(conn, "procurement_targets",
+        "CREATE TABLE IF NOT EXISTS procurement_targets (sku TEXT PRIMARY KEY, target_qty REAL NOT NULL, cost_per_unit REAL NOT NULL, unit TEXT NOT NULL, eta TEXT NOT NULL);", _seed)
+
 def _ensure_physics_params_sqlite(conn):
-    try:
-        cur = conn.execute("SELECT COUNT(*) FROM physics_params")
-        if cur.fetchone()[0] == 0:
-            for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
-                conn.execute("INSERT OR IGNORE INTO physics_params (station_id, T_INSIDE, BASE, K1, K2, K3) VALUES (?,?,?,?,?,?)",
-                             (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
-            conn.commit()
-    except Exception as e:
-        if "no such table" in str(e).lower():
-            try:
-                conn.executescript("CREATE TABLE IF NOT EXISTS physics_params (station_id TEXT PRIMARY KEY REFERENCES stations(id), T_INSIDE REAL NOT NULL, BASE REAL NOT NULL, K1 REAL NOT NULL, K2 REAL NOT NULL, K3 REAL NOT NULL);")
-                for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
-                    conn.execute("INSERT OR IGNORE INTO physics_params VALUES (?,?,?,?,?,?)",
-                                 (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
-                conn.commit()
-            except Exception:
-                pass
+    def _seed(c):
+        for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
+            c.execute("INSERT OR IGNORE INTO physics_params (station_id, T_INSIDE, BASE, K1, K2, K3) VALUES (?,?,?,?,?,?)",
+                      (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
+    _ensure_table_seeded(conn, "physics_params",
+        "CREATE TABLE IF NOT EXISTS physics_params (station_id TEXT PRIMARY KEY REFERENCES stations(id), T_INSIDE REAL NOT NULL, BASE REAL NOT NULL, K1 REAL NOT NULL, K2 REAL NOT NULL, K3 REAL NOT NULL);", _seed)
 
 def seed_physics_params(cur):
     for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
