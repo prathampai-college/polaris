@@ -42,11 +42,13 @@ def get_sqlite():
 
 _sqlite_conn = None
 
-PROCUREMENT_SEED = [
+_PROCUREMENT_FALLBACK = [
     ("FUEL-DIESEL-001", 5000, 1200, "L", "30d before freeze"),
     ("O2-CYL-47L-003", 30, 200, "cyl", "30d before freeze"),
     ("SPARE-BRG-6205-007", 10, 80, "pcs", "30d before freeze"),
 ]
+# Single source: shared/seed.json procurement_targets (fallback to hardcoded if missing)
+PROCUREMENT_SEED = [tuple(r) for r in (_SEED.get("procurement_targets") if _SEED else None) or _PROCUREMENT_FALLBACK]
 
 def _load_physics():
     p = _find_file("shared/src/physics.json", "shared/physics.json", "physics.json")

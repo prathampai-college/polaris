@@ -66,7 +66,8 @@ async def get_current_user(request: Request) -> Optional[dict]:
     if not auth.startswith("Bearer "):
         return None
     token = auth[7:]
-    secret = os.getenv("SECRET_KEY", "a" * 64)
+    # BUGFIX: use same fallback as config.SECRET_KEY (SECRET_KEY or PSK_HEX) — was SECRET_KEY only → JWT verify mismatch when PSK_HEX is used as secret
+    secret = os.getenv("SECRET_KEY") or os.getenv("PSK_HEX") or "a" * 64
     return verify_jwt(token, secret)
 
 

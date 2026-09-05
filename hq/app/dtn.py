@@ -31,8 +31,10 @@ def ingest_bundle(bundle: dict, cur) -> dict:
             if cur.fetchone():
                 return {"bundleId": bid, "status": "DEDUPED"}
         else:
-            # need conn; cur is connection cursor? handle both
-            pass
+            use_conn = cur if hasattr(cur, "execute") else get_conn()
+            r = use_conn.execute("SELECT 1 FROM dedupe WHERE ulid=?", (bid,)).fetchone()
+            if r:
+                return {"bundleId": bid, "status": "DEDUPED"}
     except: pass
 
     now = _now_iso()
@@ -112,10 +114,10 @@ def ingest_bundle(bundle: dict, cur) -> dict:
                     cur.execute("INSERT INTO dedupe (ulid, processed_at) VALUES (%s,%s) ON CONFLICT DO NOTHING", (bid, now))
                     cur.execute("UPDATE assets SET vector_clock=%s WHERE id=%s", (merged_s, entity_id))
                 else:
-                    conn = get_conn()
-                    conn.execute("INSERT OR IGNORE INTO dedupe (ulid, processed_at) VALUES (?,?)", (bid, now))
-                    conn.execute("UPDATE assets SET vector_clock=? WHERE id=?", (merged_s, entity_id))
-                    conn.commit()
+                    # BUGFIX: use passed cur (conn) without inner commit — caller manages transaction for bulk
+                    use_conn = cur if hasattr(cur, "execute") else get_conn()
+                    use_conn.execute("INSERT OR IGNORE INTO dedupe (ulid, processed_at) VALUES (?,?)", (bid, now))
+                    use_conn.execute("UPDATE assets SET vector_clock=? WHERE id=?", (merged_s, entity_id))
             except: pass
             return {"bundleId": bid, "status": "APPLIED_LOCAL_WINS", "cmp": cmp}
 
@@ -133,15 +135,15 @@ def ingest_bundle(bundle: dict, cur) -> dict:
                     cur.execute("UPDATE indents SET status=%s WHERE id=%s", (patch.get("status"), entity_id))
                 cur.execute("INSERT INTO dedupe (ulid, processed_at) VALUES (%s,%s) ON CONFLICT DO NOTHING", (bid, now))
             else:
-                conn = get_conn()
-                r = conn.execute("SELECT 1 FROM indents WHERE id=?", (entity_id,)).fetchone()
+                # BUGFIX: use passed cur (conn) without inner commit — caller manages transaction
+                use_conn = cur if hasattr(cur, "execute") else get_conn()
+                r = use_conn.execute("SELECT 1 FROM indents WHERE id=?", (entity_id,)).fetchone()
                 if not r and "station_id" in patch:
-                    conn.execute("INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?)",
+                    use_conn.execute("INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?)",
                                  (entity_id, patch.get("station_id"), patch.get("asset_id"), patch.get("qty_requested"), patch.get("urgency","MEDIUM"), patch.get("status","DRAFT"), patch.get("created_by", src), patch.get("created_at", now), patch.get("vessel_imo")))
                 elif r and "status" in patch:
-                    conn.execute("UPDATE indents SET status=? WHERE id=?", (patch.get("status"), entity_id))
-                conn.execute("INSERT OR IGNORE INTO dedupe (ulid, processed_at) VALUES (?,?)", (bid, now))
-                conn.commit()
+                    use_conn.execute("UPDATE indents SET status=? WHERE id=?", (patch.get("status"), entity_id))
+                use_conn.execute("INSERT OR IGNORE INTO dedupe (ulid, processed_at) VALUES (?,?)", (bid, now))
             return {"bundleId": bid, "status": "APPLIED"}
         except Exception as e:
             return {"bundleId": bid, "status": "FAILED", "error": str(e)}
