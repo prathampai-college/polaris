@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Any, Dict
-import os, datetime, logging, time, uuid, asyncio, json as _json
+import os, logging, time, uuid, asyncio, json as _json
 from contextlib import asynccontextmanager
 
 from .db import init_db, get_conn, USE_PG
@@ -64,9 +64,8 @@ def notify_gateway(station_id: str, entity: str, entity_id: str, op: str, patch:
             "op": op,
             "patch": patch
         }).encode("utf-8")
-        psk = os.getenv("PSK_HEX", os.getenv("SECRET_KEY", ""))
-        hdrs = {"Content-Type": "application/json"}
-        if psk: hdrs["X-PSK"] = psk
+        psk = os.getenv("PSK_HEX", os.getenv("SECRET_KEY", "a" * 64))
+        hdrs = {"Content-Type": "application/json", "X-PSK": psk}
         req = urllib.request.Request(url, data=data, headers=hdrs)
         with urllib.request.urlopen(req, timeout=1.0) as resp:
             pass
@@ -227,11 +226,7 @@ def create_indent(body: IndentCreate):
     if body.status not in ["DRAFT","APPROVED","DISPATCHED","RECEIVED"]:
         body.status = "DRAFT"
     conn=get_conn()
-    try:
-        utc = datetime.UTC
-    except AttributeError:
-        utc = datetime.timezone.utc
-    now=datetime.datetime.now(utc).isoformat()
+    now = utc_now()
     try:
         from ulid import ULID
         iid=str(ULID())
@@ -266,11 +261,7 @@ class IndentPatch(BaseModel):
 @app.patch("/indents/{indent_id}")
 async def patch_indent(indent_id: str, body: IndentPatch, user: dict = Depends(require_role("STATION_LEAD"))):
     conn=get_conn()
-    try:
-        utc = datetime.UTC
-    except AttributeError:
-        utc = datetime.timezone.utc
-    now=datetime.datetime.now(utc).isoformat()
+    now = utc_now()
     row=_fetch_one("SELECT id, station_id, asset_id, status, vessel_imo FROM indents WHERE id=?", (indent_id,))
     if not row: raise HTTPException(404, "indent not found")
     cur_status=row["status"]
@@ -430,7 +421,10 @@ def _auto_indent(conn, station_id: str, asset_id: str, qty_needed: float, creato
 
 def check_and_escalate(station_id: str, tele):
     conn=get_conn()
-    row=_fetch_one("SELECT id, qty FROM assets WHERE sku='FUEL-DIESEL-001' LIMIT 1")
+    # BUGFIX: scope diesel qty to station (was global LIMIT 1 → wrong station days_to_stockout)
+    row=_fetch_one("SELECT a.id, a.qty FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku='FUEL-DIESEL-001' LIMIT 1", (station_id,))
+    if not row:
+        row=_fetch_one("SELECT id, qty FROM assets WHERE sku='FUEL-DIESEL-001' LIMIT 1")
     if not row: return
     asset_id, qty=row["id"], row["qty"]
     cr=_fetch_one("SELECT winter_crew_count FROM stations WHERE id=?", (station_id,))
@@ -442,7 +436,9 @@ def check_and_escalate(station_id: str, tele):
         _auto_indent(conn, station_id, asset_id, 500, "FORECAST_AUTO", "INDENT_AUTO_CRITICAL", f"forecast {days:.1f}d", "-auto", now)
     # Phase 4: Acoustic Prognostics Escalation
     if getattr(tele, 'acoustic_anomaly', 0.0) > 0.90:
-        row = _fetch_one("SELECT id FROM assets WHERE sku='SPARE-BRG-6205-007' LIMIT 1")
+        row = _fetch_one("SELECT a.id FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku='SPARE-BRG-6205-007' LIMIT 1", (station_id,))
+        if not row:
+            row = _fetch_one("SELECT id FROM assets WHERE sku='SPARE-BRG-6205-007' LIMIT 1")
         if row:
             _auto_indent(conn, station_id, row["id"], 4, "ACOUSTIC_AI", "INDENT_ACOUSTIC_CRITICAL", "bearing whine > 90%", "-ac", now)
 
@@ -608,11 +604,7 @@ async def bulk_upsert_assets(body: BulkAssetRequest, user: dict = Depends(requir
     inserted = 0
     updated = 0
     conn = get_conn()
-    try:
-        utc = datetime.UTC
-    except AttributeError:
-        utc = datetime.timezone.utc
-    now = datetime.datetime.now(utc).isoformat()
+    now = utc_now()
     if USE_PG:
         with conn:
             with conn.cursor() as cur:
@@ -702,11 +694,7 @@ def ingest(frame: DeltaFrame, request: Request):
         raise HTTPException(400, f"unsupported op {frame.op}")
     conn=get_conn()
     ulid=frame.ulid
-    try:
-        utc = datetime.UTC
-    except AttributeError:
-        utc = datetime.timezone.utc
-    now=datetime.datetime.now(utc).isoformat()
+    now = utc_now()
     if USE_PG:
         import psycopg
         with psycopg.connect(os.getenv("DATABASE_URL"), autocommit=False) as c:
@@ -857,9 +845,10 @@ def ingest(frame: DeltaFrame, request: Request):
                         if patch_ts and existing_ts and patch_ts <= existing_ts:
                             conn.execute("ROLLBACK")
                             return {"status":"APPLIED_LOCAL_WINS", "server_version": version, "reason":"lww_local_newer"}
-                    merged_s = None
-                    if remote_vc:
-                        import json as _j2; merged_s = _j2.dumps(merge_vc(existing_vc, remote_vc))
+                    # BUGFIX: always persist merged VC (was None when remote_vc empty → SQLite skipped update, PG always merged)
+                    import json as _j2
+                    merged_vc2 = merge_vc(existing_vc, remote_vc) if remote_vc else existing_vc
+                    merged_s = _j2.dumps(merged_vc2) if merged_vc2 else None
                 except Exception:
                     merged_s = None
                 if merged_s:
@@ -1005,11 +994,7 @@ def tracking_update(body: Dict[str, Any]):
     if not asset_id: raise HTTPException(400, "asset_id required")
     x = body.get("x", 0); y = body.get("y", 0); theta = body.get("theta", 0); conf = body.get("conf", 0.75)
     station_id = body.get("station_id") or body.get("stationId") or "ST-BHARATI"
-    try:
-        utc = datetime.UTC
-    except AttributeError:
-        utc = datetime.timezone.utc
-    now = datetime.datetime.now(utc).isoformat()
+    now = utc_now()
     conn = get_conn()
     if USE_PG:
         import psycopg

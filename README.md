@@ -54,8 +54,8 @@ ANTARCTICA EDGE (Offline-First, Extreme-Edge)      SAT (20–50 kbps ws, 500ms, 
 
 **Three-pillar extreme-edge (per original SIH PS-26062 proposal — now fully implemented, source PDF removed):**
 - **I Vision-Fused Local Tracking** `field/lib/sensors/sim_lidar.ts:1` + `field/lib/sensors/fusion.ts:1` + `shared/src/local_map.ts:1` — 2D LiDAR + Camera fusion → local `[x,y,theta]` frame, no GPS in whiteout.
-- **II Neuromorphic SNN** `field/lib/snn/engine.ts:1` + `hq/app/snn_forecast.py:1` + `ai/snn/encoder.py:1` — snnTorch LIF `5→32→16→1` event-gated (only when `|Δnorm|>0.12`).
-- **III DTN Data Muling** `field/lib/dtn/mule.ts:1` + `shared/src/dtn/vector_clock.ts:1`/`bundle.ts:1` + `hq/app/dtn.py:1` — `BUNDLED` custody + LWW+VC resolver + `BroadcastChannel`/QR mule.
+- **II Neuromorphic SNN** `field/lib/snn/engine.ts:1` + `hq/app/snn_forecast.py:1` + `ai/snn/encoder.py:1` + `shared/src/snn-config.ts:1` — snnTorch LIF `5→32→16→1` event-gated (only when `|Δnorm|>0.12`, single-sourced `SNN_EVENT_THRESH`).
+- **III DTN Data Muling** `field/lib/dtn/mule.ts:1` + `shared/src/dtn/vector_clock.ts:1`/`bundle.ts:1` + `hq/app/dtn.py:1` + `hq/app/_vc.py:1` — `BUNDLED` custody + LWW+VC resolver + `BroadcastChannel`/QR mule (VC logic single-sourced).
 
 **One language on field live path:** TypeScript/Node (`field` + `sync-gateway` + SNN JS LIF) — zero cross-FFI at the edge. HQ and training stay Python where they belong.
 
@@ -85,8 +85,8 @@ See `docs/ARCHITECTURE.md` and `docs/API.md` for full spec.
 |-----------|-------|----------------------|
 | **Field PWA** | Next.js 14.2.5 + Tailwind + Three.js `@react-three/fiber/drei` 3D X-Ray + `html5-qrcode` 2.3.8 + Workbox | QR offline, 3D crate locator (shared `CONTAINER_SPECS` via `@polaris/shared`), glove 48px hit targets, tactical dark, `fontLarge` 200% toggle. Split into `Icons` + `tabs/{Today,Inventory,Scan,Indents,Locate}`. `TodayTab` shows `forecast.days_to_stockout + ci` + **SNN watts pill** `field/components/tabs/TodayTab.tsx:1` + **DTN custory badge** `field/app/page.tsx:585`. |
 | **Offline DB** | `@sqlite.org/sqlite-wasm` 3.53 OPFS/WAL | WAL crash safety, `outbox`/`dedupe`/`sync_state`/`vessels`/`dtn_bundles`/`asset_positions`/`snn_state` in same DB, `BEGIN IMMEDIATE` `field/lib/db.ts:113` avoids TOCTOU. Indexes `idx_outbox_status`, `idx_vessels_station`, `idx_dtn_bundles_dst`, `idx_asset_positions_station`. |
-| **Sync Engine + DTN** | Node `ws` 8.17 + `@msgpack/msgpack` 3.0 + `ulid` 2.3 + CRC32 + AES-GCM + `VectorClock` | 70–80% smaller than JSON, idempotent `ulid` replay + `vector_clock` merge, `sizeReport` logging, `SENT` retry + `BUNDLED` custody when `ws !== OPEN` `field/lib/sync.ts:107`, `PING/PONG` 30s, `>2KB` `FAILED` not silent drop `sync-gateway/src/gateway.ts:6`. Handles `DOWNSTREAM_DELTA` for `assets`, `indents`, `vessels` + `SYNC_INIT_RESP bundles` `field/lib/sync.ts:55`. DTN `BroadcastChannel('polaris-mule')` simulates BLE mesh; QR `bundleToBase64` `shared/src/dtn/bundle.ts:1` for physical handoff. |
-| **AI — Thermo Hybrid + SNN** | `onnxruntime-node` 1.17 int8 <2MB `ai/thermo_residual.onnx` (1.3KB) + `ai/snn/snn_weights.json` + `ai/snn/thermo_snn.onnx` LIF + Acoustic Prognostics | Hybrid `phys + ML residual` per-station `hq/app/forecast.py:7` `load_physics(station_id)`, `<200ms`, fallback `5*dg+0.3*crew-2` `hq/app/forecast.py:66`. **SNN** `snnTorch LIF 5→32→16→1` `ai/snn/train_snn.py:1`, rate-coded `T=20` `ai/snn/encoder.py:1`, JS LIF `field/lib/snn/engine.ts:1`, event-gated `0.12` threshold — `shared/src/power.ts:1` reports `0.8mW vs 8.2mW` (90% idle saved) `hq/app/snn_forecast.py:1`. |
+| **Sync Engine + DTN** | Node `ws` 8.17 + `@msgpack/msgpack` 3.0 + `ulid` 2.3 + CRC32 + AES-GCM + `VectorClock` + `MAX_WIRE_SIZE` | 70–80% smaller than JSON, idempotent `ulid` replay + `vector_clock` merge, `sizeReport` logging, `SENT` retry + `BUNDLED` custody when `ws !== OPEN` `field/lib/sync.ts:107`, `PING/PONG` 30s, `>2KB` `FAILED` not silent drop `sync-gateway/src/gateway.ts:6` (uses `shared/src/wire.ts:1` `MAX_WIRE_SIZE` single source). Handles `DOWNSTREAM_DELTA` for `assets`, `indents`, `vessels` + `SYNC_INIT_RESP bundles` `field/lib/sync.ts:55` (wire size via `shared/src/wire.ts`). DTN `BroadcastChannel('polaris-mule')` simulates BLE mesh; QR `bundleToBase64` `shared/src/dtn/bundle.ts:1` for physical handoff. |
+| **AI — Thermo Hybrid + SNN** | `onnxruntime-node` 1.17 int8 <2MB `ai/thermo_residual.onnx` (1.3KB) + `ai/snn/snn_weights.json` + `ai/snn/thermo_snn.onnx` LIF + Acoustic Prognostics | Hybrid `phys + ML residual` per-station `hq/app/forecast.py:7` `load_physics(station_id)`, `<200ms`, fallback `5*dg+0.3*crew-2` `hq/app/forecast.py:66`. **SNN** `snnTorch LIF 5→32→16→1` `ai/snn/train_snn.py:1`, rate-coded `T=20` `ai/snn/encoder.py:1`, JS LIF `field/lib/snn/engine.ts:1`, event-gated `0.12` (`shared/src/snn-config.ts:1` `SNN_EVENT_THRESH`, reused in HQ `hq/app/snn_forecast.py:1` via `SNN_DEFAULT_WEIGHTS/MEAN/SCALE`), `shared/src/power.ts:1` reports `0.8mW vs 8.2mW` (90% idle saved). |
 | **Local Tracking** | `shared/src/local_map.ts` 40×40 2m/cell + `field/lib/sensors/sim_lidar.ts` 360pts + `field/lib/sensors/fusion.ts` Kalman | LiDAR active in whiteout (camera blind), `fuse()` 70% LiDAR +30% cam → Kalman-smoothed `[x,y,theta]` `conf 0.75` alone, `0.79` fused. Err <0.8m `scripts/tracking_verify.mjs:1`. No GPS dependency. Sim-only (no RPLidar hardware). |
 | **HQ** | FastAPI + `psycopg[binary]` + TimescaleDB `timescale/timescaledb:latest-pg15` (Docker) / SQLite WAL fallback `hq/app/hq.db` | Audit append-only, RBAC `hq/app/auth.py:1`, Timescale hypertable for `telemetry`, `procurement_targets` + `physics_params` + `vessels` + `dtn_bundles` + `asset_positions` + `snn_state` `shared/sql/schema.sql:106`. Pollers `telemetry_poller.py` + `vessel_poller.py` (15m) + DTN resolver `dtn.py` + SNN `snn_forecast.py`. |
 | **HQ Dashboard** | Next.js 14 (`:3001`) + Recharts 3.10 + Three.js 0.185 + **Leaflet 1.9.4 / react-leaflet 4.2.1** | Fleet view, forecast 42→18d, SSE live `EventSource /telemetry/stream` `hq-dashboard/app/page.tsx:180`, `TrendChart` honest empty-state `hq-dashboard/components/TrendChart.tsx:28` (no demo dummy), `ProcurementTable` DB-driven `hq/app/main.py:520`, `VesselMap` `hq-dashboard/components/VesselMap.tsx:1` Leaflet overlay with offline ETA pill fallback. |
@@ -109,7 +109,7 @@ See `docs/ARCHITECTURE.md` and `docs/API.md` for full spec.
 | `vessels` | `imo PK` → `stations` | `name`, `lat`, `lon`, `sog`, `eta`, `station_id`, `last_seen` — live AIS or schedule `shared/vessel_schedule.json:2` | 3 mock vessels `hq/app/vessel_poller.py:25` |
 | `telemetry` | `(ts, station_id)` | `temp_outside, wind_speed, pressure, dg_load` — Timescale hypertable on PG | via `POST /telemetry` + `telemetry_poller.py:25` Open-Meteo/IMD 15m + `ai/runner/telemetry_sim.mjs` |
 | `audit_log` | `id` | `actor_id, action, entity, before, after, ts` append-only | every write |
-| `procurement_targets` | `sku PK` | `target_qty, cost_per_unit, unit, eta` — DB replaces hardcoded `SEASON_TARGETS` | 3 rows `FUEL-DIESEL 5000/1200, O2 30/200, BRG 10/80` `hq/app/db.py:43` |
+| `procurement_targets` | `sku PK` | `target_qty, cost_per_unit, unit, eta` — DB replaces hardcoded `SEASON_TARGETS` (single-sourced from `shared/seed.json:4` `procurement_targets`, fallback `_PROCUREMENT_FALLBACK` in `hq/app/db.py:45`) | 3 rows `FUEL-DIESEL 5000/1200, O2 30/200, BRG 10/80` `hq/app/db.py:45` |
 | `physics_params` | `station_id PK` | `T_INSIDE, BASE, K1, K2, K3` per-station calibration `shared/src/physics.json:1` global → per-station `hq/app/db.py:49` | 3 rows from `physics.json` |
 | `outbox` | `ulid PK` | `device_id, entity, entity_id, op` UPSERT/DELETE/CONSUME…, `patch BLOB`, `base_version, retry_count, status` PENDING/SENT/ACKED/FAILED/**BUNDLED**, `vector_clock TEXT`, `local_coord TEXT` | field WAL + `BUNDLED` custody |
 | `sync_state` | `device_id PK` | `last_acked_ulid, last_server_version` | per tablet |
@@ -120,7 +120,7 @@ See `docs/ARCHITECTURE.md` and `docs/API.md` for full spec.
 
 Indexes: `idx_assets_crate`, `idx_outbox_status (status, created_at)`, `idx_transactions_asset`, `idx_vessels_station`, `idx_dtn_bundles_dst (dst_station, created_at)`, `idx_asset_positions_station`.
 
-**Seed idempotency:** `hq/app/db.py:170 seed(cur)` `ON CONFLICT DO NOTHING` / `INSERT OR IGNORE` → `field/lib/db.ts:58 seedIfEmpty` same. VC cols backfilled via `PRAGMA table_info` + `ALTER TABLE ADD COLUMN` in `_ensure_dtn_sqlite` `hq/app/db.py:115`.
+**Seed idempotency:** `hq/app/db.py:170 seed(cur)` `ON CONFLICT DO NOTHING` / `INSERT OR IGNORE` → `field/lib/db.ts:58 seedIfEmpty` same. VC cols backfilled via `PRAGMA table_info` + `ALTER TABLE ADD COLUMN` in `_ensure_dtn_sqlite` `hq/app/db.py:115` + `field/lib/db.ts:56` migration for `sync_state.vector_clock`. Procurement seed now single-sourced from `shared/seed.json` rather than hardcoded dup.
 
 ---
 
@@ -182,10 +182,12 @@ PSK_HEX=6960e2efb364b2c40...   # 32B hex per-station wire AES-GCM — provision 
 SECRET_KEY=385b795dc17f6c84... # JWT HMAC 32B hex — MUST be distinct from PSK_HEX in prod (hq/app/config.py:11 warns if equal with DATABASE_URL)
 DATABASE_URL=postgresql://polaris:polaris@db:5432/polaris  # omit for SQLite fallback hq/app/hq.db
 TELEMETRY_SOURCE=both         # both|openmeteo|imd|sim — Open-Meteo free tier by default
+LIVE_WEATHER_ENABLED=false    # explicit gate for live weather (open-meteo/IMD) — true to enable live fetches
 IMD_API_KEY=                  # optional IMD mausam.imd.gov.in key
 TELEMETRY_POLL_SEC=900
 AIS_API_KEY=                  # optional AISHub/MarineTraffic key; empty → vessel_schedule.json
 VESSEL_MODE=auto              # auto|live|mock — auto tries live then mock on 429
+LIVE_AIS_ENABLED=false        # explicit gate for live AIS (AISHub) — true to enable live fetches (alias AIS_ENABLED)
 VESSEL_POLL_SEC=900
 NEXT_PUBLIC_HQ_URL=http://localhost:8000
 NEXT_PUBLIC_GATEWAY_URL=ws://localhost:8787
@@ -247,9 +249,11 @@ node scripts/import_inventory.mjs --file scripts/template_inventory.csv --hq htt
 | `TOKEN_EXPIRY_DAYS` | `hq` `hq/app/config.py:10` | `30` | JWT `exp`. |
 | `TELEMETRY_SOURCE` | `hq` `hq/app/telemetry_poller.py:13` | `both` | `both\|openmeteo\|imd\|sim` — both tries IMD if key present else Open-Meteo free ( `https://api.open-meteo.com/v1/forecast` `hq/app/telemetry_poller.py:31` ); `sim` disables external poll (fixtures only). |
 | `IMD_API_KEY` | `hq` `hq/app/telemetry_poller.py:11` | `""` | Optional IMD `mausam.imd.gov.in` key. Leave empty → Open-Meteo free tier. |
+| `LIVE_WEATHER_ENABLED` | `hq` `hq/app/telemetry_poller.py:24` | `false` | Explicit gate for live weather. `false` forces mock/fixtures even if keys set. Set `true` to enable Open-Meteo/IMD fetches (demo default is `false` for quota safety). |
 | `TELEMETRY_POLL_SEC` | `hq` | `900` | Poll interval sec (15m default). |
 | `AIS_API_KEY` | `hq` `hq/app/vessel_poller.py:11` | `""` | Optional AISHub/MarineTraffic key. Empty → `shared/vessel_schedule.json` mock Sagar Nidhi interpolation. `429` also falls back to mock + cache `/tmp/ais_cache.json`. |
 | `VESSEL_MODE` | `hq` `hq/app/vessel_poller.py:12` | `auto` | `auto\|live\|mock` — auto tries live then mock on 429/no key. |
+| `LIVE_AIS_ENABLED` / `AIS_ENABLED` | `hq` `hq/app/vessel_poller.py:15` | `false` | Explicit gate for live AIS. `false` forces mock schedule even if `AIS_API_KEY` set. Set `true` to enable AISHub live fetches. |
 | `VESSEL_POLL_SEC` | `hq` | `900` | Vessel poll interval sec (15m default). |
 | `VESSEL_CACHE` | `hq` `hq/app/vessel_poller.py:13` | `/tmp/ais_cache.json` | AIS response cache for 429 recovery. |
 
@@ -359,9 +363,9 @@ curl -X PATCH http://localhost:8000/indents/$ID -H "Authorization: Bearer $TOKEN
 
 ## Sync Wire — MsgPack+AES-GCM+CRC+VectorClock
 
-`shared/src/codec.ts` + `codec.web.ts` — `toWire(frame, PSK)` → `[4B CRC BE][12B nonce || ciphertext || 16B tag]` msgpack+AES-GCM. `PSK_HEX` `64 hex` validated `hexToBytes`/`assertKeyHex` — odd/invalid rejected, `DataView` `byteOffset`-safe. GCM tag is integrity, CRC is framing only.
+`shared/src/codec.ts` + `codec.web.ts` + `shared/src/wire.ts:1` — `toWire(frame, PSK)` → `[4B CRC BE][12B nonce || ciphertext || 16B tag]` msgpack+AES-GCM. `PSK_HEX` `64 hex` validated `hexToBytes`/`assertKeyHex` — odd/invalid rejected, `DataView` `byteOffset`-safe. `MAX_WIRE_SIZE 2048` single-sourced in `shared/src/wire.ts:1` (imported by `codec.ts`, `codec.web.ts`, `sync-gateway/src/gateway.ts:3`, `field/lib/sync.ts:2`). GCM tag is integrity, CRC is framing only.
 
-Field `SyncWorker` `field/lib/sync.ts:13` full-duplex: `connect()` sends `SYNC_INIT` wire, `drain()` every 2s sends `PENDING|SENT` up to 20 rows (retry until `ACKED`, `draining` guard), **when `ws !== OPEN` bundles via `field/lib/dtn/mule.ts:1` `createAndSaveMuleBundle` `status='BUNDLED'` and `BroadcastChannel('polaris-mule')` QR**, when online flushes `dtn_bundles` via `POST /dtn/ingest_bulk` + `POST /dtn/exchange` through `sync-gateway/src/gateway.ts:57`. `onmessage` handles `DOWNSTREAM_DELTA`→`applyDownstreamIndent` `field/lib/db.ts:191` / `DOWNSTREAM_DELTA vessels`→`applyDownstreamVessel` `field/lib/db.ts:278` / `SYNC_INIT_RESP` (`indents` + `bundles`)→`applyDownstreamSyncInit`, `ACK APPLIED|DEDUPED|CONFLICT_CRITICAL|APPLIED_LOCAL_WINS|FAILED` with `vector_clock` merge `shared/src/dtn/vector_clock.ts:1` `compare`/`merge`/`pickWinner` `shared/src/dtn/resolve.ts:1`. `sizeReport` logs `jsonBytes vs mpBytes saving 70-80%` `shared/src/codec.ts:toWire`. Gateway `sync-gateway/src/gateway.ts:55` bridges `wss.on connection` + `fetch HQ/indents?station_id` + `fetch HQ/dtn/bundles` + `fetch HQ/sync/ingest` + `POST /internal/broadcast_delta` filtered by `station_id`, `MAX_WIRE_SIZE 2048` `shared/src/codec.ts`.
+Field `SyncWorker` `field/lib/sync.ts:13` full-duplex: `connect()` sends `SYNC_INIT` wire, `drain()` every 2s sends `PENDING|SENT` up to 20 rows (retry until `ACKED`, `draining` guard), **when `ws !== OPEN` bundles via `field/lib/dtn/mule.ts:1` `createAndSaveMuleBundle` `status='BUNDLED'` and `BroadcastChannel('polaris-mule')` QR**, when online flushes `dtn_bundles` via `POST /dtn/ingest_bulk` + `POST /dtn/exchange` through `sync-gateway/src/gateway.ts:57`. `onmessage` handles `DOWNSTREAM_DELTA`→`applyDownstreamIndent` `field/lib/db.ts:191` / `DOWNSTREAM_DELTA vessels`→`applyDownstreamVessel` `field/lib/db.ts:278` / `SYNC_INIT_RESP` (`indents` + `bundles`)→`applyDownstreamSyncInit`, `ACK APPLIED|DEDUPED|CONFLICT_CRITICAL|APPLIED_LOCAL_WINS|FAILED` with `vector_clock` merge `shared/src/dtn/vector_clock.ts:1` `compare`/`merge`/`pickWinner` `shared/src/dtn/resolve.ts:1` (now deduplicated to re-use `vector_clock.ts` `merge`). `sizeReport` logs `jsonBytes vs mpBytes saving 70-80%` `shared/src/codec.ts:toWire`. Gateway `sync-gateway/src/gateway.ts:55` bridges `wss.on connection` + `fetch HQ/indents?station_id` + `fetch HQ/dtn/bundles` + `fetch HQ/sync/ingest` + `POST /internal/broadcast_delta` filtered by `station_id`, `MAX_WIRE_SIZE` from `shared/src/wire.ts:1`; gateway `readJson()` helper deduplicates body parsing and `X-PSK` now strictly required (`hdr!==expected` → 401, was `hdr && hdr!==expected` bypass).
 
 Throttle tested `scripts/m4_verify.mjs` 20kbps/500ms/5% — convergence <5s. DTN tested `scripts/dtn_verify.mjs` 5 checks.
 
@@ -498,6 +502,24 @@ curl http://localhost:8000/tracking/positions | jq
 # Trend honest: empty trend without demo shows dashed border, no dummy 4700L
 curl http://localhost:8000/health | jq
 ```
+
+---
+
+## Refactor & Simplification (2026-09)
+
+Codebase has been incrementally simplified across 7 phases (each a separate commit, `b74170c..a606e1d` plus follow-ups), zero behavior change:
+
+- **Phase 0** `docs/VERIFY_BASELINE.md` — verify invariant `verify:all` + `verify:extreme`
+- **Phase 1** `shared/src/wire.ts:1` `MAX_WIRE_SIZE` single source, `dtn/resolve.ts` dedup `merge`, `schemas.ts` vessel/vector_clock alignment
+- **Phase 2** `hq/app/_time.py:1` `utc_now()`, `hq/app/_vc.py:1` VC single source, `hq/app/db.py:45` `_ensure_table_seeded` collapses `_ensure_*_sqlite` dup
+- **Phase 3** `hq/app/main.py:407` `_auto_indent()` collapses diesel/bearing 50-line dup
+- **Phase 4** `shared/src/snn-config.ts:1` single SNN thresholds, `field/lib/db.ts:216` `withTx()` helper, `field/lib/snn/engine.ts:1` imports shared
+- **Phase 5** `sync-gateway/src/gateway.ts:15` `readJson()` + `field/lib/dtn/store.ts:31` SQL expiry, wire budget from shared
+- **Phase 6** `shared/src/filters.ts:1` `filterByStation()`, `shared/src/url.ts:1` `toHttpUrl()`, `shared/components/Container3D.tsx:1` canonical 3D twin (field/hq wrappers `legendVariant`)
+- **Phase 7** `hq/app/config.py:11` removes dead `DEMO_FORECAST`
+- **Follow-up** station-scoped `check_and_escalate` fix, gateway PSK strict `hdr!==expected`, `field/lib/db.ts:25` `sync_state.vector_clock` migration, `shared/seed.json` procurement single source, `LIVE_*` gating.
+
+See `git log --oneline b74170c..HEAD` for per-phase commits.
 
 ---
 

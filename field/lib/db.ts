@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS audit_log (id TEXT PRIMARY KEY, actor_id TEXT, action
 CREATE TABLE IF NOT EXISTS procurement_targets (sku TEXT PRIMARY KEY, target_qty REAL NOT NULL, cost_per_unit REAL NOT NULL, unit TEXT NOT NULL, eta TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS physics_params (station_id TEXT PRIMARY KEY, T_INSIDE REAL NOT NULL, BASE REAL NOT NULL, K1 REAL NOT NULL, K2 REAL NOT NULL, K3 REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS outbox (ulid TEXT PRIMARY KEY, device_id TEXT, entity TEXT, entity_id TEXT, op TEXT CHECK(op IN ('UPSERT','DELETE','CONSUME','IN','OUT','ADJUST')), patch BLOB, base_version INTEGER, retry_count INTEGER DEFAULT 0, created_at TEXT, status TEXT CHECK(status IN ('PENDING','SENT','ACKED','FAILED','BUNDLED')) DEFAULT 'PENDING', vector_clock TEXT, local_coord TEXT);
-CREATE TABLE IF NOT EXISTS sync_state (device_id TEXT PRIMARY KEY, last_acked_ulid TEXT, last_server_version INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS sync_state (device_id TEXT PRIMARY KEY, last_acked_ulid TEXT, last_server_version INTEGER DEFAULT 0, vector_clock TEXT);
 CREATE TABLE IF NOT EXISTS dedupe (ulid TEXT PRIMARY KEY, processed_at TEXT);
 CREATE TABLE IF NOT EXISTS dtn_bundles (bundle_id TEXT PRIMARY KEY, src TEXT, dst_station TEXT, payload BLOB, vc TEXT, custody INTEGER DEFAULT 1, created_at TEXT, ttl INTEGER DEFAULT 86400);
 CREATE TABLE IF NOT EXISTS asset_positions (asset_id TEXT PRIMARY KEY, x REAL, y REAL, theta REAL, conf REAL, last_sensor_ts TEXT, station_id TEXT REFERENCES stations(id));
@@ -54,6 +54,8 @@ export async function getDb(): Promise<any> {
     _db = new _sqlite3.oo1.DB(':memory:', 'c');
   }
   _db.exec(SCHEMA_SQL);
+  // BUGFIX: migrate existing OPFS DBs missing vector_clock column on sync_state (old SCHEMA)
+  try { _db.exec("ALTER TABLE sync_state ADD COLUMN vector_clock TEXT"); } catch {}
   // ensure WAL
   try { _db.exec('PRAGMA journal_mode=WAL;'); } catch {}
 
