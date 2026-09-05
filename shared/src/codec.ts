@@ -1,7 +1,9 @@
 import { encode, decode } from '@msgpack/msgpack';
 import type { DeltaFrame, WireFrame } from './types.js';
 import { crc32 } from './crc.js';
+import { MAX_WIRE_SIZE } from './wire.js';
 export { crc32 };
+export { MAX_WIRE_SIZE };
 
 export function encodeFrame(frame: unknown): Uint8Array {
   return encode(frame);
