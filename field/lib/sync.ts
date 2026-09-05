@@ -1,6 +1,6 @@
 'use client';
 import { toWire as toWireWeb, fromWire as fromWireWeb } from '@shared/codec.web.js';
-import { sizeReport } from '@shared/codec.web.js';
+import { sizeReport, MAX_WIRE_SIZE } from '@shared/codec.web.js';
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'ws://localhost:8787';
 const PSK_HEX = process.env.NEXT_PUBLIC_PSK_HEX || 'a'.repeat(64);
@@ -161,7 +161,7 @@ export class SyncWorker {
         const { savingPct } = sizeReport(frame);
         this.stats.savingPct = savingPct;
         const wire = await toWire(frame);
-        if (wire.length > 2048) { console.warn('[sync] frame >2KB', wire.length); continue; }
+        if (wire.length > MAX_WIRE_SIZE) { console.warn('[sync] frame >2KB', wire.length); continue; }
         (this.ws as unknown as { send(d: Uint8Array): void }).send(wire);
         this.stats.sent++;
         if (r.status === 'PENDING') db.exec({ sql: "UPDATE outbox SET status='SENT', retry_count=retry_count+1 WHERE ulid=?", bind: [r.ulid] });
