@@ -213,6 +213,11 @@ export async function updateIndentLocal(opts: { indentId: string; status: string
   return { outboxUlid };
 }
 
+function withTx(db: any, fn: () => void) {
+  db.exec('BEGIN');
+  try { fn(); db.exec('COMMIT'); } catch (e) { try { db.exec('ROLLBACK'); } catch {} throw e; }
+}
+
 // Downstream Delta Handlers (Full-Duplex Encrypted WebSocket push)
 export async function applyDownstreamIndent(indentId: string, patch: Record<string, any>) {
   const db = await getDb();
