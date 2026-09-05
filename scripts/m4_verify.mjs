@@ -43,7 +43,7 @@ for(let i=0;i<5;i++){
   db.exec('BEGIN'); db.prepare('UPDATE assets SET qty=?,version=?,updated_at=? WHERE id=?').run(newQty,newVer,patch.updated_at,'A1');
   db.prepare('INSERT INTO transactions VALUES (?,?,?,?,?,?,?)').run(ulid(),'A1','CONSUME',-10,'FIELD_OP_01',ts,'PENDING');
   db.prepare('INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)').run(ulid(),'FIELD_OP_01','CONSUME','assets',JSON.stringify({qty:row.qty}),JSON.stringify(patch),ts);
-  db.prepare('INSERT INTO outbox VALUES (?,?,?,?,?,?,?,?,?,?)').run(u,'DEV-01','assets','A1','UPSERT',encode(patch),row.version,0,ts,'PENDING');
+  db.prepare('INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, retry_count, created_at, status) VALUES (?,?,?,?,?,?,?,?,?,?)').run(u,'DEV-01','assets','A1','UPSERT',encode(patch),row.version,0,ts,'PENDING');
   db.exec('COMMIT'); frames.push({ulid:u, device_id:'DEV-01', entity:'assets', entity_id:'A1', op:'UPSERT', patch, base_version:row.version, ts});
 }
 const pending=db.prepare("SELECT COUNT(*) as c FROM outbox WHERE status='PENDING'").get().c;

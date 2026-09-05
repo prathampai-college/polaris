@@ -72,7 +72,7 @@ fieldDb.exec('BEGIN');
 fieldDb.prepare('UPDATE assets SET qty=?,version=?,updated_at=? WHERE id=?').run(newQty,newVer,patch.updated_at,a.id);
 fieldDb.prepare('INSERT INTO transactions VALUES (?,?,?,?,?,?,?)').run(ulid(),a.id,'CONSUME',-1,'FIELD_OP_01',ts,'PENDING');
 fieldDb.prepare('INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)').run(ulid(),'FIELD_OP_01','CONSUME','assets',JSON.stringify({qty:r.qty}),JSON.stringify(patch),ts);
-fieldDb.prepare('INSERT INTO outbox VALUES (?,?,?,?,?,?,?,?,?,?)').run(outUlid,deviceId,'assets',a.id,'UPSERT',encode(patch),r.version,0,ts,'PENDING');
+fieldDb.prepare('INSERT INTO outbox (ulid,device_id,entity,entity_id,op,patch,base_version,retry_count,created_at,status) VALUES (?,?,?,?,?,?,?,?,?,?)').run(outUlid,deviceId,'assets',a.id,'UPSERT',encode(patch),r.version,0,ts,'PENDING');
 fieldDb.exec('COMMIT');
 frames.push({ulid:outUlid, device_id:deviceId, entity:'assets', entity_id:a.id, op:'UPSERT', patch, base_version:r.version, ts});
 console.log(`   CONSUME -1 ${a.sku}: ${r.qty}->${newQty} ulid=${outUlid.slice(0,8)}`);
@@ -84,7 +84,7 @@ const indent={id:indentId, station_id:'ST-BHARATI', asset_id:indentAsset, qty_re
 fieldDb.exec('BEGIN');
 fieldDb.prepare('INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at) VALUES (?,?,?,?,?,?,?,?)').run(indentId,'ST-BHARATI',indentAsset,qtyReq,'CRITICAL','DRAFT','FIELD_OP_01',ts);
 fieldDb.prepare('INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)').run(ulid(),'FIELD_OP_01','INDENT_CREATE','indents',null,JSON.stringify(indent),ts);
-fieldDb.prepare('INSERT INTO outbox VALUES (?,?,?,?,?,?,?,?,?,?)').run(indentUlid,deviceId,'indents',indentId,'UPSERT',encode(indent),0,0,ts,'PENDING');
+fieldDb.prepare('INSERT INTO outbox (ulid,device_id,entity,entity_id,op,patch,base_version,retry_count,created_at,status) VALUES (?,?,?,?,?,?,?,?,?,?)').run(indentUlid,deviceId,'indents',indentId,'UPSERT',encode(indent),0,0,ts,'PENDING');
 fieldDb.exec('COMMIT');
 frames.push({ulid:indentUlid, device_id:deviceId, entity:'indents', entity_id:indentId, op:'UPSERT', patch:indent, base_version:0, ts});
 console.log(`   indent DRAFT ${indentId.slice(0,8)} for ${indentAsset} qty ${qtyReq} CRITICAL ulid=${indentUlid.slice(0,8)}`);
@@ -107,7 +107,7 @@ if(isExpired(expiredRow.expiry_date)){
   fieldDb.prepare('UPDATE assets SET qty=?,version=?,updated_at=? WHERE id=?').run(newQty,newVer,patch.updated_at,'A99');
   fieldDb.prepare('INSERT INTO transactions VALUES (?,?,?,?,?,?,?)').run(ulid(),'A99','CONSUME',-1,'STATION_LEAD',ts,'PENDING');
   fieldDb.prepare('INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)').run(ulid(),'STATION_LEAD','CONSUME_OVERRIDE_EXPIRED','assets',JSON.stringify({qty:r.qty, expired: expiredRow.expiry_date}),JSON.stringify(patch),ts);
-  fieldDb.prepare('INSERT INTO outbox VALUES (?,?,?,?,?,?,?,?,?,?)').run(outUlid,deviceId,'assets','A99','UPSERT',encode(patch),r.version,0,ts,'PENDING');
+  fieldDb.prepare('INSERT INTO outbox (ulid,device_id,entity,entity_id,op,patch,base_version,retry_count,created_at,status) VALUES (?,?,?,?,?,?,?,?,?,?)').run(outUlid,deviceId,'assets','A99','UPSERT',encode(patch),r.version,0,ts,'PENDING');
   fieldDb.exec('COMMIT');
   frames.push({ulid:outUlid, device_id:deviceId, entity:'assets', entity_id:'A99', op:'UPSERT', patch, base_version:r.version, ts});
   console.log(`   → with STATION_LEAD override: CONSUME -1 ${expiredRow.sku} ${r.qty}->${newQty} audit OVERRIDE ✓`);
@@ -201,7 +201,7 @@ if(fieldStatusAfterDispatch!=='DISPATCHED') throw new Error('duplex push for DIS
 const recvUlid=ulid(); const recvPatch={status:'RECEIVED', id:indentId}; const tsRecv=new Date().toISOString();
 checkDb.prepare('UPDATE indents SET status=? WHERE id=?').run('RECEIVED', indentId);
 checkDb.prepare('INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)').run(ulid(),'FIELD_OP_01','INDENT_RECEIVED','indents',JSON.stringify({status:'DISPATCHED'}),JSON.stringify({status:'RECEIVED'}),tsRecv);
-checkDb.prepare('INSERT INTO outbox VALUES (?,?,?,?,?,?,?,?,?,?)').run(recvUlid,deviceId,'indents',indentId,'UPSERT',encode(recvPatch),0,0,tsRecv,'PENDING');
+checkDb.prepare('INSERT INTO outbox (ulid,device_id,entity,entity_id,op,patch,base_version,retry_count,created_at,status) VALUES (?,?,?,?,?,?,?,?,?,?)').run(recvUlid,deviceId,'indents',indentId,'UPSERT',encode(recvPatch),0,0,tsRecv,'PENDING');
 checkDb.close();
 console.log('   field RECEIVED + outbox', recvUlid.slice(0,8));
 ws.send(toWire({ulid:recvUlid, device_id:deviceId, entity:'indents', entity_id:indentId, op:'UPSERT', patch:recvPatch, base_version:0, ts:tsRecv}, PSK_HEX));
