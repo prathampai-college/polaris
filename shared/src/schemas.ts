@@ -36,14 +36,15 @@ export const telemetrySchema = z.object({
 export const deltaFrameSchema = z.object({
   type: z.literal('DELTA').optional(),
   ulid: z.string().length(26), device_id: z.string(), entity: z.string(), entity_id: z.string(),
-  op: z.enum(['UPSERT','DELETE']), patch: z.record(z.unknown()), base_version: z.number().int().min(0), ts: z.string()
+  op: z.enum(['UPSERT','DELETE','CONSUME','IN','OUT','ADJUST']), patch: z.record(z.unknown()), base_version: z.number().int().min(0), ts: z.string(),
+  vector_clock: z.record(z.number()).optional(), local_coord: z.array(z.number()).optional()
 });
 
 export const downstreamDeltaSchema = z.object({
   type: z.literal('DOWNSTREAM_DELTA'),
   ulid: z.string().length(26),
   station_id: z.string(),
-  entity: z.enum(['indents', 'assets', 'telemetry']),
+  entity: z.enum(['indents', 'assets', 'telemetry', 'vessels']),
   entity_id: z.string(),
   op: z.enum(['UPSERT', 'STATUS_CHANGE', 'DELETE']),
   patch: z.record(z.unknown()),
