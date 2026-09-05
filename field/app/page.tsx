@@ -23,9 +23,8 @@ import { ScanTab } from '../components/tabs/ScanTab';
 import { IndentsTab } from '../components/tabs/IndentsTab';
 import { LocateTab } from '../components/tabs/LocateTab';
 
-const HQ_URL =
-  process.env.NEXT_PUBLIC_HQ_URL?.replace('ws', 'http').replace('8787', '8000') ||
-  'http://localhost:8000';
+import { toHttpUrl } from '@shared/url.js';
+const HQ_URL = process.env.NEXT_PUBLIC_HQ_URL || toHttpUrl(process.env.NEXT_PUBLIC_GATEWAY_URL || 'ws://localhost:8787');
 
 type Tab = 'today' | 'inventory' | 'scan' | 'indents' | 'locate';
 

@@ -11,6 +11,8 @@ export * from './power.js';
 export * from './local_map.js';
 export * from './wire.js';
 export * from './snn-config.js';
+export * from './filters.js';
+export * from './url.js';
 export * from './dtn/vector_clock.js';
 export * from './dtn/bundle.js';
 export * from './dtn/resolve.js';
