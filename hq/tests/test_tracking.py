@@ -1,4 +1,5 @@
-import pathlib
+import pathlib, sys, os
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent))
 
 def test_tracking_update():
     pass
