@@ -404,6 +404,30 @@ async def telemetry_stream():
         "X-Accel-Buffering": "no",
     })
 
+def _auto_indent(conn, station_id: str, asset_id: str, qty_needed: float, creator: str, audit_action: str, audit_detail: str, suffix: str, now: str):
+    exists = _fetch_one("SELECT 1 as c FROM indents WHERE asset_id=? AND station_id=? AND status IN ('DRAFT','APPROVED','DISPATCHED')", (asset_id, station_id))
+    if exists:
+        return
+    try:
+        from ulid import ULID
+        iid = str(ULID())
+    except Exception:
+        iid = str(uuid.uuid4())[:8] + suffix
+    if USE_PG:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(q("INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, station_id, asset_id, qty_needed, "CRITICAL", "DRAFT", creator, now, None))
+                cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (iid, creator, audit_action, "indents", None, audit_detail, now))
+    else:
+        conn.execute("INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?)", (iid, station_id, asset_id, qty_needed, "CRITICAL", "DRAFT", creator, now, None))
+        conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (iid, creator, audit_action, "indents", None, audit_detail, now))
+        conn.commit()
+    notify_gateway(station_id, "indents", iid, "UPSERT", {
+        "id": iid, "station_id": station_id, "asset_id": asset_id,
+        "qty_requested": qty_needed, "urgency": "CRITICAL", "status": "DRAFT",
+        "created_by": creator, "created_at": now
+    })
+
 def check_and_escalate(station_id: str, tele):
     conn=get_conn()
     row=_fetch_one("SELECT id, qty FROM assets WHERE sku='FUEL-DIESEL-001' LIMIT 1")
@@ -413,70 +437,14 @@ def check_and_escalate(station_id: str, tele):
     crew=cr["winter_crew_count"] if cr else 24
     phys,res,total,used=predict_total(tele.temp_outside, tele.wind_speed, tele.pressure, crew, tele.dg_load, station_id)
     days=qty/total if total>0 else 999
-    try:
-        utc = datetime.UTC
-    except AttributeError:
-        utc = datetime.timezone.utc
-    now=datetime.datetime.now(utc).isoformat()
+    now=utc_now()
     if days <= 20:
-        exists=_fetch_one("SELECT 1 as c FROM indents WHERE asset_id=? AND station_id=? AND status IN ('DRAFT','APPROVED','DISPATCHED')", (asset_id, station_id))
-        if not exists:
-            try:
-                from ulid import ULID
-                iid=str(ULID())
-            except Exception:
-                iid=str(uuid.uuid4())[:8]+"-auto"
-            if USE_PG:
-                with conn:
-                    with conn.cursor() as cur:
-                        cur.execute(q("INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, station_id, asset_id, 500, "CRITICAL", "DRAFT", "FORECAST_AUTO", now, None))
-                        cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (iid, "FORECAST_AUTO", "INDENT_AUTO_CRITICAL", "indents", None, f"forecast {days:.1f}d", now))
-            else:
-                conn.execute("INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?)", (iid, station_id, asset_id, 500, "CRITICAL", "DRAFT", "FORECAST_AUTO", now, None))
-                conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (iid, "FORECAST_AUTO", "INDENT_AUTO_CRITICAL", "indents", None, f"forecast {days:.1f}d", now))
-                conn.commit()
-            notify_gateway(station_id, "indents", iid, "UPSERT", {
-                "id": iid,
-                "station_id": station_id,
-                "asset_id": asset_id,
-                "qty_requested": 500,
-                "urgency": "CRITICAL",
-                "status": "DRAFT",
-                "created_by": "FORECAST_AUTO",
-                "created_at": now
-            })
-
+        _auto_indent(conn, station_id, asset_id, 500, "FORECAST_AUTO", "INDENT_AUTO_CRITICAL", f"forecast {days:.1f}d", "-auto", now)
     # Phase 4: Acoustic Prognostics Escalation
     if getattr(tele, 'acoustic_anomaly', 0.0) > 0.90:
         row = _fetch_one("SELECT id FROM assets WHERE sku='SPARE-BRG-6205-007' LIMIT 1")
         if row:
-            brg_id = row["id"]
-            exists = _fetch_one("SELECT 1 as c FROM indents WHERE asset_id=? AND station_id=? AND status IN ('DRAFT','APPROVED','DISPATCHED')", (brg_id, station_id))
-            if not exists:
-                try:
-                    from ulid import ULID
-                    iid = str(ULID())
-                except Exception:
-                    iid = str(uuid.uuid4())[:8]+"-ac"
-                if USE_PG:
-                    with conn:
-                        with conn.cursor() as cur:
-                            cur.execute(q("INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, station_id, brg_id, 4, "CRITICAL", "DRAFT", "ACOUSTIC_AI", now, None))
-                            cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (iid, "ACOUSTIC_AI", "INDENT_ACOUSTIC_CRITICAL", "indents", None, "bearing whine > 90%", now))
-                else:
-                    conn.execute("INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?)", (iid, station_id, brg_id, 4, "CRITICAL", "DRAFT", "ACOUSTIC_AI", now, None))
-                    conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (iid, "ACOUSTIC_AI", "INDENT_ACOUSTIC_CRITICAL", "indents", None, "bearing whine > 90%", now))
-                    conn.commit()
-                notify_gateway(station_id, "indents", iid, "UPSERT", {
-                    "id": iid,
-                    "station_id": station_id,
-                    "asset_id": brg_id,
-                    "qty_requested": 4,
-                    "urgency": "CRITICAL",
-                    "status": "DRAFT",
-                    "created_by": "ACOUSTIC_AI",
-                    "created_at": now
-                })
+            _auto_indent(conn, station_id, row["id"], 4, "ACOUSTIC_AI", "INDENT_ACOUSTIC_CRITICAL", "bearing whine > 90%", "-ac", now)
 
 
 @app.get("/forecast/{station_id}")
