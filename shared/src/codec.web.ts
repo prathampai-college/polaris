@@ -1,6 +1,8 @@
 import { encode, decode } from '@msgpack/msgpack';
 import { crc32 } from './crc.js';
+import { MAX_WIRE_SIZE } from './wire.js';
 export { crc32 } from './crc.js';
+export { MAX_WIRE_SIZE };
 
 export function sizeReport(frame: unknown): { jsonBytes: number; msgpackBytes: number; savingPct: number } {
   const jsonBytes = new TextEncoder().encode(JSON.stringify(frame)).length;
