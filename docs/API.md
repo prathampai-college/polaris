@@ -77,7 +77,9 @@ SNN LIF event-gated `hq/app/snn_forecast.py:1` `predict_snn_total()` — if `|Δ
 
 `PATCH /indents/{id}` supports `vessel_imo` as above (validated). Dispatch flow: HQ `POST /indents` `DRAFT` → `PATCH APPROVED` → `PATCH DISPATCHED {vessel_imo:9734567}` (Sagar Nidhi) → field `DOWNSTREAM_DELTA vessels` → offline ETA `field/lib/db.ts:278`.
 
-`GET /vessels/sources` → poller health `hq/app/main.py:533` + vessel poller status.
+`GET /vessels/sources` → poller health `{mode, poll_interval_sec, ais_configured, live_enabled, cache, last}` `hq/app/main.py:533` `hq/app/vessel_poller.py:11` (`LIVE_AIS_ENABLED` gate, `VESSEL_MODE`).
+
+`GET /sync/state/{device_id}` → `{device_id, last_acked_ulid, last_server_version}` `hq/app/main.py:683` (now includes `vector_clock` convergence via `_vc.py:1`).
 
 `POST /vessels/poll` → manual trigger `hq/app/main.py:541` `poll_once()`.
 
@@ -89,7 +91,7 @@ SNN LIF event-gated `hq/app/snn_forecast.py:1` `predict_snn_total()` — if `|Δ
 
 `GET /telemetry/history?station_id=ST-BHARATI&days=30` → `[{day, avg_temp, avg_load}]` aggregated history `hq/app/main.py:351`.
 
-`GET /telemetry/sources` → poller health `{source_setting:both|sim|imd|openmeteo, poll_interval_sec, coords, imd_configured, last_poll:{ts,results,error}}` `hq/app/main.py:354` `hq/app/telemetry_poller.py:11` (Open-Meteo free + optional IMD, `TELEMETRY_SOURCE`).
+`GET /telemetry/sources` → poller health `{source_setting:both|sim|imd|openmeteo, poll_interval_sec, coords, imd_configured, live_enabled, last_poll:{ts,results,error}}` `hq/app/main.py:354` `hq/app/telemetry_poller.py:11` (Open-Meteo free + optional IMD, `TELEMETRY_SOURCE` + `LIVE_WEATHER_ENABLED` gate).
 
 `GET /telemetry/stream` → SSE `text/event-stream` (`event: telemetry`) `hq/app/main.py:363` `asyncio.Queue` 100 keepalive 30s.
 

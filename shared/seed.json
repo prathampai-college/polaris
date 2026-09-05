@@ -26,6 +26,11 @@
     ["C5-K2", "C5", "{\"x\":1,\"y\":1}", "COLD"],
     ["C6-K1", "C6", "{\"x\":0,\"y\":0}", "AMBIENT"]
   ],
+  "procurement_targets": [
+    ["FUEL-DIESEL-001", 5000, 1200, "L", "30d before freeze"],
+    ["O2-CYL-47L-003", 30, 200, "cyl", "30d before freeze"],
+    ["SPARE-BRG-6205-007", 10, 80, "pcs", "30d before freeze"]
+  ],
   "assets": [
     ["A1", "FUEL-DIESEL-001", "Diesel (Winter Grade)", "FUEL_DIESEL", 4200, "L", null, "CRITICAL", "C1-K1", "FUEL-DIESEL-001"],
     ["A2", "FUEL-KERO-JP8-002", "Kerosene JP-8", "FUEL_KEROSENE", 1800, "L", null, "CRITICAL", "C1-K2", "FUEL-KERO-JP8-002"],

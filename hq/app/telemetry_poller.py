@@ -22,19 +22,20 @@ STATION_COORDS = {
 TELEMETRY_SOURCE = os.getenv("TELEMETRY_SOURCE", "both")  # imd|sim|both|openmeteo
 IMD_API_KEY = os.getenv("IMD_API_KEY", "")
 POLL_INTERVAL_SEC = int(os.getenv("TELEMETRY_POLL_SEC", "900"))  # 15m default
+# Explicit gate for live weather (open-meteo/IMD) — mock is default unless LIVE_WEATHER_ENABLED=true
+LIVE_WEATHER_ENABLED = os.getenv("LIVE_WEATHER_ENABLED", os.getenv("WEATHER_LIVE_ENABLED", "false")).lower() in ("1", "true", "yes", "on")
 HQ_INTERNAL_URL = os.getenv("HQ_INTERNAL_URL", "http://localhost:8000")
 
 _last_poll: dict = {"ts": None, "results": {}, "error": None}
 _poller_task: asyncio.Task | None = None
 
 def _dg_load_for_now() -> float:
-    try:
-        hour = datetime.datetime.now(datetime.timezone.utc).hour
-    except Exception:
-        hour = datetime.datetime.utcnow().hour
+    hour = datetime.datetime.now(datetime.timezone.utc).hour
     return round(0.7 + 0.1 * math.sin(hour * math.pi / 12), 3)
 
 async def fetch_open_meteo(station_id: str) -> dict | None:
+    if not LIVE_WEATHER_ENABLED:
+        return None
     coords = STATION_COORDS.get(station_id)
     if not coords:
         return None
@@ -59,7 +60,7 @@ async def fetch_open_meteo(station_id: str) -> dict | None:
         return None
 
 async def fetch_imd(station_id: str) -> dict | None:
-    if not IMD_API_KEY:
+    if not LIVE_WEATHER_ENABLED or not IMD_API_KEY:
         return None
     # Placeholder IMD branch — real endpoint when key provisioned
     # Example: https://mausam.imd.gov.in/api/... (not yet public, stub)
@@ -222,5 +223,6 @@ def get_status() -> dict:
         "poll_interval_sec": POLL_INTERVAL_SEC,
         "coords": STATION_COORDS,
         "imd_configured": bool(IMD_API_KEY),
+        "live_enabled": LIVE_WEATHER_ENABLED,
         "last_poll": _last_poll,
     }

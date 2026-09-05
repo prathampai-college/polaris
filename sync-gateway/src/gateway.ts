@@ -104,8 +104,11 @@ const server = http.createServer(async (req, res) => {
     // ponytail: gateway internal endpoint must be authenticated — check PSK header (HQ -> gateway)
     const hdr = (req.headers['x-psk'] as string) || (req.headers['x-internal-psk'] as string) || '';
     const expected = process.env.PSK_HEX || process.env.INTERNAL_PSK_HEX || PSK_HEX;
-    if (hdr && hdr !== expected) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'invalid psk' })); return; }
-    // also allow same-origin without header when inside docker network (HQ_URL), but log
+    // BUGFIX: require PSK header (was `hdr && hdr!==expected` → empty header bypassed auth)
+    if (expected && hdr !== expected) {
+      log('warn', 'broadcast_delta unauthorized psk mismatch', { hasHdr: !!hdr });
+      res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'invalid psk' })); return;
+    }
     try {
       const body = await readJson(req);
 

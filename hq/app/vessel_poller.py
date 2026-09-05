@@ -16,6 +16,8 @@ AIS_API_KEY = os.getenv("AIS_API_KEY", "")
 VESSEL_MODE = os.getenv("VESSEL_MODE", "auto").lower()  # auto | live | mock
 VESSEL_POLL_SEC = int(os.getenv("VESSEL_POLL_SEC", "900"))
 VESSEL_CACHE = pathlib.Path(os.getenv("VESSEL_CACHE", "/tmp/ais_cache.json"))
+# Explicit gate: live AIS only when AIS_ENABLED=true (avoids quota burn in demo/mock)
+LIVE_AIS_ENABLED = os.getenv("LIVE_AIS_ENABLED", os.getenv("AIS_ENABLED", "false")).lower() in ("1", "true", "yes", "on")
 
 _last = {"ts": None, "source": None, "results": [], "error": None}
 _task: asyncio.Task | None = None
@@ -118,6 +120,8 @@ _last_live_fetch: float = 0.0
 
 async def _fetch_live():
     global _last_live_fetch
+    if not LIVE_AIS_ENABLED:
+        return None, "live_disabled"
     if not AIS_API_KEY:
         return None, "no_key"
     # Enforce AISHub 1/min throttle (spec: Don't access more frequently than once per minute)
@@ -322,4 +326,4 @@ def start_poller():
     return _task
 
 def get_status():
-    return {"mode": VESSEL_MODE, "poll_interval_sec": VESSEL_POLL_SEC, "ais_configured": bool(AIS_API_KEY), "cache": str(VESSEL_CACHE), "last": _last}
+    return {"mode": VESSEL_MODE, "poll_interval_sec": VESSEL_POLL_SEC, "ais_configured": bool(AIS_API_KEY), "live_enabled": LIVE_AIS_ENABLED, "cache": str(VESSEL_CACHE), "last": _last}
