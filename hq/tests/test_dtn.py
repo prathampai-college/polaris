@@ -1,3 +1,5 @@
+import pathlib, sys, os
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent))
 from hq.app.dtn import compare_vc, merge_vc
 
 def test_vc_concurrent():

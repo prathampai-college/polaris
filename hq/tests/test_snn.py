@@ -1,5 +1,7 @@
+import pathlib, sys, os
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent))
 from hq.app.snn_forecast import predict_snn_total, reset_snn
-import pathlib, json
+import json
 
 def test_snn_gating():
     reset_snn()
