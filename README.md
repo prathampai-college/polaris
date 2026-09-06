@@ -515,7 +515,7 @@ Codebase has been incrementally simplified across 7 phases (each a separate comm
 - **Phase 3** `hq/app/main.py:407` `_auto_indent()` collapses diesel/bearing 50-line dup
 - **Phase 4** `shared/src/snn-config.ts:1` single SNN thresholds, `field/lib/db.ts:216` `withTx()` helper, `field/lib/snn/engine.ts:1` imports shared
 - **Phase 5** `sync-gateway/src/gateway.ts:15` `readJson()` + `field/lib/dtn/store.ts:31` SQL expiry, wire budget from shared
-- **Phase 6** `shared/src/filters.ts:1` `filterByStation()`, `shared/src/url.ts:1` `toHttpUrl()`, `shared/components/Container3D.tsx:1` canonical 3D twin (field/hq wrappers `legendVariant`)
+- **Phase 6** `shared/src/filters.ts:1` `filterByStation()`, `shared/src/url.ts:1` `toHttpUrl()`, specs centralized in `@polaris/shared/containers.js` (`CONTAINER_SPECS`/`CRATE_COORDS`)
 - **Phase 7** `hq/app/config.py:11` removes dead `DEMO_FORECAST`
 - **Follow-up** station-scoped `check_and_escalate` fix, gateway PSK strict `hdr!==expected`, `field/lib/db.ts:25` `sync_state.vector_clock` migration, `shared/seed.json` procurement single source, `LIVE_*` gating.
 
