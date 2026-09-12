@@ -1,33 +1,20 @@
 #!/usr/bin/env node
 // M1 Chaos verification: offline 5 writes → reconnect → HQ convergence + dedupe + CRC + size budget
-import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { encode, decode } from '@msgpack/msgpack';
+import { encode } from '@msgpack/msgpack';
 import { ulid } from 'ulid';
-import WebSocket from 'ws';
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { PSK_HEX, toWire, fromWire, cleanDbs, waitForHQ, spawnHQ, spawnGateway, connectWs } from './_harness.mjs';
 
-const PSK_HEX = 'a'.repeat(64);
 const HQ_PORT = 8765;
 const GW_PORT = 8787;
 const FIELD_DB = path.join(os.tmpdir(), 'polaris-field-test.db');
 const HQ_DB = path.resolve('hq/app/hq.db');
 
-// clean previous
-try { fs.unlinkSync(FIELD_DB); } catch {}
-try { fs.unlinkSync(HQ_DB); } catch {}
-try { fs.unlinkSync(HQ_DB+'-wal'); } catch {}
-try { fs.unlinkSync(HQ_DB+'-shm'); } catch {}
-
-function crc32(buf){ const t=new Uint32Array(256); for(let i=0;i<256;i++){ let c=i; for(let k=0;k<8;k++) c=(c&1)?0xEDB88320^(c>>>1):c>>>1; t[i]=c;} let crc=0xFFFFFFFF; for(let i=0;i<buf.length;i++) crc=t[(crc^buf[i])&0xFF]^(crc>>>8); return (crc^0xFFFFFFFF)>>>0; }
-function encrypt(plain, keyHex){ const key=Buffer.from(keyHex,'hex'); const nonce=randomBytes(12); const c=createCipheriv('aes-256-gcm', key, nonce); const enc=Buffer.concat([c.update(plain), c.final()]); const tag=c.getAuthTag(); return Buffer.concat([nonce, enc, tag]); }
-function decrypt(frame, keyHex){ const key=Buffer.from(keyHex,'hex'); const nonce=frame.subarray(0,12); const tag=frame.subarray(frame.length-16); const ct=frame.subarray(12, frame.length-16); const d=createDecipheriv('aes-256-gcm', key, nonce); d.setAuthTag(tag); return Buffer.concat([d.update(ct), d.final()]); }
-function toWire(frame, keyHex){ const mp=encode(frame); const enc=encrypt(mp, keyHex); const crc=crc32(enc); const out=new Uint8Array(4+enc.length); new DataView(out.buffer).setUint32(0,crc,false); out.set(enc,4); return out; }
-function fromWire(wire, keyHex){ const crcExpected=new DataView(wire.buffer, wire.byteOffset, 4).getUint32(0,false); const enc=wire.subarray(4); const crcActual=crc32(enc); if(crcActual!==crcExpected) throw new Error('CRC mismatch'); const mp=decrypt(enc, keyHex); return decode(mp); }
+cleanDbs([FIELD_DB, HQ_DB, HQ_DB+'-wal', HQ_DB+'-shm']);
 
 const schema = fs.readFileSync('shared/sql/schema.sql','utf8');
 
@@ -96,20 +83,16 @@ console.log(`   outbox after reopen PENDING=${outboxAfter} (must survive)`);
 fieldDb2.close();
 
 console.log('3) start HQ FastAPI + Gateway ...');
-const hqProc=spawn('python', ['-m','uvicorn','hq.app.main:app','--port',String(HQ_PORT),'--log-level','warning'], { env:{...process.env}, cwd: process.cwd(), stdio:['ignore','pipe','pipe'] });
-let hqReady=false;
+const hqProc=spawnHQ(HQ_PORT);
 hqProc.stdout.on('data', d=>process.stdout.write('[hq] '+d));
 hqProc.stderr.on('data', d=>process.stdout.write('[hq-err] '+d));
-for(let i=0;i<30;i++){ await sleep(300); try{ const r=await fetch(`http://localhost:${HQ_PORT}/health`); if(r.ok){ hqReady=true; console.log('   HQ ready', await r.json()); break; } }catch{} }
-if(!hqReady) throw new Error('HQ failed to start');
-const gwProc=spawn('node', ['sync-gateway/dist/gateway.js'], { env:{...process.env, HQ_URL:`http://localhost:${HQ_PORT}`, GATEWAY_PORT:String(GW_PORT), PSK_HEX}, stdio:['ignore','pipe','pipe'] });
+console.log('   HQ ready', await waitForHQ(HQ_PORT));
+const gwProc=await spawnGateway(GW_PORT, HQ_PORT);
 gwProc.stdout.on('data', d=>process.stdout.write('[gw] '+d));
 gwProc.stderr.on('data', d=>process.stdout.write('[gw-err] '+d));
-await sleep(800);
 
 console.log('4) Chaos Test 1: drain outbox over WebSocket (20kbps simulated by small frames) ...');
-const ws=new WebSocket(`ws://localhost:${GW_PORT}`);
-await new Promise((res, rej)=>{ ws.on('open', res); ws.on('error', rej); setTimeout(()=>rej(new Error('ws timeout')),5000); });
+const ws=await connectWs(GW_PORT);
 console.log('   ws connected');
 let acks=[];
 ws.on('message', (data)=>{

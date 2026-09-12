@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 // M4 Chaos Harness: 3 tests + budgets + RBAC + AES + audit replay (PLAN §10 Compliance)
-import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -8,20 +7,12 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { encode } from '@msgpack/msgpack';
 import { ulid } from 'ulid';
-import WebSocket from 'ws';
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { PSK_HEX as PSK, toWire, fromWire, cleanDbs, waitForHQ, spawnHQ, spawnGateway, connectWs } from './_harness.mjs';
 
-const PSK='a'.repeat(64), HQ_PORT=8771, GW_PORT=8791;
+const HQ_PORT=8771, GW_PORT=8791;
 const FIELD_DB = path.join(os.tmpdir(), 'polaris-m4.db');
 const HQ_DB = path.resolve('hq/app/hq.db');
-for(const f of [FIELD_DB,HQ_DB,HQ_DB+'-wal',HQ_DB+'-shm']) try{fs.unlinkSync(f);}catch{}
-function crc32(b){const t=new Uint32Array(256);for(let i=0;i<256;i++){let c=i;for(let k=0;k<8;k++)c=(c&1)?0xEDB88320^(c>>>1):c>>>1;t[i]=c;}let crc=0xFFFFFFFF;for(let i=0;i<b.length;i++)crc=t[(crc^b[i])&0xFF]^(crc>>>8);return (crc^0xFFFFFFFF)>>>0;}
-function enc(p,k){const key=Buffer.from(k,'hex');const n=randomBytes(12);const c=createCipheriv('aes-256-gcm',key,n);const e=Buffer.concat([c.update(p),c.final()]);return Buffer.concat([n,e,c.getAuthTag()]);}
-function dec(f,k){const key=Buffer.from(k,'hex');const n=f.subarray(0,12);const tag=f.subarray(f.length-16);const ct=f.subarray(12,f.length-16);const d=createDecipheriv('aes-256-gcm',key,n);d.setAuthTag(tag);return Buffer.concat([d.update(ct),d.final()]);}
-function toWire(fr){const mp=encode(fr);const e=enc(mp,PSK);const crc=crc32(e);const o=new Uint8Array(4+e.length);new DataView(o.buffer).setUint32(0,crc,false);o.set(e,4);return o;}
-import { decode } from '@msgpack/msgpack';
-function fromWire(w){const ce=new DataView(w.buffer,w.byteOffset,4).getUint32(0,false);const e=w.subarray(4);if(crc32(e)!==ce)throw new Error('CRC mismatch');return decode(dec(e,PSK));}
-
+cleanDbs([FIELD_DB, HQ_DB, HQ_DB+'-wal', HQ_DB+'-shm']);
 const schema=fs.readFileSync('shared/sql/schema.sql','utf8');
 console.log('=== M4 CHAOS HARNESS ===');
 console.log('Profile: 20 kbps / 500ms / 5% loss (throttled), WAL, dedupe, budgets, RBAC/AES, audit');
@@ -63,7 +54,6 @@ console.log(`  polaris.db ${dbsize} bytes ${(dbsize/1024).toFixed(1)}KB budget <
 // 10k txn size test (simulate)
 const tmpDB = path.join(os.tmpdir(), 'polaris-10k.db'); try{fs.unlinkSync(tmpDB);}catch{}
 const tdb=new DatabaseSync(tmpDB); tdb.exec(schema);
-tdb.prepare('INSERT OR IGNORE INTO stations VALUES (?,?,?,?,?)'.replace('VALUES (?,?,?,?,?)','VALUES (\'ST-BHARATI\',\'Bharati\',\'a\',24)')).run?.() ; // fallback
 try{ tdb.exec(`INSERT OR IGNORE INTO stations VALUES ('ST-BHARATI','Bharati','a',24)`);}catch{}
 tdb.exec(`INSERT OR IGNORE INTO containers VALUES ('C1','ST-BHARATI','ISO_20ft','A1')`); tdb.prepare('INSERT OR IGNORE INTO crates VALUES (?,?,?,?)').run('C1-K1','C1','{"x":0,"y":0}','AMBIENT');
 tdb.prepare('INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run('A1','FUEL-DIESEL-001','Diesel','FUEL_DIESEL',4200,'L',null,'CRITICAL','C1-K1','FUEL-DIESEL-001',1,new Date().toISOString());
@@ -86,11 +76,10 @@ console.log(`  frame JSON vs msgpack saving ${(savingSum/frames.length).toFixed(
 
 // Start HQ + GW for Test 1
 console.log('\n[Test 1] Offline 5 writes → reconnect → HQ convergence + CRC + dedupe (20kbps throttle / 500ms / 5% loss)');
-const hq=spawn('python', ['-m','uvicorn','hq.app.main:app','--port',String(HQ_PORT),'--log-level','warning'], {cwd:process.cwd(), stdio:['ignore','pipe','pipe']});
-for(let i=0;i<30;i++){await sleep(300); try{const r=await fetch(`http://localhost:${HQ_PORT}/health`); if(r.ok) break;}catch{}}
-const gw=spawn('node',['sync-gateway/dist/gateway.js'],{env:{...process.env, HQ_URL:`http://localhost:${HQ_PORT}`, GATEWAY_PORT:String(GW_PORT), PSK_HEX:PSK}, stdio:['ignore','pipe','pipe']});
-await sleep(800);
-const ws=new WebSocket(`ws://localhost:${GW_PORT}`); await new Promise((res,rej)=>{ws.on('open',res); ws.on('error',rej); setTimeout(()=>rej(new Error('ws timeout')),5000);});
+const hq=spawnHQ(HQ_PORT);
+await waitForHQ(HQ_PORT);
+const gw=await spawnGateway(GW_PORT, HQ_PORT);
+const ws=await connectWs(GW_PORT);
 let acks=[]; ws.on('message', d=>{try{const a=fromWire(new Uint8Array(d)); acks.push(a);}catch{}});
 // throttle at 20kbps ~ 2560 B/s, each 250B frame ~100ms + 500ms latency sim via sleep
 for(const f of frames){

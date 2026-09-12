@@ -1,28 +1,19 @@
 #!/usr/bin/env node
 // M2 verify: full logistics workflow scan->consume->indent->approve->dispatch->receive + QR + expiry + audit + overview
-import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { encode, decode } from '@msgpack/msgpack';
+import { encode } from '@msgpack/msgpack';
 import { ulid } from 'ulid';
-import WebSocket from 'ws';
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { PSK_HEX, toWire, fromWire, cleanDbs, waitForHQ, spawnHQ, spawnGateway, connectWs } from './_harness.mjs';
 
-const PSK_HEX='a'.repeat(64);
 const HQ_PORT=8766;
 const GW_PORT=8788;
 const FIELD_DB = path.join(os.tmpdir(), 'polaris-field-m2.db');
 const HQ_DB = path.resolve('hq/app/hq.db');
-for(const f of [FIELD_DB, HQ_DB, HQ_DB+'-wal', HQ_DB+'-shm']) try{fs.unlinkSync(f);}catch{}
-function crc32(buf){const t=new Uint32Array(256);for(let i=0;i<256;i++){let c=i;for(let k=0;k<8;k++)c=(c&1)?0xEDB88320^(c>>>1):c>>>1;t[i]=c;}let crc=0xFFFFFFFF;for(let i=0;i<buf.length;i++)crc=t[(crc^buf[i])&0xFF]^(crc>>>8);return (crc^0xFFFFFFFF)>>>0;}
-function encrypt(p,k){const key=Buffer.from(k,'hex');const n=randomBytes(12);const c=createCipheriv('aes-256-gcm',key,n);const e=Buffer.concat([c.update(p),c.final()]);return Buffer.concat([n,e,c.getAuthTag()]);}
-function decrypt(f,k){const key=Buffer.from(k,'hex');const n=f.subarray(0,12);const tag=f.subarray(f.length-16);const ct=f.subarray(12,f.length-16);const d=createDecipheriv('aes-256-gcm',key,n);d.setAuthTag(tag);return Buffer.concat([d.update(ct),d.final()]);}
-function toWire(fr,k){const mp=encode(fr);const enc=encrypt(mp,k);const crc=crc32(enc);const out=new Uint8Array(4+enc.length);new DataView(out.buffer).setUint32(0,crc,false);out.set(enc,4);return out;}
-function fromWire(w,k){const ce=new DataView(w.buffer,w.byteOffset,4).getUint32(0,false);const enc=w.subarray(4);if(crc32(enc)!==ce)throw new Error('CRC mismatch');return decode(decrypt(enc,k));}
-
+cleanDbs([FIELD_DB, HQ_DB, HQ_DB+'-wal', HQ_DB+'-shm']);
 const schema=fs.readFileSync('shared/sql/schema.sql','utf8');
 console.log('=== M2 VERIFY: Core Logistics ===');
 const fieldDb=new DatabaseSync(FIELD_DB);
@@ -126,19 +117,16 @@ console.log('   indent exists?', !!fd2.prepare('SELECT 1 FROM indents WHERE id=?
 fd2.close();
 
 console.log('\n4) Start HQ + Gateway, drain outbox over ws (msgpack+CRC+AES)...');
-const hqProc=spawn('python',['-m','uvicorn','hq.app.main:app','--port',String(HQ_PORT),'--log-level','warning'],{env:{...process.env, GATEWAY_URL:`http://localhost:${GW_PORT}`, GATEWAY_INTERNAL_URL:`http://localhost:${GW_PORT}`}, cwd:process.cwd(),stdio:['ignore','pipe','pipe']});
-
-for(let i=0;i<30;i++){await sleep(300); try{const r=await fetch(`http://localhost:${HQ_PORT}/health`); if(r.ok){console.log('   HQ ready',await r.json()); break;}}catch{}}
+const hqProc=spawnHQ(HQ_PORT, { GATEWAY_URL:`http://localhost:${GW_PORT}`, GATEWAY_INTERNAL_URL:`http://localhost:${GW_PORT}` });
+console.log('   HQ ready', await waitForHQ(HQ_PORT));
 
 // Login as STATION_LEAD for indent approval
 const loginRes=await fetch(`http://localhost:${HQ_PORT}/auth/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:'NCPOR-ADMIN-01',pin:'BHARATI-2024',station_id:'ST-BHARATI',role:'STATION_LEAD'})});
 const {token: hqToken}=await loginRes.json();
 console.log('   HQ login STATION_LEAD OK');
-const gwProc=spawn('node',['sync-gateway/dist/gateway.js'],{env:{...process.env, HQ_URL:`http://localhost:${HQ_PORT}`, GATEWAY_PORT:String(GW_PORT), PSK_HEX}, stdio:['ignore','pipe','pipe']});
+const gwProc=await spawnGateway(GW_PORT, HQ_PORT);
 gwProc.stdout.on('data',d=>process.stdout.write('[gw] '+d));
-await sleep(800);
-const ws=new WebSocket(`ws://localhost:${GW_PORT}`);
-await new Promise((res,rej)=>{ ws.on('open',res); ws.on('error',rej); setTimeout(()=>rej(new Error('ws timeout')),5000);});
+const ws=await connectWs(GW_PORT);
 console.log('   ws connected');
 
 // Send SYNC_INIT frame

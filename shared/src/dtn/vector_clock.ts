@@ -37,14 +37,3 @@ export function deserialize(s: string | null | undefined): VC {
   try { const v = JSON.parse(s); return typeof v === 'object' && v !== null ? v as VC : {}; } catch { return {}; }
 }
 
-// Deterministic LWW winner when concurrent: higher ts wins, tie-break higher nodeId lex
-export function pickWinner<T extends { ts: string; nodeId: string }>(local: T, remote: T, vcLocal: VC, vcRemote: VC): 'local' | 'remote' {
-  const c = compare(vcLocal, vcRemote);
-  if (c === 'gt') return 'local';
-  if (c === 'lt') return 'remote';
-  if (c === 'equal') return 'local';
-  // concurrent -> LWW
-  if (remote.ts > local.ts) return 'remote';
-  if (local.ts > remote.ts) return 'local';
-  return remote.nodeId > local.nodeId ? 'remote' : 'local';
-}

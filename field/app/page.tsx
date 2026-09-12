@@ -151,7 +151,7 @@ export default function FieldPage() {
         if (sr.ok) setSnn(await sr.json());
       } catch {}
       try {
-        const { listBundles } = await import('../lib/dtn/store');
+        const { listBundles } = await import('../lib/dtn/mule');
         setBundles(await listBundles());
       } catch {}
       try {

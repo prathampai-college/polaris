@@ -6,11 +6,10 @@ from typing import Any, Dict
 import os, logging, time, uuid, asyncio, json as _json
 from contextlib import asynccontextmanager
 
-from .db import init_db, get_conn, USE_PG
+from .db import init_db, get_conn, USE_PG, utc_now
 from .forecast import load_forecast_model, physics_pred, predict_total
 from .config import ALLOWED, SECRET_KEY, TOKEN_EXPIRY_DAYS, STATION_PINS
 from .auth import sign_jwt, get_current_user, require_role
-from ._time import utc_now
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("polaris.hq")
