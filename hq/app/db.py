@@ -1,4 +1,11 @@
-import os, sqlite3, pathlib, json
+import os, sqlite3, pathlib, json, datetime
+
+def utc_now() -> str:
+    try:
+        utc = datetime.UTC  # py3.11+
+    except AttributeError:
+        utc = datetime.timezone.utc
+    return datetime.datetime.now(utc).isoformat()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 USE_PG = DATABASE_URL.startswith("postgresql")

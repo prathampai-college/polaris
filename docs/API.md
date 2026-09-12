@@ -24,7 +24,7 @@ Base: `http://localhost:8000` (or `hq:8000` in Docker). All JSON. CORS via `ALLO
 
 `POST /indents` body `IndentCreate {station_id, asset_id, qty_requested, urgency:LOW|MEDIUM|CRITICAL, created_by, status=DRAFT}` → `{id, status}`. Used by HQ; field creates via sync outbox `entity=indents, op=UPSERT, vector_clock VC`. 9-col `vessel_imo` defaults NULL `hq/app/main.py:243`.
 
-`PATCH /indents/{id}` body `IndentPatch {status, actor_id, vessel_imo?}` → `{id, old, new}`. Strict `ALLOWED: DRAFT→APPROVED→DISPATCHED→RECEIVED` — no `DRAFT→RECEIVED` shortcut (except `DRAFT→RECEIVED` tolerated for offline field demo `hq/app/main.py:281`). Requires `Authorization: Bearer <JWT>` with `STATION_LEAD`+ (`require_role("STATION_LEAD")`), validates `vessel_imo` exists in `vessels` `hq/app/main.py:283`, returns `404 vessel not found` if invalid, `401`/`403` otherwise. Appends `audit_log`; triggers `notify_gateway` with `X-PSK` for downstream push (`vessel_imo` included). SQLite fallback still enforces strict.
+`PATCH /indents/{id}` body `IndentPatch {status, actor_id, vessel_imo?}` → `{id, old, new}`. Status must follow the strict machine `DRAFT → APPROVED → DISPATCHED → RECEIVED` (`hq/app/main.py:281` still tolerates a direct `DRAFT → RECEIVED` step for offline field demos). Requires `Authorization: Bearer <JWT>` with `STATION_LEAD`+ (`require_role("STATION_LEAD")`), validates `vessel_imo` exists in `vessels` `hq/app/main.py:283`, returns `404 vessel not found` if invalid, `401`/`403` otherwise. Appends `audit_log`; triggers `notify_gateway` with `X-PSK` for downstream push (`vessel_imo` included). SQLite fallback still enforces strict.
 
 ## Stations & Forecast
 
@@ -105,7 +105,7 @@ Whiteout demo: `visibility 0.8m` → camera `[]`, LiDAR still tracks `err <0.8m`
 
 ## DTN (Delay-Tolerant Muling)
 
-`POST /dtn/ingest_bulk` body `{bundles:[{bundleId, src, dstStation, vectorClock, payload:{entity,entity_id,op,patch}}]}` → `{results:[{bundleId,status,cmp}]}`, `count` `hq/app/main.py:844`. Handler `hq/app/dtn.py:1` `ingest_bundle()` — `assets` `compare_vc()` → `gt→APPLIED_LOCAL_WINS`, `concurrent→LWW ts`, else `merge_vc` → `UPDATE assets vector_clock`. `dedupe(bundleId)` + `dtn_bundles` audit. Rate not limited (mule batch).
+`POST /dtn/ingest_bulk` body `{bundles:[{bundleId, src, dstStation, vectorClock, payload:{entity,entity_id,op,patch}}]}` → `{results:[{bundleId,status,cmp}]}`, `count` `hq/app/main.py:844`. The handler `hq/app/dtn.py:1` (`ingest_bundle()`) compares vector clocks for `assets` — `gt` answers `APPLIED_LOCAL_WINS`, `concurrent` breaks ties on wall-clock timestamps, and anything else merges with `merge_vc` into `UPDATE assets vector_clock`. Every bundle is deduplicated by `bundleId` and audited into `dtn_bundles`. Mule batches are not rate-limited.
 
 `GET /dtn/bundles?dst_station=ST-BHARATI&limit=50` → `DtnBundle[] {bundle_id, src, dst_station, vc, custody, created_at, ttl}` `hq/app/main.py:844`.
 
@@ -123,17 +123,17 @@ Gateway: `POST /dtn/exchange` → `HQ /dtn/ingest_bulk` `sync-gateway/src/gatewa
 
 `POST /sync/ingest` body `DeltaFrame {ulid(26), device_id, entity:assets|indents|vessels|telemetry|stations|containers|crates, entity_id, op:UPSERT|CONSUME|IN|OUT|ADJUST|DELETE, patch:Record, base_version:int, ts, vector_clock?:VC, local_coord?:[x,y,theta]}` `hq/app/main.py:718`.
 
-- Wire-level `PSK_HEX` validated `64 hex` (32B) via `hexToBytes`/`assertKeyHex` — odd/invalid hex rejected, `DataView` byteOffset-safe. `toWire` = `[4B CRC BE][12B nonce||ciphertext||16B tag]` msgpack+AES-GCM (GCM tag is integrity, CRC is framing). `>2KB` frame returns `{status:"FAILED", message:"frame >2048"}` instead of silent drop `sync-gateway/src/gateway.ts:6`.
-- Dedupe: if `ulid` in `dedupe` → `{status:"DEDUPED", server_version}`.
-- Assets: `qty<0` → `{status:"CONFLICT_CRITICAL", server_version, message:"would go negative"}`. Else apply `qty,version,vector_clock` merge via `compare_vc`/`merge_vc` LWW+VC `hq/app/dtn.py:1` → `APPLIED` or `APPLIED_LOCAL_WINS` `hq/app/main.py:782`. Else `DEDUPED`.
-- Indents: upsert `indents` row or status+vessel_imo patch (strict), dedupe, audit `SYNC_INDENT_*` `hq/app/main.py:734`. Supports `vessel_imo` `hq/app/main.py:734` + `vector_clock` in `DeltaFrame`.
-- Vessels: downstream `DOWNSTREAM_DELTA vessels` via `applyDownstreamVessel` `field/lib/db.ts:278`.
-- SNN: no separate sync — via `forecast/snn`.
+- At the wire level, `PSK_HEX` is validated as 64 hex characters (32 bytes) through `hexToBytes`/`assertKeyHex` — odd-length or non-hex input is rejected — and every `DataView` access is `byteOffset`-safe. `toWire` = `[4B CRC BE][12B nonce||ciphertext||16B tag]` msgpack+AES-GCM (GCM tag is integrity, CRC is framing). A frame over 2 KB returns `{status: "FAILED", message: "frame >2048"}` instead of being silently dropped (`sync-gateway/src/gateway.ts:6`).
+- Deduplication: when the `ulid` already exists in `dedupe`, the response is `{status: "DEDUPED", server_version}`.
+- Assets: a negative `qty` returns `{status: "CONFLICT_CRITICAL", server_version, message: "would go negative"}`; otherwise the patch merges `qty`, `version`, and `vector_clock` through `compare_vc`/`merge_vc` (LWW plus vector clocks, `hq/app/dtn.py:1`) and returns `APPLIED` or `APPLIED_LOCAL_WINS` (`hq/app/main.py:782`). Replays return `DEDUPED`.
+- Indents arrive as full-row upserts or strict status-plus-`vessel_imo` patches, deduplicated and audited as `SYNC_INDENT_*` (`hq/app/main.py:734`); `DeltaFrame` may carry `vessel_imo` and `vector_clock`.
+- Vessel positions flow downstream as `DOWNSTREAM_DELTA vessels` through `applyDownstreamVessel` (`field/lib/db.ts:278`).
+- SNN state needs no separate sync — it travels inside `forecast/snn`.
 - Gateway validates CRC+decrypt+zod before `POST /sync/ingest`, returns `toWire({ulid,status,server_version,reason})`, logs `jsonBytes vs msgpackBytes` via `sizeReport` (shared).
 
 Errors: `400` ulid length / entity / op allowlist, `404 asset/vessel not found`, `413 patch >2KB`, `500` with rollback.
 
-`GET /sync/ingest` rate-limited `600/min` per `device_id` (`_rate_store` in-memory, 1000-key bound) `hq/app/main.py:689`.
+`POST /sync/ingest` is rate-limited to 600 requests per minute per `device_id` (an in-memory `_rate_store` bounded at 1,000 keys, `hq/app/main.py:689`).
 
 `GET /sync/state/{device_id}` also includes `vector_clock` convergence.
 
@@ -149,11 +149,11 @@ Errors: `400` ulid length / entity / op allowlist, `404 asset/vessel not found`,
 
 ## Errors
 
-Standard FastAPI `HTTPException` JSON `{detail: string, request_id}`. Security headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `CSP default-src 'self'`, `Cache-Control: no-store`. All writes append `audit_log` + `dedupe` + `vector_clock`. Idempotency via `ulid` + `dedupe` + `vector_clock` merge.
+Errors follow the standard FastAPI shape: `HTTPException` rendered as JSON `{detail, request_id}`. Security headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `CSP default-src 'self'`, `Cache-Control: no-store`. All writes append `audit_log` + `dedupe` + `vector_clock`. Idempotency via `ulid` + `dedupe` + `vector_clock` merge.
 
 ## Wire
 
-Field `SyncWorker` (`field/lib/sync.ts:13`) maintains full-duplex socket: `connect()` sends `SYNC_INIT` encrypted wire, `drain()` every 2s sends `outbox` `PENDING|SENT`→`BUNDLED` when offline else `ws.send`, `pushBundlesToHQ()` when `dtn_bundles` pending, `onmessage` handles `DOWNSTREAM_DELTA` (assets/indents/vessels)/`SYNC_INIT_RESP` (`indents` + `bundles`)/`ACK` (`APPLIED|DEDUPED|APPLIED_LOCAL_WINS|CONFLICT_CRITICAL|FAILED`), updates `outbox SET ACKED` + `sync_state` + `applyDownstreamAsset` VC merge. `PING/PONG` keepalive 30s. Verify scripts use same `toWire`/`fromWire` with `PSK_HEX="a"*64` demo key + VC.
+The field `SyncWorker` (`field/lib/sync.ts:13`) holds the full-duplex socket open: `connect()` sends an encrypted `SYNC_INIT` wire frame; `drain()` runs every 2 s, marking `outbox` rows `BUNDLED` while offline and sending them over the socket when online; `pushBundlesToHQ()` flushes pending `dtn_bundles`; and `onmessage` handles `DOWNSTREAM_DELTA` (assets, indents, vessels), `SYNC_INIT_RESP` (indents plus bundles), and acknowledgments (`APPLIED`, `DEDUPED`, `APPLIED_LOCAL_WINS`, `CONFLICT_CRITICAL`, `FAILED`) — updating `outbox` to `ACKED`, advancing `sync_state`, and merging assets through `applyDownstreamAsset`. `PING`/`PONG` keepalive runs every 30 s. The verify scripts reuse the same `toWire`/`fromWire` helpers with the demo key `PSK_HEX = "a" * 64` plus vector clocks.
 
 ## Example curl
 

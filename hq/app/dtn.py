@@ -1,8 +1,7 @@
 import json, datetime, os
 from typing import Any
 
-from .db import get_conn, USE_PG
-from ._time import utc_now as _now_iso
+from .db import get_conn, USE_PG, utc_now as _now_iso
 from ._vc import compare_vc, merge_vc
 
 def ingest_bundle(bundle: dict, cur) -> dict:

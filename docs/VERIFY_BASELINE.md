@@ -29,6 +29,6 @@ npx tsc -p hq-dashboard/tsconfig.json --noEmit
 Every subsequent phase must re-run `npm run verify:all` + `npm run verify:extreme` and keep green before commit. Diff must be deletion-biased, no behavior change.
 
 ## Commit Hygiene
-- One commit per phase, message `refactor(phase-N): <slug>`
-- Stage only intended files, `git diff --stat` + `git show --stat HEAD` after commit
-- Branch: `main` linear for this execution, PR-per-phase simulated as commits
+- One commit per phase, with message `refactor(phase-N): <slug>`.
+- Stage only intended files, and show `git diff --stat` plus `git show --stat HEAD` after each commit.
+- Stay linear on `main` for this execution; each commit stands in for one phase PR.
