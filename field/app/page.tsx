@@ -376,7 +376,7 @@ export default function FieldPage() {
               <div className="display font-bold text-lg leading-tight tracking-tight">POLARIS FIELD</div>
               <div className="text-xs text-white/50">Arctic Field Logistics & Tablet UI</div>
             </div>
-            <span className="ml-auto text-[10px] font-mono tracking-widest text-teal-300 font-semibold bg-blue-500/10 px-2 py-1 rounded-md border border-blue-500/20">
+            <span className="ml-auto text-[10px] font-mono tracking-widest text-teal-300 font-semibold bg-teal-400/10 px-2 py-1 rounded-md border border-teal-400/20">
               NCPOR / MoES
             </span>
           </div>
@@ -544,7 +544,7 @@ export default function FieldPage() {
                 onClick={() => setTab(t.id as Tab)}
                 className={`shrink-0 inline-flex items-center gap-2 px-4 h-9 rounded-xl text-xs font-semibold border transition ${
                   tab === t.id
-                    ? 'bg-teal-500 text-white border-blue-500 shadow-md shadow-teal-500/25'
+                    ? 'bg-teal-500 text-white border-teal-400 shadow-md shadow-teal-500/25'
                     : 'bg-white/5 text-white/60 border-white/5 hover:bg-white/10 hover:text-white'
                 }`}
               >
@@ -571,7 +571,7 @@ export default function FieldPage() {
       {/* Floating Toast */}
       {toast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-slate-900 border border-teal-400/40 text-white text-xs font-semibold px-4 py-2.5 rounded-full shadow-2xl flex items-center gap-2 animate-in fade-in zoom-in-95">
-          <span className="w-2 h-2 rounded-full bg-blue-400 animate-ping" />
+          <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" />
           <span>{toast}</span>
         </div>
       )}

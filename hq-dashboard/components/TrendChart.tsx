@@ -50,7 +50,7 @@ export function TrendChart({
         <div>
           <div className="text-xs font-bold text-white flex items-center gap-2">
             <span>Telemetry Trends — {stationName}</span>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-mono border border-blue-500/30">
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-400/15 text-teal-300 font-mono border border-teal-400/25">
               TimescaleDB
             </span>
           </div>
@@ -186,7 +186,7 @@ export function TrendChart({
       <div className="flex items-center justify-between text-[11px] text-white/50 pt-1 border-t border-white/5">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-0.5 bg-blue-500 rounded-full" /> Actual Level
+            <span className="w-2.5 h-0.5 bg-teal-400 rounded-full" /> Actual Level
           </span>
           <span className="flex items-center gap-1.5">
             <span className="w-2.5 h-0.5 bg-red-500 rounded-full border-b border-dashed" /> Forecast Burn

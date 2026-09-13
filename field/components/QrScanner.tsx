@@ -66,10 +66,10 @@ export function QrScanner({
   }, [onScan]);
 
   return (
-    <div className="bg-slate-950/90 rounded-2xl p-4 border border-blue-500/30 shadow-2xl flex flex-col gap-3">
+    <div className="bg-slate-950/90 rounded-2xl p-4 border border-teal-400/30 shadow-2xl flex flex-col gap-3">
       <div className="flex justify-between items-center">
         <div className="flex items-center gap-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-ping" />
+          <span className="w-2.5 h-2.5 rounded-full bg-teal-400 animate-ping" />
           <span className="text-sm font-bold text-white">QR / Barcode Scanner</span>
         </div>
         <div className="flex items-center gap-2">
@@ -112,7 +112,7 @@ export function QrScanner({
       <div className="pt-2 border-t border-white/10">
         <div className="text-[11px] text-white/50 mb-2 font-medium flex items-center justify-between">
           <span>⚡ Instant SKU Barcode Simulators</span>
-          <span className="text-[10px] text-blue-400">Click to scan</span>
+          <span className="text-[10px] text-teal-300">Click to scan</span>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
           {PRESET_BARCODES.map((item) => (
@@ -121,7 +121,7 @@ export function QrScanner({
               onClick={() => onScan(item.sku)}
               className="p-2 rounded-xl bg-white/5 hover:bg-teal-500/30 border border-white/5 hover:border-teal-400/40 text-left transition group"
             >
-              <div className="font-mono text-[11px] font-bold text-white group-hover:text-blue-300 truncate">
+              <div className="font-mono text-[11px] font-bold text-white group-hover:text-teal-300 truncate">
                 {item.sku}
               </div>
               <div className="text-[10px] text-white/40 truncate mt-0.5">{item.name}</div>

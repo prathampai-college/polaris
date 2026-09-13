@@ -38,7 +38,7 @@ export function LocateTab({ assets, highlightCrate, setHighlightCrate, LocatorWr
           <div className="flex items-center gap-2">
             <button onClick={()=>setMode(mode==='LOCAL'?'GPS':'LOCAL')} className={`px-3 py-1.5 rounded-full text-[11px] font-bold border ${mode==='LOCAL'?'bg-cyan-500/20 text-cyan-300 border-cyan-500/30':'bg-white/5 text-white/50 border-white/10'}`}>{mode==='LOCAL'?'LOCAL (No GPS)':'GPS Mode'}</button>
             <button onClick={()=>setWhiteout(v=>!v)} className={`px-2 py-1 rounded-full text-[10px] font-mono border ${whiteout?'bg-white text-black border-white':'bg-white/5 text-white/40 border-white/10'}`}>Whiteout {whiteout?'ON':'OFF'}</button>
-            <span className="text-[10px] font-mono px-2 py-1 rounded bg-blue-500/10 text-blue-300 border border-blue-500/20">Three.js + WebGL</span>
+            <span className="text-[10px] font-mono px-2 py-1 rounded bg-teal-400/10 text-teal-300 border border-teal-400/20">Three.js + WebGL</span>
           </div>
         </div>
         {mode==='GPS' ? (
@@ -59,7 +59,7 @@ export function LocateTab({ assets, highlightCrate, setHighlightCrate, LocatorWr
             const crateAssets = assets.filter((a: any) => a.crate_id === cid);
             const isSelected = highlightCrate === cid;
             return (
-              <button key={cid as string} onClick={() => setHighlightCrate(cid)} className={`p-2.5 rounded-xl border text-left transition ${isSelected ? 'bg-amber-500 text-black border-amber-400 font-bold shadow-md shadow-amber-500/20' : 'bg-black/30 border-white/10 hover:bg-white/5 hover:border-blue-500/40 text-white'}`}>
+              <button key={cid as string} onClick={() => setHighlightCrate(cid)} className={`p-2.5 rounded-xl border text-left transition ${isSelected ? 'bg-amber-500 text-black border-amber-400 font-bold shadow-md shadow-amber-500/20' : 'bg-black/30 border-white/10 hover:bg-white/5 hover:border-teal-400/40 text-white'}`}>
                 <div className="font-mono text-xs font-bold">{cid as string}</div><div className={`text-[11px] truncate mt-0.5 ${isSelected ? 'text-black/80' : 'text-white/60'}`}>{crateAssets.map((a: any) => a.sku).join(', ') || 'Empty'}</div>
               </button>
             );

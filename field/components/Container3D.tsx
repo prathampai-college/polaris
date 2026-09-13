@@ -188,7 +188,7 @@ export function Container3D({
                 }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition border ${
                   activeContainer === key
-                    ? 'bg-teal-500 text-white border-blue-500 shadow-md shadow-teal-500/20'
+                    ? 'bg-teal-500 text-white border-teal-400 shadow-md shadow-teal-500/20'
                     : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10 hover:text-white'
                 }`}
               >
@@ -252,7 +252,7 @@ export function Container3D({
 
       {/* Interactive Crate Inspector Drawer / Box */}
       {selectedCrateId && (
-        <div className="bg-slate-900/90 border border-blue-500/30 rounded-xl p-4 transition animate-in fade-in slide-in-from-top-2">
+        <div className="bg-slate-900/90 border border-teal-400/30 rounded-xl p-4 transition animate-in fade-in slide-in-from-top-2">
           <div className="flex items-center justify-between border-b border-white/10 pb-2.5 mb-3">
             <div className="flex items-center gap-2">
               <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono text-xs font-bold border border-amber-500/30">
@@ -298,7 +298,7 @@ export function Container3D({
                   </div>
                   <div className="text-right">
                     <div className="text-sm font-bold text-white">{asset.qty} <span className="text-xs font-normal text-white/50">{asset.unit}</span></div>
-                    <div className="text-[10px] text-blue-400 hover:underline">Inspect →</div>
+                    <div className="text-[10px] text-teal-300 hover:underline">Inspect →</div>
                   </div>
                 </div>
               ))}

@@ -89,7 +89,7 @@ export function VesselMap({ stationId = 'ST-BHARATI' }: { stationId?: string }) 
                 <td className="py-2.5 px-2 text-center font-mono text-white">{v.lat.toFixed(2)}°, {v.lon.toFixed(2)}°</td>
                 <td className="py-2.5 px-2 text-center text-white">{v.sog} kn</td>
                 <td className="py-2.5 px-2 text-center">
-                  <span className="px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-300 border border-blue-500/20 font-mono text-[11px]">{v.eta}</span>
+                  <span className="px-2 py-0.5 rounded-full bg-teal-400/15 text-teal-300 border border-teal-400/20 font-mono text-[11px]">{v.eta}</span>
                 </td>
                 <td className="py-2.5 px-2 text-center">
                   <SourceBadge source={v.source} fetchedAt={v.fetched_at} ageSec={v.age_sec} liveLabel="LIVE" />

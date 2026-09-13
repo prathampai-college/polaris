@@ -42,7 +42,7 @@ body {
 .dot-live { @apply w-2 h-2 rounded-full bg-emerald-400 animate-pulse; }
 
 .card-hover {
-  @apply hover:border-blue-500/40 hover:bg-[#0F1C3D];
+  @apply hover:border-teal-400/40 hover:bg-[#10283A];
 }
 
 .scroll-thin::-webkit-scrollbar {
