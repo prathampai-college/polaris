@@ -1,4 +1,4 @@
-import os, sqlite3, pathlib, json, datetime
+import os, sqlite3, pathlib, json, datetime, threading
 
 def utc_now() -> str:
     try:
@@ -38,16 +38,20 @@ def _load_seed():
     return None
 
 _SEED = _load_seed()
+_local = threading.local()
+_initialized = False
 
 def get_sqlite():
-    conn = sqlite3.connect(str(HQ_DB_PATH), check_same_thread=False, isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
-    conn.execute("PRAGMA foreign_keys=ON;")
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        conn = sqlite3.connect(str(HQ_DB_PATH), timeout=15.0, check_same_thread=False, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA foreign_keys=ON;")
+        conn.execute("PRAGMA busy_timeout=15000;")
+        _local.conn = conn
     return conn
-
-_sqlite_conn = None
 
 _PROCUREMENT_FALLBACK = [
     ("FUEL-DIESEL-001", 5000, 1200, "L", "30d before freeze"),
@@ -231,16 +235,16 @@ def init_db():
                         except Exception: pass
         print(f"[hq] Postgres init ok {DATABASE_URL.split('@')[-1]}")
     else:
-        _sqlite_conn = get_sqlite()
-        _sqlite_conn.executescript(SCHEMA_SQL)
-        cur = _sqlite_conn.execute("SELECT COUNT(*) FROM stations")
+        conn = get_sqlite()
+        conn.executescript(SCHEMA_SQL)
+        cur = conn.execute("SELECT COUNT(*) FROM stations")
         if cur.fetchone()[0] == 0:
-            seed_sqlite(_sqlite_conn)
+            seed_sqlite(conn)
         else:
-            _ensure_procurement_targets_sqlite(_sqlite_conn)
-            _ensure_physics_params_sqlite(_sqlite_conn)
-            _ensure_vessels_sqlite(_sqlite_conn)
-            _ensure_dtn_sqlite(_sqlite_conn)
+            _ensure_procurement_targets_sqlite(conn)
+            _ensure_physics_params_sqlite(conn)
+            _ensure_vessels_sqlite(conn)
+            _ensure_dtn_sqlite(conn)
         print(f"[hq] SQLite init ok {HQ_DB_PATH} (fallback, no Docker)")
 
 def seed_procurement_targets(cur):
@@ -287,10 +291,12 @@ def seed_sqlite(conn):
     conn.commit()
 
 def get_conn():
+    global _initialized
     if USE_PG:
         import psycopg
         return psycopg.connect(DATABASE_URL)
     else:
-        if _sqlite_conn is None:
+        if not _initialized:
             init_db()
-        return _sqlite_conn
+            _initialized = True
+        return get_sqlite()

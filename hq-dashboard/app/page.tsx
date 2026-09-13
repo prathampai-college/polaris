@@ -105,15 +105,21 @@ export default function HQPage() {
   }, []);
 
   async function doLogin() {
+    const cleanPin = loginPin.trim();
+    if (!cleanPin) {
+      setMsg('PIN required');
+      pushToast('Please enter your station access PIN');
+      return;
+    }
     try {
       const res = await fetch(`${HQ}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           device_id: `HQ-COMMAND-${Date.now().toString().slice(-4)}`,
-          pin: loginPin.trim() || 'BHARATI-2024',
+          pin: cleanPin,
           station_id: selectedStation,
-          role: 'NCPOR_ADMIN', // Crucial fix: Authenticate with highest role for patch_indent permission
+          role: 'NCPOR_ADMIN',
         }),
       });
 

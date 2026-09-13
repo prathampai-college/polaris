@@ -72,9 +72,21 @@ export async function pushBundlesToHQ(hqUrl: string): Promise<{ pushed: number; 
   });
   if (!res.ok) throw new Error(`HQ bulk ingest ${res.status}`);
   const j = await res.json();
-  // on success, delete pushed bundles (custody transferred)
-  for (const b of bundles) await deleteBundle(b.bundleId);
-  return { pushed: bundles.length, results: j.results ?? [] };
+  // on verified success, delete only acknowledged bundles (custody transferred)
+  const results: any[] = j.results ?? [];
+  const successfulIds = new Set(
+    results
+      .filter((r: any) => ['APPLIED', 'DEDUPED', 'APPLIED_LOCAL_WINS'].includes(r.status))
+      .map((r: any) => r.bundleId)
+  );
+  let deletedCount = 0;
+  for (const b of bundles) {
+    if (successfulIds.has(b.bundleId)) {
+      await deleteBundle(b.bundleId);
+      deletedCount++;
+    }
+  }
+  return { pushed: deletedCount, results };
 }
 
 export async function saveBundle(b: Bundle): Promise<void> {
