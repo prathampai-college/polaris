@@ -314,7 +314,9 @@ async def poll_once():
 
 async def _loop():
     logger.info(f"[vessel_poller] start mode={VESSEL_MODE} interval={VESSEL_POLL_SEC}s aishub={'yes' if AIS_API_KEY else 'no'}")
-    # boot poll immediately so first data lands in ~15s, not after a full 15m interval
+    # settle 5s so /health answers before the first (synchronous, loop-blocking) upsert;
+    # boot poll still lands first positions seconds after HQ boot, not after a full interval
+    await asyncio.sleep(5)
     try:
         await poll_once()
     except Exception as e:
