@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { TrendChart, ProcurementTable } from '../components/TrendChart';
+import { SourceBadge } from '../components/SourceBadge';
 
 const HQ = process.env.NEXT_PUBLIC_HQ_URL || 'http://localhost:8000';
 
@@ -550,7 +551,7 @@ export default function HQPage() {
             </div>
 
             <div className="card p-3.5">
-              <div className="text-[10px] font-mono tracking-wider text-white/40 font-bold">TELEMETRY SENSORS</div>
+              <div className="text-[10px] font-mono tracking-wider text-white/40 font-bold flex items-center gap-2">TELEMETRY SENSORS {tele?.source ? <SourceBadge source={tele.source} fetchedAt={tele.fetched_at} ageSec={tele.age_sec} liveLabel="LIVE" /> : null}</div>
               <div className="text-sm font-bold text-white mt-0.5">
                 {tele?.temp_outside ?? -15}°C • {tele?.wind_speed ?? 5} m/s
               </div>
@@ -1020,8 +1021,8 @@ export default function HQPage() {
               <div className="card p-5 space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h2 className="display font-bold text-base text-white">Vessel Tracker — Live AIS + Mock Fallback</h2>
-                    <p className="text-xs text-white/50">Adaptive AISHub (live lat/lon/sog/eta) → 429/no key → vessel_schedule.json mock — sync-gateway DOWNSTREAM_DELTA to field</p>
+                    <h2 className="display font-bold text-base text-white">Vessel Tracker</h2>
+                    <p className="text-xs text-white/50">AISHub live when key + quota allow — schedule interpolation otherwise · pushed to field via sync-gateway DOWNSTREAM_DELTA</p>
                   </div>
                   <span className="text-xs font-mono text-teal-300">{stationNameMap[selectedStation] || selectedStation}</span>
                 </div>
