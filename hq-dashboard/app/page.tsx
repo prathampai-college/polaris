@@ -2,6 +2,7 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { TrendChart, ProcurementTable } from '../components/TrendChart';
 import { SourceBadge } from '../components/SourceBadge';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 
 const HQ = process.env.NEXT_PUBLIC_HQ_URL || 'http://localhost:8000';
 
@@ -1137,7 +1138,7 @@ function LocatorWrap({ assets, highlight, stationId }: { assets: any[]; highligh
         Loading 3D Digital Twin…
       </div>
     );
-  return <Comp assets={assets} highlight={highlight} stationId={stationId} />;
+  return <ErrorBoundary label="3D twin"><Comp assets={assets} highlight={highlight} stationId={stationId} /></ErrorBoundary>;
 }
 
 function VesselMapWrap({ stationId }: { stationId: string }) {
@@ -1146,5 +1147,5 @@ function VesselMapWrap({ stationId }: { stationId: string }) {
     import('../components/VesselMap').then((m) => setComp(() => m.VesselMap));
   }, []);
   if (!Comp) return <div className="text-xs text-white/30 h-48 flex items-center justify-center bg-black/40 rounded-2xl border border-white/10">Loading vessel tracker…</div>;
-  return <Comp stationId={stationId} />;
+  return <ErrorBoundary label="Vessel map"><Comp stationId={stationId} /></ErrorBoundary>;
 }

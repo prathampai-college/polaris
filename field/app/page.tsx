@@ -22,6 +22,7 @@ import { InventoryTab } from '../components/tabs/InventoryTab';
 import { ScanTab } from '../components/tabs/ScanTab';
 import { IndentsTab } from '../components/tabs/IndentsTab';
 import { LocateTab } from '../components/tabs/LocateTab';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 
 import { toHttpUrl } from '@shared/url.js';
 const HQ_URL = process.env.NEXT_PUBLIC_HQ_URL || toHttpUrl(process.env.NEXT_PUBLIC_GATEWAY_URL || 'ws://localhost:8787');
@@ -929,5 +930,5 @@ function LocatorWrap({
         Loading 3D Container X-Ray…
       </div>
     );
-  return <Comp assets={assets} highlight={highlight} onPick={onPick} />;
+  return <ErrorBoundary label="3D X-Ray"><Comp assets={assets} highlight={highlight} onPick={onPick} /></ErrorBoundary>;
 }
