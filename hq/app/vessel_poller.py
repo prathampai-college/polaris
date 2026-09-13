@@ -291,6 +291,15 @@ async def poll_once():
         _last["ts"] = now.isoformat()
         _last["source"] = source
         _last["results"] = rows
+        # machine-readable fallback reason for the badge: ok | no_key | 429 | live_error:<reason>
+        if source == "live":
+            _last["reason"] = "ok"
+        elif VESSEL_MODE == "mock":
+            _last["reason"] = "forced_mock"
+        elif not AIS_API_KEY:
+            _last["reason"] = "no_key"
+        elif reason:
+            _last["reason"] = str(reason)
         if source == "mock":
             # keep prior error if 429, else clear
             pass
@@ -305,7 +314,12 @@ async def poll_once():
 
 async def _loop():
     logger.info(f"[vessel_poller] start mode={VESSEL_MODE} interval={VESSEL_POLL_SEC}s aishub={'yes' if AIS_API_KEY else 'no'}")
-    await asyncio.sleep(5)
+    # boot poll immediately so first data lands in ~15s, not after a full 15m interval
+    try:
+        await poll_once()
+    except Exception as e:
+        logger.error(f"[vessel_poller] boot poll error: {e}")
+        _last["error"] = str(e)
     while True:
         try:
             await poll_once()
@@ -326,4 +340,12 @@ def start_poller():
     return _task
 
 def get_status():
-    return {"mode": VESSEL_MODE, "poll_interval_sec": VESSEL_POLL_SEC, "ais_configured": bool(AIS_API_KEY), "live_enabled": LIVE_AIS_ENABLED, "cache": str(VESSEL_CACHE), "last": _last}
+    now = datetime.datetime.now(datetime.timezone.utc)
+    ts = _last.get("ts")
+    age = None
+    if ts:
+        try:
+            age = max(0, int((now - datetime.datetime.fromisoformat(ts)).total_seconds()))
+        except Exception:
+            age = None
+    return {"mode": VESSEL_MODE, "poll_interval_sec": VESSEL_POLL_SEC, "ais_configured": bool(AIS_API_KEY), "ais_status": "configured" if AIS_API_KEY else "not_configured", "live_enabled": LIVE_AIS_ENABLED, "cache": str(VESSEL_CACHE), "fetched_at": ts, "age_sec": age, "reason": _last.get("source") == "live" and "ok" or _last.get("reason", _last.get("error")), "last": _last}
