@@ -119,7 +119,7 @@ export function QrScanner({
             <button
               key={item.sku}
               onClick={() => onScan(item.sku)}
-              className="p-2 rounded-xl bg-white/5 hover:bg-blue-600/30 border border-white/5 hover:border-blue-500/40 text-left transition group"
+              className="p-2 rounded-xl bg-white/5 hover:bg-teal-500/30 border border-white/5 hover:border-teal-400/40 text-left transition group"
             >
               <div className="font-mono text-[11px] font-bold text-white group-hover:text-blue-300 truncate">
                 {item.sku}

@@ -368,14 +368,14 @@ export default function FieldPage() {
         />
         <div className="relative w-full max-w-[440px] card glass-panel p-8 rounded-3xl shadow-2xl">
           <div className="flex items-center gap-3.5 border-b border-white/10 pb-5">
-            <div className="w-11 h-11 rounded-2xl bg-blue-600 flex items-center justify-center font-black text-xl text-white shadow-lg shadow-blue-500/30">
+            <div className="w-11 h-11 rounded-2xl bg-teal-500 flex items-center justify-center font-black text-xl text-white shadow-lg shadow-teal-500/30">
               P
             </div>
             <div>
               <div className="display font-bold text-lg leading-tight tracking-tight">POLARIS FIELD</div>
               <div className="text-xs text-white/50">Arctic Field Logistics & Tablet UI</div>
             </div>
-            <span className="ml-auto text-[10px] font-mono tracking-widest text-blue-400 font-semibold bg-blue-500/10 px-2 py-1 rounded-md border border-blue-500/20">
+            <span className="ml-auto text-[10px] font-mono tracking-widest text-teal-300 font-semibold bg-blue-500/10 px-2 py-1 rounded-md border border-blue-500/20">
               NCPOR / MoES
             </span>
           </div>
@@ -386,7 +386,7 @@ export default function FieldPage() {
               <select
                 value={loginStation}
                 onChange={(e) => setLoginStation(e.target.value)}
-                className="w-full bg-black/40 border border-white/15 rounded-xl px-3.5 py-3 text-sm focus:outline-none focus:border-blue-500 transition"
+                className="w-full bg-black/40 border border-white/15 rounded-xl px-3.5 py-3 text-sm focus:outline-none focus:border-teal-400 transition"
               >
                 <option value="ST-BHARATI">Bharati — Larsemann Hills, East Antarctica</option>
                 <option value="ST-MAITRI">Maitri — Schirmacher Oasis, Antarctica</option>
@@ -400,7 +400,7 @@ export default function FieldPage() {
                 value={deviceId}
                 onChange={(e) => setDeviceId(e.target.value)}
                 placeholder="Device ID (auto-generated if left blank)"
-                className="w-full bg-black/30 border border-white/15 rounded-xl px-3.5 py-3 text-sm placeholder:text-white/30 focus:outline-none focus:border-blue-500 transition"
+                className="w-full bg-black/30 border border-white/15 rounded-xl px-3.5 py-3 text-sm placeholder:text-white/30 focus:outline-none focus:border-teal-400 transition"
               >
               </input>
             </div>
@@ -416,13 +416,13 @@ export default function FieldPage() {
                 onChange={(e) => setLoginPin(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && doLogin()}
                 placeholder={`PIN e.g. ${loginStation.replace('ST-','')}-2024`}
-                className="w-full bg-black/30 border border-white/15 rounded-xl px-3.5 py-3 text-sm focus:outline-none focus:border-blue-500 transition"
+                className="w-full bg-black/30 border border-white/15 rounded-xl px-3.5 py-3 text-sm focus:outline-none focus:border-teal-400 transition"
               />
             </div>
 
             <button
               onClick={doLogin}
-              className="w-full bg-blue-600 hover:bg-blue-500 text-white rounded-xl py-3.5 font-bold shadow-lg shadow-blue-500/25 transition active:scale-[0.98]"
+              className="w-full bg-teal-500 hover:bg-teal-400 text-white rounded-xl py-3.5 font-bold shadow-lg shadow-teal-500/25 transition active:scale-[0.98]"
             >
               Sign In to Station
             </button>
@@ -449,13 +449,13 @@ export default function FieldPage() {
       <header className="sticky top-0 z-40 backdrop-blur-xl bg-[#060B16]/90 border-b border-white/[0.08]">
         <div className="max-w-[1240px] mx-auto px-4 h-[68px] flex items-center gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-blue-600 text-white grid place-items-center font-black text-sm shadow-md shadow-blue-500/30">
+            <div className="w-9 h-9 rounded-xl bg-teal-500 text-white grid place-items-center font-black text-sm shadow-md shadow-teal-500/30">
               P
             </div>
             <div className="min-w-0">
               <div className="font-bold text-[15px] leading-tight flex items-center gap-2">
                 <span>POLARIS FIELD</span>
-                <span className="text-xs font-mono px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                <span className="text-xs font-mono px-2 py-0.5 rounded bg-teal-400/15 text-teal-300 border border-teal-400/25">
                   {STATION_ID.replace('ST-', '')}
                 </span>
               </div>
@@ -543,7 +543,7 @@ export default function FieldPage() {
                 onClick={() => setTab(t.id as Tab)}
                 className={`shrink-0 inline-flex items-center gap-2 px-4 h-9 rounded-xl text-xs font-semibold border transition ${
                   tab === t.id
-                    ? 'bg-blue-600 text-white border-blue-500 shadow-md shadow-blue-500/25'
+                    ? 'bg-teal-500 text-white border-blue-500 shadow-md shadow-teal-500/25'
                     : 'bg-white/5 text-white/60 border-white/5 hover:bg-white/10 hover:text-white'
                 }`}
               >
@@ -569,7 +569,7 @@ export default function FieldPage() {
 
       {/* Floating Toast */}
       {toast && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-slate-900 border border-blue-500/40 text-white text-xs font-semibold px-4 py-2.5 rounded-full shadow-2xl flex items-center gap-2 animate-in fade-in zoom-in-95">
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-slate-900 border border-teal-400/40 text-white text-xs font-semibold px-4 py-2.5 rounded-full shadow-2xl flex items-center gap-2 animate-in fade-in zoom-in-95">
           <span className="w-2 h-2 rounded-full bg-blue-400 animate-ping" />
           <span>{toast}</span>
         </div>
@@ -623,12 +623,12 @@ export default function FieldPage() {
               </div>
               <div className="p-3 bg-black/30 rounded-xl border border-white/10">
                 <span className="text-white/50">Downstream Pushes</span>
-                <div className="text-xl font-black text-blue-400 mt-1">{syncStats.receivedDeltas ?? 0}</div>
+                <div className="text-xl font-black text-teal-300 mt-1">{syncStats.receivedDeltas ?? 0}</div>
               </div>
             </div>
 
-            <div className="p-3.5 bg-blue-950/40 border border-blue-500/30 rounded-xl space-y-1 text-xs">
-              <div className="font-bold text-blue-300">MessagePack Wire Savings: {syncStats.savingPct ? `${syncStats.savingPct.toFixed(1)}%` : '74.2%'}</div>
+            <div className="p-3.5 bg-blue-950/40 border border-teal-400/25 rounded-xl space-y-1 text-xs">
+              <div className="font-bold text-teal-300">MessagePack Wire Savings: {syncStats.savingPct ? `${syncStats.savingPct.toFixed(1)}%` : '74.2%'}</div>
               <div className="text-white/50 text-[11px]">Encrypted with AES-GCM • CRC32 Integrity Checked</div>
             </div>
 
@@ -642,7 +642,7 @@ export default function FieldPage() {
 
             <button
               onClick={() => (window as any).__polaris_drain?.()}
-              className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition shadow-lg shadow-blue-500/25"
+              className="w-full h-11 rounded-xl bg-teal-500 hover:bg-teal-400 text-white font-bold text-xs transition shadow-lg shadow-teal-500/25"
             >
               Drain Outbox Now
             </button>
@@ -728,7 +728,7 @@ export default function FieldPage() {
             </div>
 
             <div>
-              <div className="text-xs font-mono font-bold text-blue-400 mb-2">RECENT TRANSACTIONS</div>
+              <div className="text-xs font-mono font-bold text-teal-300 mb-2">RECENT TRANSACTIONS</div>
               <div className="space-y-1.5 font-mono text-xs max-h-40 overflow-y-auto scroll-thin pr-1">
                 {txns.map((t: any) => (
                   <div key={t.id} className="p-2 rounded bg-black/30 border border-white/5 flex justify-between gap-2">
@@ -772,10 +772,10 @@ export default function FieldPage() {
       {selectedAsset && tab !== 'scan' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div onClick={() => setSelectedAsset(null)} className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-          <div className="relative w-full max-w-[500px] bg-[#0E1830] border border-blue-500/30 rounded-3xl p-6 shadow-2xl space-y-4">
+          <div className="relative w-full max-w-[500px] bg-[#0E1830] border border-teal-400/25 rounded-3xl p-6 shadow-2xl space-y-4">
             <div className="flex items-start justify-between">
               <div>
-                <div className="font-mono text-xs text-blue-400 font-bold">{selectedAsset.sku} • {selectedAsset.barcode}</div>
+                <div className="font-mono text-xs text-teal-300 font-bold">{selectedAsset.sku} • {selectedAsset.barcode}</div>
                 <div className="font-bold text-lg text-white mt-1">{selectedAsset.name}</div>
                 <div className="text-xs text-white/50">{selectedAsset.category} • Crate {selectedAsset.crate_id} ({selectedAsset.coords || '0,0'})</div>
               </div>
@@ -811,7 +811,7 @@ export default function FieldPage() {
                 <div className="text-[10px] text-white/50 uppercase mt-1">Criticality</div>
               </div>
               <div className="p-3 bg-black/40 rounded-xl border border-white/10">
-                <div className="font-mono text-xs font-bold text-blue-300 mt-1">{selectedAsset.crate_id}</div>
+                <div className="font-mono text-xs font-bold text-teal-300 mt-1">{selectedAsset.crate_id}</div>
                 <div className="text-[10px] text-white/50 uppercase mt-1">Crate Bay</div>
               </div>
             </div>
@@ -822,7 +822,7 @@ export default function FieldPage() {
                 <select
                   value={txType}
                   onChange={(e) => setTxType(e.target.value as any)}
-                  className="flex-1 bg-black/40 border border-white/15 rounded-xl px-3 h-11 text-xs font-bold focus:outline-none focus:border-blue-500"
+                  className="flex-1 bg-black/40 border border-white/15 rounded-xl px-3 h-11 text-xs font-bold focus:outline-none focus:border-teal-400"
                 >
                   <option value="CONSUME">CONSUME (-)</option>
                   <option value="IN">RESTOCK / IN (+)</option>
@@ -865,7 +865,7 @@ export default function FieldPage() {
                 onClick={() => doConsume(selectedAsset.id)}
                 className={`h-12 rounded-xl font-bold text-xs text-white shadow-lg transition active:scale-98 ${
                   txType === 'IN'
-                    ? 'bg-blue-600 hover:bg-blue-500 shadow-blue-500/25'
+                    ? 'bg-teal-500 hover:bg-teal-400 shadow-teal-500/25'
                     : 'bg-red-600 hover:bg-red-500 shadow-red-600/25'
                 }`}
               >

@@ -170,7 +170,7 @@ export function Container3D({
                 }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition border ${
                   activeContainer === key
-                    ? 'bg-blue-600 text-white border-blue-500 shadow-md shadow-blue-500/20'
+                    ? 'bg-teal-500 text-white border-blue-500 shadow-md shadow-teal-500/20'
                     : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10 hover:text-white'
                 }`}
               >
@@ -257,7 +257,7 @@ export function Container3D({
                 <div
                   key={asset.id}
                   onClick={() => onSelectAsset?.(asset)}
-                  className="flex items-center justify-between bg-black/40 border border-white/5 hover:border-blue-500/40 rounded-lg px-3 py-2 cursor-pointer transition"
+                  className="flex items-center justify-between bg-black/40 border border-white/5 hover:border-teal-400/40 rounded-lg px-3 py-2 cursor-pointer transition"
                 >
                   <div>
                     <div className="flex items-center gap-2">
