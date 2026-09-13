@@ -31,7 +31,7 @@ body {
 }
 
 .card-hover {
-  @apply hover:border-blue-500/40 hover:bg-[#121F3D];
+  @apply hover:border-teal-400/40 hover:bg-[#12283A];
 }
 
 .card-glow {

@@ -513,7 +513,7 @@ export default function HQPage() {
           {/* Toast Notification */}
           {toast && (
             <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-slate-900 border border-teal-400/40 text-white text-xs font-semibold px-4 py-2.5 rounded-full shadow-2xl flex items-center gap-2 animate-in fade-in zoom-in-95">
-              <span className="w-2 h-2 rounded-full bg-blue-400 animate-ping" />
+              <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" />
               <span>{toast}</span>
             </div>
           )}
@@ -521,7 +521,7 @@ export default function HQPage() {
           {/* Top KPI Metrics Strip */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
             <div className="card p-3.5 flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-blue-500/15 border border-teal-400/25 grid place-items-center text-teal-300">
+              <div className="w-10 h-10 rounded-xl bg-teal-400/15 border border-teal-400/25 grid place-items-center text-teal-300">
                 <Icons.map />
               </div>
               <div>
@@ -617,7 +617,7 @@ export default function HQPage() {
                         <button
                           onClick={() => setMlOn((v) => !v)}
                           className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
-                            mlOn ? 'bg-teal-500 text-white border-blue-500' : 'bg-white/5 text-white/50 border-white/10'
+                            mlOn ? 'bg-teal-500 text-white border-teal-400' : 'bg-white/5 text-white/50 border-white/10'
                           }`}
                         >
                           ML Residual {mlOn ? 'ON' : 'OFF'}
@@ -658,11 +658,11 @@ export default function HQPage() {
                       key={s.id}
                       onClick={() => setSelectedStation(s.id)}
                       className={`card p-4.5 cursor-pointer transition relative ${
-                        isCurrent ? 'border-blue-500 bg-[#0E1A38] shadow-xl shadow-teal-500/10' : 'hover:border-white/20'
+                        isCurrent ? 'border-teal-400 bg-[#0E1A38] shadow-xl shadow-teal-500/10' : 'hover:border-white/20'
                       }`}
                     >
                       {isCurrent && (
-                        <span className="absolute top-3 right-3 text-[9px] px-2 py-0.5 rounded-full bg-blue-500 text-white font-bold">
+                        <span className="absolute top-3 right-3 text-[9px] px-2 py-0.5 rounded-full bg-teal-500 text-white font-bold">
                           SELECTED
                         </span>
                       )}
@@ -808,7 +808,7 @@ export default function HQPage() {
                         onClick={() => setIndentFilter(k)}
                         className={`px-3 py-1 rounded-xl text-xs font-semibold border transition ${
                           indentFilter === k
-                            ? 'bg-teal-500 text-white border-blue-500'
+                            ? 'bg-teal-500 text-white border-teal-400'
                             : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10'
                         }`}
                       >
@@ -936,7 +936,7 @@ export default function HQPage() {
                     onClick={() => setOnlyCurrentStation((v) => !v)}
                     className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
                       onlyCurrentStation
-                        ? 'bg-teal-500 text-white border-blue-500'
+                        ? 'bg-teal-500 text-white border-teal-400'
                         : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10'
                     }`}
                   >
