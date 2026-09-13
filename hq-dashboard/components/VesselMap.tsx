@@ -1,5 +1,6 @@
 'use client';
 import React, { useEffect, useState } from 'react';
+import { SourceBadge } from './SourceBadge';
 
 const HQ = process.env.NEXT_PUBLIC_HQ_URL || 'http://localhost:8000';
 
@@ -13,13 +14,15 @@ type Vessel = {
   station_id: string;
   last_seen: string;
   source: string;
+  fetched_at?: string | null;
+  age_sec?: number | null;
+  reason?: string | null;
 };
 
 export function VesselMap({ stationId = 'ST-BHARATI' }: { stationId?: string }) {
   const [vessels, setVessels] = useState<Vessel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<string>('auto');
 
   useEffect(() => {
     let cancelled = false;
@@ -31,7 +34,6 @@ export function VesselMap({ stationId = 'ST-BHARATI' }: { stationId?: string }) 
         const data = await r.json();
         if (!cancelled) {
           setVessels(Array.isArray(data) ? data : []);
-          setMode(data[0]?.source || 'mock');
         }
       } catch (e: any) {
         if (!cancelled) setError(e.message);
@@ -46,7 +48,9 @@ export function VesselMap({ stationId = 'ST-BHARATI' }: { stationId?: string }) 
 
   if (loading) return <div className="text-xs text-white/40 p-4 border border-white/10 rounded-xl">Loading vessels…</div>;
   if (error) return <div className="text-xs text-red-400 p-4 border border-red-500/20 rounded-xl">Vessel fetch error: {error}</div>;
-  if (!vessels.length) return <div className="text-xs text-white/40 p-4 border border-dashed border-white/15 rounded-xl text-center">No vessel tracked for {stationId} — mock schedule will appear after poller first run (15s).<br/><span className="font-mono text-[10px]">GET /vessels?station_id={stationId} → []</span></div>;
+  if (!vessels.length) return <div className="text-xs text-white/40 p-4 border border-dashed border-white/15 rounded-xl text-center">No vessel positions yet for {stationId} — first poll lands ~15s after HQ boot.<br/><span className="font-mono text-[10px]">GET /vessels?station_id={stationId} → []</span></div>;
+
+  const v0 = vessels[0];
 
   return (
     <div className="w-full bg-slate-950/70 rounded-2xl p-4 border border-white/10 flex flex-col gap-3">
@@ -54,9 +58,9 @@ export function VesselMap({ stationId = 'ST-BHARATI' }: { stationId?: string }) 
         <div>
           <div className="text-xs font-bold text-white flex items-center gap-2">
             <span>Vessel Tracker — {stationId}</span>
-            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${mode === 'live' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-amber-500/20 text-amber-300 border-amber-500/30'}`}>{mode === 'live' ? 'LIVE AIS' : 'MOCK SCHEDULE'}</span>
+            <SourceBadge source={v0?.source} fetchedAt={v0?.fetched_at} ageSec={v0?.age_sec} liveLabel="LIVE AIS" />
           </div>
-          <div className="text-[11px] text-white/50">Adaptive AISHub/MarineTraffic → fallback <span className="font-mono">shared/vessel_schedule.json</span> (Sagar Nidhi interpolation) on 429/no key.</div>
+          <div className="text-[11px] text-white/50">AISHub live when key + quota allow{v0?.reason && v0.source !== 'live' ? <span className="font-mono text-amber-300/80"> · {v0.reason}</span> : null} — schedule interpolation otherwise.</div>
         </div>
         <div className="text-[10px] font-mono text-white/40">cache /tmp/ais_cache.json • poll 15m</div>
       </div>
@@ -88,7 +92,7 @@ export function VesselMap({ stationId = 'ST-BHARATI' }: { stationId?: string }) 
                   <span className="px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-300 border border-blue-500/20 font-mono text-[11px]">{v.eta}</span>
                 </td>
                 <td className="py-2.5 px-2 text-center">
-                  <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] border ${v.source === 'live' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-amber-500/15 text-amber-300 border-amber-500/20'}`}>{v.source}</span>
+                  <SourceBadge source={v.source} fetchedAt={v.fetched_at} ageSec={v.age_sec} liveLabel="LIVE" />
                 </td>
               </tr>
             ))}
@@ -163,7 +167,7 @@ function LeafletOrFallback({ vessels }: { vessels: Vessel[] }) {
             </div>
           ))}
         </div>
-        <div className="absolute bottom-2 right-2 text-[10px] font-mono text-white/50 bg-black/40 px-2 py-1 rounded-full border border-white/10">SOG {vessels[0]?.sog} kn • Mock fallback</div>
+        <div className="absolute bottom-2 right-2 text-[10px] font-mono text-white/50 bg-black/40 px-2 py-1 rounded-full border border-white/10">SOG {vessels[0]?.sog} kn · {typeof navigator !== 'undefined' && !navigator.onLine ? 'offline schematic' : 'schematic'}</div>
       </div>
     </div>
   );

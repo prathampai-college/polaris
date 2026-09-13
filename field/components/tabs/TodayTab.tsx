@@ -1,5 +1,6 @@
 'use client';
 import { Icons } from '../Icons';
+import { SourceBadge } from '../SourceBadge';
 
 export function TodayTab({ forecast, snn, assets, indents, sendTelemetry, setTab, setInvFilter, glove }: any) {
   const criticalCount = assets.filter((a: any) => a.criticality === 'CRITICAL' && a.qty <= 5).length;
@@ -13,7 +14,7 @@ export function TodayTab({ forecast, snn, assets, indents, sendTelemetry, setTab
     <div className="space-y-4">
       {forecast ? (
         <div className="card glass-panel p-5 card-glow relative overflow-hidden">
-          <div className="absolute inset-0 pointer-events-none opacity-40" style={{ background: 'radial-gradient(600px 250px at 20% 0%, rgba(59,130,246,0.25), transparent), radial-gradient(500px 200px at 80% 0%, rgba(6,182,212,0.18), transparent)' }} />
+          <div className="absolute inset-0 pointer-events-none opacity-40" style={{ background: 'radial-gradient(600px 250px at 20% 0%, rgba(45,212,191,0.16), transparent), radial-gradient(500px 200px at 80% 0%, rgba(34,211,238,0.12), transparent)' }} />
           <div className="relative flex flex-col lg:flex-row lg:items-center justify-between gap-5">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
@@ -25,8 +26,9 @@ export function TodayTab({ forecast, snn, assets, indents, sendTelemetry, setTab
                 <span className="text-xs px-3 py-1 rounded-full bg-white/10 border border-white/10 font-mono text-white/80">95% CI: {forecast.ci[0]}–{forecast.ci[1]} days</span>
                 <span className={`text-xs px-3 py-1 rounded-full font-bold border ${forecast.days_to_stockout <= 20 ? 'bg-red-500/20 text-red-300 border-red-500/30 animate-pulse' : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'}`}>{forecast.days_to_stockout <= 20 ? '⚠️ AUTO CRITICAL INDENT ESCALATED' : '✓ Stock Levels Stable'}</span>
               </div>
-              <div className="mt-3 text-xs text-white/60 flex flex-wrap gap-x-4 gap-y-1">
+              <div className="mt-3 text-xs text-white/60 flex flex-wrap items-center gap-x-4 gap-y-1">
                 <span>Diesel Reserve: <b>{forecast.qty} L</b></span><span>Outside Temp: <b>{forecast.tele?.temp_outside ?? -15}°C</b></span><span>Wind Speed: <b>{forecast.tele?.wind_speed ?? 5} m/s</b></span><span>Physics Burn: <b>{forecast.physics} L/d</b> + Residual: <b>{forecast.residual} L/d</b></span>
+                {forecast.tele?.source ? <SourceBadge source={forecast.tele.source} fetchedAt={forecast.tele.fetched_at} ageSec={forecast.tele.age_sec} liveLabel="LIVE WX" /> : null}
               </div>
               <div className="mt-3 h-2 bg-white/10 rounded-full overflow-hidden max-w-[480px]"><div className="h-full bg-gradient-to-r from-emerald-500 via-amber-500 to-red-500 transition-all duration-500" style={{ width: `${Math.min(100, forecast.days_to_stockout * 2.2)}%` }} /></div>
               <div className="mt-1.5 text-[11px] text-white/40">Physics-informed hybrid inference • Sub-200ms latency on edge tablet</div>

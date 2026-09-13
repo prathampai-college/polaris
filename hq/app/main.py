@@ -493,13 +493,34 @@ def check_and_escalate(station_id: str, tele):
 
 @app.get("/forecast/{station_id}")
 def forecast(station_id: str, asset_sku: str = "FUEL-DIESEL-001"):
-    tele=_fetch_one("SELECT temp_outside, wind_speed, pressure, dg_load FROM telemetry WHERE station_id=? ORDER BY ts DESC LIMIT 1", (station_id,))
+    tele=_fetch_one("SELECT temp_outside, wind_speed, pressure, dg_load, ts FROM telemetry WHERE station_id=? ORDER BY ts DESC LIMIT 1", (station_id,))
     qty_row=_fetch_one("SELECT a.qty FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku=? LIMIT 1", (station_id, asset_sku))
     cr=_fetch_one("SELECT winter_crew_count FROM stations WHERE id=?", (station_id,))
     if not qty_row: raise HTTPException(404, "asset")
     qty=qty_row["qty"]; crew=cr["winter_crew_count"] if cr else 24
     if not tele:
         tele={"temp_outside": -15, "wind_speed": 5, "pressure": 1013, "dg_load": 0.7}
+    else:
+        # freshness proof for the field badge (same clock as /telemetry/latest)
+        try:
+            from .telemetry_poller import get_status as _wx
+            _st = _wx()
+            _ts = tele.get("ts")
+            _age = None
+            if _ts:
+                import datetime as _dt2
+                try:
+                    _ref = _dt2.datetime.fromisoformat(str(_ts).replace("Z", "+00:00"))
+                    if _ref.tzinfo is None:
+                        _ref = _ref.replace(tzinfo=_dt2.timezone.utc)
+                    _age = max(0, int((_dt2.datetime.now(_dt2.timezone.utc) - _ref).total_seconds()))
+                except Exception:
+                    _age = None
+            tele["fetched_at"] = _ts
+            tele["age_sec"] = _age
+            tele["source"] = "live" if (_st.get("live_enabled") and (_age or 0) < 2 * _st.get("poll_interval_sec", 900)) else "stale_cache"
+        except Exception:
+            tele.setdefault("source", "stale_cache")
     phys,res,total,used=predict_total(tele["temp_outside"], tele["wind_speed"], tele["pressure"], crew, tele["dg_load"], station_id)
     days=qty/total if total>0 else 999
     ci=[round(days*0.85), round(days*1.15)]
