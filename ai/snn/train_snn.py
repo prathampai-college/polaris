@@ -4,6 +4,12 @@ Phase 2. Usage: python ai/snn/train_snn.py"""
 import pathlib, json, csv, sys
 import numpy as np
 
+# ponytail: force UTF-8 stdout so torch.onnx ✅ logs don't crash Windows cp1252 consoles
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 T_STEPS = 20
 OUT_ONNX = pathlib.Path(__file__).parent / "thermo_snn.onnx"
 OUT_SCALER = pathlib.Path(__file__).parent / "scaler_snn.json"
@@ -20,7 +26,7 @@ def load_data():
                 rows.append([float(row.get("temp_outside") or row.get("temp") or -15),
                              float(row.get("wind_speed") or row.get("wind") or 5),
                              float(row.get("pressure") or 1013),
-                             float(row.get("crew") or 24),
+                             float(row.get("crew_count") or row.get("crew") or 24),
                              float(row.get("dg_load") or 0.7),
                              float(row.get("residual") or row.get("fuel_burn") or 0)])
         return np.array(rows, dtype=np.float32)
@@ -85,21 +91,21 @@ def train_numpy_lif():
             with torch.no_grad():
                 lin.weight.copy_(torch.from_numpy(W.T))
                 lin.bias.zero_()
+            lin.eval()
             torch.onnx.export(lin, dummy, str(OUT_ONNX), input_names=["input"], output_names=["output"])
             print(f"[snn] ONNX exported to {OUT_ONNX} bytes={OUT_ONNX.stat().st_size}")
-        elif 'torch' in sys.modules:
+        else:
             dummy = torch.randn(1,5)
             lin = torch.nn.Linear(5,1)
             with torch.no_grad():
                 lin.weight.copy_(torch.from_numpy(W.T))
                 lin.bias.zero_()
+            lin.eval()
             torch.onnx.export(lin, dummy, str(OUT_ONNX), input_names=["input"], output_names=["output"])
             print(f"[snn] ONNX (linear) -> {OUT_ONNX}")
     except Exception as e:
         print(f"[snn] ONNX export skipped: {e}")
-        # write placeholder onnx (empty)
-        if not OUT_ONNX.exists():
-            OUT_ONNX.write_bytes(b"ONNX_PLACEHOLDER_SNN")
+        # ponytail: never write invalid placeholder bytes; a corrupt .onnx breaks onnx.load downstream
 
 if __name__ == "__main__":
     train_numpy_lif()

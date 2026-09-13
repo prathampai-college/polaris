@@ -8,6 +8,13 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import onnx, onnxruntime
 
+# ponytail: force UTF-8 stdout so torch.onnx ✅ logs don't crash Windows cp1252 consoles
+try:
+    import sys as _sys
+    _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 CSV = pathlib.Path(__file__).parent / "weather_fuel_history.csv"
 OUT = pathlib.Path(__file__).parent.parent / "thermo_residual.onnx"
 SCALER_NPY = pathlib.Path(__file__).parent.parent / "scaler.npz"
