@@ -369,7 +369,7 @@ export default function HQPage() {
       >
         <div className="max-w-[1400px] mx-auto px-4 h-[68px] flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-blue-600 text-white grid place-items-center font-black shadow-lg shadow-blue-500/30">
+            <div className="w-10 h-10 rounded-2xl bg-teal-500 text-white grid place-items-center font-black shadow-lg shadow-teal-500/30">
               ◈
             </div>
             <div>
@@ -390,7 +390,7 @@ export default function HQPage() {
             <select
               value={selectedStation}
               onChange={(e) => setSelectedStation(e.target.value)}
-              className="bg-black/40 border border-white/15 rounded-xl px-3.5 h-10 text-xs font-semibold focus:outline-none focus:border-blue-500"
+              className="bg-black/40 border border-white/15 rounded-xl px-3.5 h-10 text-xs font-semibold focus:outline-none focus:border-teal-400"
             >
               <option value="ST-BHARATI">🇮🇳 Bharati — Antarctica</option>
               <option value="ST-MAITRI">🇮🇳 Maitri — Antarctica</option>
@@ -412,7 +412,7 @@ export default function HQPage() {
             {/* Auth status / Login */}
             {loggedIn ? (
               <div className="flex items-center gap-2">
-                <span className="hidden lg:inline-flex text-[11px] px-2.5 py-1 rounded-lg bg-blue-500/20 text-blue-300 border border-blue-500/30 font-mono">
+                <span className="hidden lg:inline-flex text-[11px] px-2.5 py-1 rounded-lg bg-teal-400/15 text-teal-300 border border-teal-400/25 font-mono">
                   NCPOR_ADMIN
                 </span>
                 <button
@@ -439,7 +439,7 @@ export default function HQPage() {
                 />
                 <button
                   onClick={doLogin}
-                  className="h-9 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition shadow-md shadow-blue-500/25"
+                  className="h-9 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-white text-xs font-bold transition shadow-md shadow-teal-500/25"
                 >
                   Login
                 </button>
@@ -468,7 +468,7 @@ export default function HQPage() {
                 onClick={() => setTab(it.id as Tab)}
                 className={`w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-xl transition ${
                   tab === it.id
-                    ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25'
+                    ? 'bg-teal-500 text-white shadow-md shadow-teal-500/25'
                     : 'text-white/70 hover:text-white hover:bg-white/5'
                 }`}
               >
@@ -482,8 +482,8 @@ export default function HQPage() {
               </button>
             ))}
 
-            <div className="mt-3 mx-1 p-3 rounded-xl bg-gradient-to-br from-blue-900/50 to-cyan-900/50 border border-blue-500/30 text-white space-y-1">
-              <div className="text-xs font-bold text-blue-300">NCPOR Central Command</div>
+            <div className="mt-3 mx-1 p-3 rounded-xl bg-gradient-to-br from-blue-900/50 to-cyan-900/50 border border-teal-400/25 text-white space-y-1">
+              <div className="text-xs font-bold text-teal-300">NCPOR Central Command</div>
               <div className="text-[10px] text-white/70">Encrypted WebSocket Delta Gateway</div>
               <div className="text-[10px] text-emerald-400 font-mono">Air-Gap Ready • Sub-50ms push</div>
             </div>
@@ -500,7 +500,7 @@ export default function HQPage() {
               <div className="text-[10px] text-white/40">Open Indents</div>
             </div>
             <div className="card p-2.5">
-              <div className="text-lg font-black text-blue-400">{kpi.expiring}</div>
+              <div className="text-lg font-black text-teal-300">{kpi.expiring}</div>
               <div className="text-[10px] text-white/40">Expiring</div>
             </div>
           </div>
@@ -510,7 +510,7 @@ export default function HQPage() {
         <main className="flex-1 min-w-0 pb-16 lg:pb-0 space-y-4">
           {/* Toast Notification */}
           {toast && (
-            <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-slate-900 border border-blue-500/40 text-white text-xs font-semibold px-4 py-2.5 rounded-full shadow-2xl flex items-center gap-2 animate-in fade-in zoom-in-95">
+            <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-slate-900 border border-teal-400/40 text-white text-xs font-semibold px-4 py-2.5 rounded-full shadow-2xl flex items-center gap-2 animate-in fade-in zoom-in-95">
               <span className="w-2 h-2 rounded-full bg-blue-400 animate-ping" />
               <span>{toast}</span>
             </div>
@@ -519,7 +519,7 @@ export default function HQPage() {
           {/* Top KPI Metrics Strip */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
             <div className="card p-3.5 flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-blue-500/15 border border-blue-500/30 grid place-items-center text-blue-400">
+              <div className="w-10 h-10 rounded-xl bg-blue-500/15 border border-teal-400/25 grid place-items-center text-teal-300">
                 <Icons.map />
               </div>
               <div>
@@ -584,7 +584,7 @@ export default function HQPage() {
                     <div className="space-y-2 max-w-2xl">
                       <div className="flex items-center gap-2">
                         <h2 className="display font-bold text-lg text-white">Thermo Hybrid AI Prognostics</h2>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-bold border border-blue-500/30">
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-400/15 text-teal-300 font-bold border border-teal-400/25">
                           {forecast.used_model ? 'ONNX int8 <2MB' : 'Physics Fallback'}
                         </span>
                       </div>
@@ -615,7 +615,7 @@ export default function HQPage() {
                         <button
                           onClick={() => setMlOn((v) => !v)}
                           className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
-                            mlOn ? 'bg-blue-600 text-white border-blue-500' : 'bg-white/5 text-white/50 border-white/10'
+                            mlOn ? 'bg-teal-500 text-white border-blue-500' : 'bg-white/5 text-white/50 border-white/10'
                           }`}
                         >
                           ML Residual {mlOn ? 'ON' : 'OFF'}
@@ -656,7 +656,7 @@ export default function HQPage() {
                       key={s.id}
                       onClick={() => setSelectedStation(s.id)}
                       className={`card p-4.5 cursor-pointer transition relative ${
-                        isCurrent ? 'border-blue-500 bg-[#0E1A38] shadow-xl shadow-blue-500/10' : 'hover:border-white/20'
+                        isCurrent ? 'border-blue-500 bg-[#0E1A38] shadow-xl shadow-teal-500/10' : 'hover:border-white/20'
                       }`}
                     >
                       {isCurrent && (
@@ -779,7 +779,7 @@ export default function HQPage() {
                     <h2 className="font-bold text-base text-white">Station Digital Twin & Containers</h2>
                     <p className="text-xs text-white/50">View coordinate-indexed supply bays across polar stations</p>
                   </div>
-                  <span className="text-xs font-mono text-blue-400">{stationNameMap[selectedStation] || selectedStation}</span>
+                  <span className="text-xs font-mono text-teal-300">{stationNameMap[selectedStation] || selectedStation}</span>
                 </div>
 
                 <LocatorWrap assets={assets} highlight={null} />
@@ -806,7 +806,7 @@ export default function HQPage() {
                         onClick={() => setIndentFilter(k)}
                         className={`px-3 py-1 rounded-xl text-xs font-semibold border transition ${
                           indentFilter === k
-                            ? 'bg-blue-600 text-white border-blue-500'
+                            ? 'bg-teal-500 text-white border-blue-500'
                             : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10'
                         }`}
                       >
@@ -863,7 +863,7 @@ export default function HQPage() {
                               ind.status === 'DRAFT'
                                 ? 'bg-amber-500 text-black'
                                 : ind.status === 'APPROVED'
-                                ? 'bg-blue-600 text-white'
+                                ? 'bg-teal-500 text-white'
                                 : ind.status === 'DISPATCHED'
                                 ? 'bg-purple-600 text-white'
                                 : 'bg-emerald-600 text-white'
@@ -877,7 +877,7 @@ export default function HQPage() {
                             {ind.status === 'DRAFT' && (
                               <button
                                 onClick={() => updateIndent(ind.id, 'APPROVED')}
-                                className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-sm transition"
+                                className="px-3 py-1 rounded-lg bg-teal-500 hover:bg-teal-400 text-white text-xs font-bold shadow-sm transition"
                               >
                                 Approve →
                               </button>
@@ -925,7 +925,7 @@ export default function HQPage() {
                     value={assetQ}
                     onChange={(e) => setAssetQ(e.target.value)}
                     placeholder="Search SKU, item name, crate bay, category…"
-                    className="w-full bg-black/40 border border-white/10 rounded-xl pl-9 pr-3.5 py-2 text-xs placeholder:text-white/30 focus:outline-none focus:border-blue-500"
+                    className="w-full bg-black/40 border border-white/10 rounded-xl pl-9 pr-3.5 py-2 text-xs placeholder:text-white/30 focus:outline-none focus:border-teal-400"
                   />
                 </div>
 
@@ -934,7 +934,7 @@ export default function HQPage() {
                     onClick={() => setOnlyCurrentStation((v) => !v)}
                     className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
                       onlyCurrentStation
-                        ? 'bg-blue-600 text-white border-blue-500'
+                        ? 'bg-teal-500 text-white border-blue-500'
                         : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10'
                     }`}
                   >
@@ -993,7 +993,7 @@ export default function HQPage() {
               <div className="space-y-2 max-h-[560px] overflow-y-auto scroll-thin pr-1">
                 {audit.map((a: any, i: number) => (
                   <div key={i} className="p-3 bg-black/40 border border-white/10 rounded-xl flex items-start gap-3">
-                    <span className="font-mono text-xs text-blue-400 shrink-0 mt-0.5">
+                    <span className="font-mono text-xs text-teal-300 shrink-0 mt-0.5">
                       {a.ts?.slice(11, 19) || a.ts?.slice(0, 19)}
                     </span>
                     <div className="flex-1 min-w-0">
@@ -1023,7 +1023,7 @@ export default function HQPage() {
                     <h2 className="display font-bold text-base text-white">Vessel Tracker — Live AIS + Mock Fallback</h2>
                     <p className="text-xs text-white/50">Adaptive AISHub (live lat/lon/sog/eta) → 429/no key → vessel_schedule.json mock — sync-gateway DOWNSTREAM_DELTA to field</p>
                   </div>
-                  <span className="text-xs font-mono text-blue-400">{stationNameMap[selectedStation] || selectedStation}</span>
+                  <span className="text-xs font-mono text-teal-300">{stationNameMap[selectedStation] || selectedStation}</span>
                 </div>
                 <VesselMapWrap stationId={selectedStation} />
               </div>
@@ -1034,7 +1034,7 @@ export default function HQPage() {
                     <h2 className="display font-bold text-base text-white">3D Digital Twin — Fleet Container Bay</h2>
                     <p className="text-xs text-white/50">Real-time crate synchronization mirroring field operations</p>
                   </div>
-                  <span className="text-xs font-mono text-blue-400">{stationNameMap[selectedStation] || selectedStation}</span>
+                  <span className="text-xs font-mono text-teal-300">{stationNameMap[selectedStation] || selectedStation}</span>
                 </div>
 
                 <LocatorWrap assets={assets} highlight={null} stationId={selectedStation} />
@@ -1048,7 +1048,7 @@ export default function HQPage() {
       {showNewIndentModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div onClick={() => setShowNewIndentModal(false)} className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-          <div className="relative w-full max-w-[460px] bg-[#0E1830] border border-blue-500/30 rounded-3xl p-6 shadow-2xl space-y-4">
+          <div className="relative w-full max-w-[460px] bg-[#0E1830] border border-teal-400/25 rounded-3xl p-6 shadow-2xl space-y-4">
             <div className="flex items-start justify-between">
               <div>
                 <h3 className="font-bold text-base text-white">Issue Emergency Resupply Indent</h3>
@@ -1075,7 +1075,7 @@ export default function HQPage() {
                 <select
                   value={newIndentAsset}
                   onChange={(e) => setNewIndentAsset(e.target.value)}
-                  className="w-full bg-black/40 border border-white/15 rounded-xl px-3 h-11 text-xs font-mono focus:outline-none focus:border-blue-500"
+                  className="w-full bg-black/40 border border-white/15 rounded-xl px-3 h-11 text-xs font-mono focus:outline-none focus:border-teal-400"
                 >
                   <option value="">Select supply SKU…</option>
                   {assets.map((a: any) => (
@@ -1093,7 +1093,7 @@ export default function HQPage() {
                     type="number"
                     value={newIndentQty}
                     onChange={(e) => setNewIndentQty(Number(e.target.value) || 1)}
-                    className="w-full bg-black/40 border border-white/15 rounded-xl px-3 h-11 text-sm font-bold focus:outline-none focus:border-blue-500"
+                    className="w-full bg-black/40 border border-white/15 rounded-xl px-3 h-11 text-sm font-bold focus:outline-none focus:border-teal-400"
                   />
                 </div>
 
@@ -1102,7 +1102,7 @@ export default function HQPage() {
                   <select
                     value={newIndentUrg}
                     onChange={(e) => setNewIndentUrg(e.target.value)}
-                    className="w-full bg-black/40 border border-white/15 rounded-xl px-3 h-11 text-xs font-bold focus:outline-none focus:border-blue-500"
+                    className="w-full bg-black/40 border border-white/15 rounded-xl px-3 h-11 text-xs font-bold focus:outline-none focus:border-teal-400"
                   >
                     <option value="CRITICAL">🔴 CRITICAL</option>
                     <option value="MEDIUM">🟡 MEDIUM</option>
@@ -1113,7 +1113,7 @@ export default function HQPage() {
 
               <button
                 onClick={handleCreateHQIndent}
-                className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-lg shadow-blue-500/25 transition active:scale-98"
+                className="w-full h-11 rounded-xl bg-teal-500 hover:bg-teal-400 text-white font-bold text-xs shadow-lg shadow-teal-500/25 transition active:scale-98"
               >
                 Approve & Dispatch Indent
               </button>

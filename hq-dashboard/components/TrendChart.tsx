@@ -68,7 +68,7 @@ export function TrendChart({
             onClick={() => setMetric('fuel')}
             className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
               metric === 'fuel'
-                ? 'bg-blue-600 text-white shadow'
+                ? 'bg-teal-500 text-white shadow'
                 : 'text-white/60 hover:text-white hover:bg-white/5'
             }`}
           >
@@ -111,8 +111,8 @@ export function TrendChart({
             <AreaChart data={normalizedData} margin={{ top: 10, right: 10, left: -15, bottom: 0 }}>
               <defs>
                 <linearGradient id="fuelGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.4} />
-                  <stop offset="95%" stopColor="#3B82F6" stopOpacity={0.0} />
+                  <stop offset="5%" stopColor="#2DD4BF" stopOpacity={0.4} />
+                  <stop offset="95%" stopColor="#2DD4BF" stopOpacity={0.0} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
@@ -131,7 +131,7 @@ export function TrendChart({
                   name === 'qty' ? 'Actual Stock' : 'Predicted Curve',
                 ]}
               />
-              <Area type="monotone" dataKey="qty" stroke="#3B82F6" strokeWidth={2.5} fillOpacity={1} fill="url(#fuelGrad)" />
+              <Area type="monotone" dataKey="qty" stroke="#2DD4BF" strokeWidth={2.5} fillOpacity={1} fill="url(#fuelGrad)" />
               <Line type="monotone" dataKey="forecast" stroke="#EF4444" strokeWidth={2} strokeDasharray="4 4" dot={false} />
               <ReferenceLine y={1200} stroke="#EF4444" strokeDasharray="3 3" label={{ value: 'CRITICAL (1200L)', fill: '#EF4444', fontSize: 10, position: 'insideTopLeft' }} />
             </AreaChart>
@@ -261,7 +261,7 @@ export function ProcurementTable({
                   {onCreateIndent ? (
                     <button
                       onClick={() => onCreateIndent(r.sku, r.need)}
-                      className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-sm transition"
+                      className="px-3 py-1 rounded-lg bg-teal-500 hover:bg-teal-400 text-white text-xs font-semibold shadow-sm transition"
                     >
                       Indent →
                     </button>

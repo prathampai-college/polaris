@@ -9,7 +9,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
 
 body {
-  @apply bg-[#060B16] text-white antialiased selection:bg-blue-500/30 selection:text-blue-200;
+  @apply bg-[#060A13] text-white antialiased selection:bg-teal-400/30 selection:text-teal-100;
   font-family: 'Instrument Sans', system-ui, -apple-system, sans-serif;
 }
 
@@ -35,8 +35,16 @@ body {
 }
 
 .card-glow {
-  box-shadow: 0 0 0 1px rgba(59,130,246,0.12), 0 8px 32px rgba(0,0,0,0.5);
+  box-shadow: 0 0 0 1px rgba(45,212,191,0.10), 0 8px 32px rgba(0,0,0,0.5);
 }
+
+.eyebrow { @apply text-[11px] font-mono tracking-[0.08em] font-bold; }
+.pill { @apply inline-flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-full font-bold border; }
+.pill-live { @apply bg-emerald-500/15 text-emerald-300 border-emerald-500/25; }
+.pill-stale { @apply bg-amber-500/15 text-amber-300 border-amber-500/25; }
+.pill-critical { @apply bg-red-500/15 text-red-300 border-red-500/25; }
+.pill-ai { @apply bg-teal-400/10 text-teal-300 border-teal-400/25; }
+.dot-live { @apply w-2 h-2 rounded-full bg-emerald-400 animate-pulse; }
 
 .card-raised {
   @apply bg-[#142345] border border-white/[0.09] rounded-2xl;
