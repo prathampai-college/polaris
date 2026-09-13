@@ -1,8 +1,26 @@
 'use client';
 import React, { useState, useMemo, useEffect } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Text } from '@react-three/drei';
 import { CONTAINER_SPECS, CRATE_COORDS, STATION_CONTAINERS } from '@polaris/shared/containers.js';
+
+// Releases GPU geometries/materials on tab unmount - prevents WebGL context loss on tablets.
+function GLCleanup() {
+  const gl = useThree((s: any) => s.gl);
+  const scene = useThree((s: any) => s.scene);
+  useEffect(() => () => {
+    try {
+      scene.traverse((o: any) => {
+        try { o.geometry?.dispose?.(); } catch {}
+        const m = o.material;
+        const kill = (x: any) => { try { x.map?.dispose?.(); x.dispose?.(); } catch {} };
+        if (Array.isArray(m)) m.forEach(kill); else if (m) kill(m);
+      });
+    } catch {}
+    try { gl.dispose(); } catch {}
+  }, [gl, scene]);
+  return null;
+}
 
 export interface AssetRow {
   id: string;
@@ -202,7 +220,8 @@ export function Container3D({
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#F59E0B]" /> Selected</span>
         </div>
 
-        <Canvas camera={{ position: [0, 2.2, 4.8], fov: 46 }} shadows>
+        <Canvas camera={{ position: [0, 2.2, 4.8], fov: 46 }} shadows dpr={[1, 2]} gl={{ antialias: true, powerPreference: "low-power" }}>
+          <GLCleanup />
           <ambientLight intensity={0.75} />
           <directionalLight position={[6, 8, 4]} intensity={0.9} castShadow />
           <pointLight position={[-6, -4, -4]} intensity={0.4} />
@@ -211,11 +230,11 @@ export function Container3D({
           {/* ISO-20 Container Tactical Wireframe Envelope */}
           <mesh position={[0, 0, 0]}>
             <boxGeometry args={[3.4, 2.0, 2.4]} />
-            <meshBasicMaterial color="#38BDF8" wireframe opacity={0.25} transparent />
+            <meshBasicMaterial color="#2DD4BF" wireframe opacity={0.25} transparent />
           </mesh>
 
           {/* Container Floor Grid */}
-          <gridHelper args={[5, 6, '#3B82F6', '#1E293B']} position={[0, -1.0, 0]} />
+          <gridHelper args={[5, 6, '#2DD4BF', '#1E293B']} position={[0, -1.0, 0]} />
 
           {/* Render Crates for the active container only */}
           {cratesToRender.map(([id, pos]) => (

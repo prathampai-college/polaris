@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 export function LocateTab({ assets, highlightCrate, setHighlightCrate, LocatorWrap }: any) {
   const [mode, setMode] = useState<'LOCAL'|'GPS'>('LOCAL');
   const [localPos, setLocalPos] = useState<any[]>([]);
@@ -78,21 +78,41 @@ export function LocateTab({ assets, highlightCrate, setHighlightCrate, LocatorWr
 }
 
 function LocalGrid({ positions, whiteout }: { positions:any[]; whiteout:boolean }) {
-  const size=40, cell=5;
+  const size=40, cell=5, W=size*cell;
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const cv = ref.current;
+    if (!cv) return;
+    const dpr = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+    cv.width = W*dpr; cv.height = W*dpr;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, W, W);
+    // grid lines (single canvas, replaces 1600 divs)
+    ctx.strokeStyle = whiteout ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.10)';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    for (let i=0;i<=size;i++) { ctx.moveTo(i*cell+.5,0); ctx.lineTo(i*cell+.5,W); ctx.moveTo(0,i*cell+.5); ctx.lineTo(W,i*cell+.5); }
+    ctx.stroke();
+    // origin
+    ctx.fillStyle = '#FBBF24';
+    ctx.beginPath(); ctx.arc(W/2, W/2, 4, 0, Math.PI*2); ctx.fill();
+    // positions
+    for (const p of positions) {
+      const gx = Math.floor((p.x+40)/2), gy=Math.floor((p.y+40)/2);
+      if (gx<0||gx>=size||gy<0||gy>=size) continue;
+      const cx=gx*cell+cell/2, cy=(size-1-gy)*cell+cell/2;
+      ctx.fillStyle = p.conf>0.6 ? '#2DD4BF' : '#FBBF24';
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+    }
+  }, [positions, whiteout, W, size, cell]);
   return (
-    <div className="rounded-xl border border-cyan-500/20 bg-black/40 p-2">
-      <div className="text-[10px] font-mono text-cyan-400">Occupancy Grid 40x40 • 2m/cell • {whiteout?'WHITEOUT 0.8m — camera blind, LiDAR active (✓)':'Visibility 30m'}</div>
-      <div className="relative mt-2 mx-auto" style={{width: size*cell, height:size*cell}}>
-        <div className="absolute inset-0 grid" style={{gridTemplateColumns:`repeat(${size},1fr)`, gridTemplateRows:`repeat(${size},1fr)`, opacity:whiteout?0.2:0.35}}>
-          {Array.from({length:size*size}).map((_,i)=><div key={i} className="border-[0.5px] border-white/5" />)}
-        </div>
-        {positions.map((p:any)=>{
-          const gx = Math.floor((p.x+40)/2), gy=Math.floor((p.y+40)/2);
-          const left=gx*cell, top=(size-1-gy)*cell;
-          if (gx<0||gx>=size||gy<0||gy>=size) return null;
-          return <div key={p.asset_id} className="absolute w-3 h-3 rounded-full bg-cyan-400 border-2 border-white shadow-lg" style={{left:left-6, top:top-6}} title={`${p.asset_id} [${p.x.toFixed(1)},${p.y.toFixed(1)}]`} />;
-        })}
-        <div className="absolute left-1/2 top-1/2 w-2 h-2 -ml-1 -mt-1 rounded-full bg-amber-400 border border-white" title="Base origin" />
+    <div className="rounded-xl border border-teal-400/20 bg-black/40 p-2">
+      <div className="text-[10px] font-mono text-teal-300">Occupancy Grid 40x40 • 2m/cell • {whiteout?'WHITEOUT 0.8m — camera blind, LiDAR active (✓)':'Visibility 30m'}</div>
+      <div className="relative mt-2 mx-auto" style={{width: W, height: W}}>
+        <canvas ref={ref} style={{width: W, height: W}} role="img" aria-label="LiDAR occupancy grid with tracked assets" />
       </div>
     </div>
   );
