@@ -371,7 +371,36 @@ async def post_telemetry(t: TelemetryIn):
 
 @app.get("/telemetry/latest")
 def latest_telemetry(station_id: str = "ST-BHARATI"):
-    return _fetch_one("SELECT * FROM telemetry WHERE station_id=? ORDER BY ts DESC LIMIT 1", (station_id,)) or {}
+    row = _fetch_one("SELECT * FROM telemetry WHERE station_id=? ORDER BY ts DESC LIMIT 1", (station_id,)) or {}
+    if not row:
+        return row
+    # freshness proof for the badge: age of newest telemetry row + poller status
+    try:
+        import datetime as _dt
+        ts = row.get("ts")
+        age = None
+        if ts:
+            now = _dt.datetime.now(_dt.timezone.utc)
+            try:
+                ref = _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            except Exception:
+                ref = None
+            if ref is not None:
+                if ref.tzinfo is None:
+                    ref = ref.replace(tzinfo=_dt.timezone.utc)
+                age = max(0, int((now - ref).total_seconds()))
+        row["fetched_at"] = ts
+        row["age_sec"] = age
+    except Exception:
+        pass
+    try:
+        from .telemetry_poller import get_status as _wx_status
+        st = _wx_status()
+        row["source"] = "live" if (st.get("live_enabled") and (row.get("age_sec") or 0) < 2 * st.get("poll_interval_sec", 900)) else "stale_cache"
+        row["poller"] = {"live_enabled": st.get("live_enabled"), "imd_status": st.get("imd_status")}
+    except Exception:
+        row.setdefault("source", "stale_cache")
+    return row
 
 @app.get("/telemetry/history")
 def history_telemetry(station_id: str = "ST-BHARATI", days: int = 30):
@@ -495,20 +524,28 @@ def get_physics(station_id: str):
 # --- Phase 4: Vessel tracking (AIS adaptive + mock fallback) ---
 @app.get("/vessels")
 def list_vessels(station_id: str | None = None):
-    """List vessels. Filter by station_id if given. Returns source:live|mock."""
+    """List vessels. Filter by station_id if given. Returns source:live|stale_cache|mock + fetched_at + age_sec."""
     if station_id:
         rows = _fetch_all("SELECT imo, name, lat, lon, sog, eta, station_id, last_seen FROM vessels WHERE station_id=? ORDER BY last_seen DESC", (station_id,))
     else:
         rows = _fetch_all("SELECT imo, name, lat, lon, sog, eta, station_id, last_seen FROM vessels ORDER BY last_seen DESC")
-    # annotate source based on recent poller status
+    # annotate freshness proof based on recent poller status
     try:
         from .vessel_poller import get_status
         st = get_status()
-        src = st.get("last", {}).get("source", "mock")
+        raw = st.get("last", {}).get("source", "mock")
+        src = "live" if raw == "live" else ("stale_cache" if rows else "mock")
+        fetched = st.get("fetched_at")
+        age = st.get("age_sec")
+        reason = st.get("reason")
     except Exception:
-        src = "mock"
+        src, fetched, age, reason = ("mock", None, None, None)
     for r in rows:
         r["source"] = src
+        r["fetched_at"] = r.get("last_seen") or fetched
+        r["age_sec"] = age
+        if reason:
+            r["reason"] = reason
     return rows
 
 @app.get("/vessels/sources")

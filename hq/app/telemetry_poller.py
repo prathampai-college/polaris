@@ -22,8 +22,8 @@ STATION_COORDS = {
 TELEMETRY_SOURCE = os.getenv("TELEMETRY_SOURCE", "both")  # imd|sim|both|openmeteo
 IMD_API_KEY = os.getenv("IMD_API_KEY", "")
 POLL_INTERVAL_SEC = int(os.getenv("TELEMETRY_POLL_SEC", "900"))  # 15m default
-# Explicit gate for live weather (open-meteo/IMD) — mock is default unless LIVE_WEATHER_ENABLED=true
-LIVE_WEATHER_ENABLED = os.getenv("LIVE_WEATHER_ENABLED", os.getenv("WEATHER_LIVE_ENABLED", "false")).lower() in ("1", "true", "yes", "on")
+# Explicit gate for live weather (open-meteo/IMD) — live by default (Open-Meteo is free/keyless); set LIVE_WEATHER_ENABLED=false to force sim
+LIVE_WEATHER_ENABLED = os.getenv("LIVE_WEATHER_ENABLED", os.getenv("WEATHER_LIVE_ENABLED", "true")).lower() in ("1", "true", "yes", "on")
 HQ_INTERNAL_URL = os.getenv("HQ_INTERNAL_URL", "http://localhost:8000")
 
 _last_poll: dict = {"ts": None, "results": {}, "error": None}
@@ -62,8 +62,7 @@ async def fetch_open_meteo(station_id: str) -> dict | None:
 async def fetch_imd(station_id: str) -> dict | None:
     if not LIVE_WEATHER_ENABLED or not IMD_API_KEY:
         return None
-    # Placeholder IMD branch — real endpoint when key provisioned
-    # Example: https://mausam.imd.gov.in/api/... (not yet public, stub)
+    # IMD branch — opt-in via IMD_API_KEY + IMD_API_URL; generic field mapping until NCPOR pins the schema
     url = os.getenv("IMD_API_URL", "https://mausam.imd.gov.in/api/current")
     coords = STATION_COORDS.get(station_id)
     if not coords:
@@ -218,11 +217,22 @@ def start_poller():
     return _poller_task
 
 def get_status() -> dict:
+    now = datetime.datetime.now(datetime.timezone.utc)
+    ts = _last_poll.get("ts")
+    age = None
+    if ts:
+        try:
+            age = max(0, int((now - datetime.datetime.fromisoformat(ts)).total_seconds()))
+        except Exception:
+            age = None
     return {
         "source_setting": TELEMETRY_SOURCE,
         "poll_interval_sec": POLL_INTERVAL_SEC,
         "coords": STATION_COORDS,
         "imd_configured": bool(IMD_API_KEY),
+        "imd_status": "configured" if IMD_API_KEY else "not_configured",
         "live_enabled": LIVE_WEATHER_ENABLED,
+        "fetched_at": ts,
+        "age_sec": age,
         "last_poll": _last_poll,
     }
