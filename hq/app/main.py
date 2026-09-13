@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Any, Dict
-import os, logging, time, uuid, asyncio, json as _json
+import os, logging, time, uuid, asyncio, hmac, json as _json
 from contextlib import asynccontextmanager
 
 from .db import init_db, get_conn, USE_PG, utc_now
@@ -171,17 +171,37 @@ class LoginRequest(BaseModel):
     role: str | None = None
 
 @app.post("/auth/login")
-async def auth_login(body: LoginRequest):
+async def auth_login(body: LoginRequest, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    if not check_rate_limit(f"login_ip:{client_ip}", limit=40, window=60):
+        raise HTTPException(429, "too many login attempts: rate limited")
+    if not check_rate_limit(f"login_dev:{body.device_id}", limit=20, window=60):
+        raise HTTPException(429, "too many login attempts for device: rate limited")
+
     expected_pin = STATION_PINS.get(body.station_id)
-    if not expected_pin or body.pin != expected_pin:
+    if not expected_pin or not hmac.compare_digest(str(body.pin).strip(), str(expected_pin).strip()):
         raise HTTPException(401, "invalid station or pin")
-    # ponytail: PIN alone only grants FIELD_OP; elevated roles require privileged device_id
-    # (prevents any BHARATI-2024 holder from minting NCPOR_ADMIN). Test harnesses use NCPOR-ADMIN-*/TEST-*.
+
     requested = (body.role or "FIELD_OP").upper()
-    if requested in ("STATION_LEAD","DISPATCH","HQ_LOGISTICS","NCPOR_ADMIN"):
-        if not any(k in body.device_id for k in ("ADMIN","LEAD","TEST","HQ")):
+    valid_roles = ["FIELD_OP", "STATION_LEAD", "DISPATCH", "HQ_LOGISTICS", "NCPOR_ADMIN"]
+    if requested not in valid_roles:
+        requested = "FIELD_OP"
+
+    # Elevated roles require authorized device prefix or admin credentials
+    if requested in ("STATION_LEAD", "DISPATCH", "HQ_LOGISTICS", "NCPOR_ADMIN"):
+        admin_secret = os.getenv("ADMIN_KEY") or os.getenv("ADMIN_PIN")
+        is_admin_auth = False
+        if admin_secret and body.pin == admin_secret:
+            is_admin_auth = True
+        elif any(body.device_id.startswith(pfx) for pfx in ("NCPOR-ADMIN-", "HQ-COMMAND-", "TEST-HQ")):
+            is_admin_auth = True
+        elif requested in ("STATION_LEAD", "DISPATCH") and any(body.device_id.startswith(pfx) for pfx in ("LEAD-", "STATION-LEAD-")):
+            is_admin_auth = True
+
+        if not is_admin_auth:
             requested = "FIELD_OP"
-    role = requested if requested in ["FIELD_OP","STATION_LEAD","DISPATCH","HQ_LOGISTICS","NCPOR_ADMIN"] else "FIELD_OP"
+
+    role = requested
     token = sign_jwt({"sub": body.device_id, "role": role, "station_id": body.station_id, "device_id": body.device_id}, SECRET_KEY, TOKEN_EXPIRY_DAYS)
     return {"token": token, "role": role, "station_id": body.station_id, "device_id": body.device_id}
 

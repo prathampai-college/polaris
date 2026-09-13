@@ -3,14 +3,23 @@ import { fuse, Kalman1D } from '@shared/local_map.js';
 import { generateScan, generateBbox } from './sim_lidar';
 import { getDb } from '../db';
 
-const kfX = new Kalman1D();
-const kfY = new Kalman1D();
+const assetFilters = new Map<string, { kfX: Kalman1D; kfY: Kalman1D }>();
+
+function getAssetFilter(assetId: string): { kfX: Kalman1D; kfY: Kalman1D } {
+  let f = assetFilters.get(assetId);
+  if (!f) {
+    f = { kfX: new Kalman1D(), kfY: new Kalman1D() };
+    assetFilters.set(assetId, f);
+  }
+  return f;
+}
 
 export async function runFusionCycle(assetId: string, stationId: string, visibilityM: number = 30): Promise<{ x:number;y:number;conf:number }> {
   const scan = generateScan({ visibilityM });
   const bboxes = generateBbox(visibilityM);
   const { x, y, conf } = fuse(scan, bboxes);
-  const sx = kfX.update(x), sy = kfY.update(y);
+  const filter = getAssetFilter(assetId);
+  const sx = filter.kfX.update(x), sy = filter.kfY.update(y);
   const db = await getDb();
   const now = new Date().toISOString();
   db.exec({

@@ -53,7 +53,22 @@ export function fuse(lidarPoints: Point[], bboxes: Bbox[]): { x: number; y: numb
 // Simple 1D Kalman stub for smoothing
 export class Kalman1D {
   x = 0; p = 1; q = 0.01; r = 0.5;
+  initialized = false;
+
+  constructor(initialX?: number) {
+    if (initialX !== undefined) {
+      this.x = initialX;
+      this.initialized = true;
+    }
+  }
+
   update(z: number): number {
+    if (!this.initialized) {
+      this.x = z;
+      this.p = this.r;
+      this.initialized = true;
+      return this.x;
+    }
     this.p += this.q;
     const k = this.p / (this.p + this.r);
     this.x += k * (z - this.x);
