@@ -1101,8 +1101,9 @@ def forecast_snn(station_id: str, asset_sku: str = "FUEL-DIESEL-001"):
         qty = qty_row["qty"]; crew = cr["winter_crew_count"] if cr else 24
         if not tele: tele = {"temp_outside": -15, "wind_speed": 5, "pressure": 1013, "dg_load": 0.7}
         phys, snn_res, total, active, spike_count = predict_snn_total(tele["temp_outside"], tele["wind_speed"], tele["pressure"], crew, tele["dg_load"], station_id)
+        from .snn_forecast import _SNN_MODEL
         days = qty/total if total>0 else 999
-        return {"station_id": station_id, "asset_sku": asset_sku, "qty": qty, "physics": round(phys,1), "snn_residual": round(snn_res,2), "total_per_day": round(total,1), "days_to_stockout": round(days,1), "ci": [round(days*0.85), round(days*1.15)], "snn_active": active, "spike_count": spike_count, "tele": tele, "saved_pct": 90.0 if not active else 50.0}
+        return {"station_id": station_id, "asset_sku": asset_sku, "qty": qty, "physics": round(phys,1), "snn_residual": round(snn_res,2), "total_per_day": round(total,1), "days_to_stockout": round(days,1), "ci": [round(days*0.85), round(days*1.15)], "snn_active": active, "spike_count": spike_count, "tele": tele, "saved_pct": 90.0 if not active else 50.0, "model": _SNN_MODEL}
     except ImportError as e:
         raise HTTPException(501, f"snn not available: {e}")
     except HTTPException:

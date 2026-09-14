@@ -33,9 +33,9 @@ export function TodayTab({ forecast, snn, assets, indents, sendTelemetry, setTab
               <div className="mt-3 h-2 bg-white/10 rounded-full overflow-hidden max-w-[480px]"><div className="h-full bg-gradient-to-r from-emerald-500 via-amber-500 to-red-500 transition-all duration-500" style={{ width: `${Math.min(100, forecast.days_to_stockout * 2.2)}%` }} /></div>
               <div className="mt-1.5 text-[11px] text-white/40">Physics-informed hybrid inference • Sub-200ms latency on edge tablet</div>
               {snn && (
-                <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-bold border bg-cyan-500/10 text-cyan-300 border-cyan-500/30">
+                <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-bold border bg-cyan-500/10 text-cyan-300 border-cyan-500/30" title={`model: ${snn.model || 'linear-proxy'}${!snn.snn_active ? ' · residual cached from last active' : ''}`}>
                   <span className={`w-2 h-2 rounded-full ${snn.snn_active ? 'bg-cyan-400 animate-pulse' : 'bg-white/40'}`} />
-                  ⚡ SNN {snn.snn_active ? `Active • ${snn.spike_count} spikes • ${snn.snn_residual} L/d` : 'Idle (event-gated)'} • 0.8mW vs 8.2mW ANN ({snn.saved_pct ?? 90}% saved)
+                  ⚡ SNN {snn.snn_active ? `Active • ${snn.spike_count} spikes • ${snn.snn_residual} L/d` : `Idle (event-gated)${snn.snn_residual ? ` · ${snn.snn_residual} L/d cached` : ''}`} • {snn.model === 'lif-5-32-16-1' ? 'LIF 5→32→16→1' : 'linear-proxy'} • 0.8mW vs 8.2mW ({snn.saved_pct ?? 90}% saved)
                 </div>
               )}
             </div>
