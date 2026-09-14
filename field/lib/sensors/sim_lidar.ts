@@ -1,4 +1,5 @@
 'use client';
+// Sim-only LiDAR/camera — no hardware dependency. Every output carries source:'sim-lidar' provenance.
 import { polarToCart } from '@shared/local_map.js';
 import type { Point } from '@shared/local_map.js';
 
