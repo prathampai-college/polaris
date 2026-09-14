@@ -141,8 +141,12 @@ def _fetch_all(sql: str, params=()):
             return [dict(r) for r in cur.fetchall()]
     finally:
         if close_after:
-            try: conn.close()
-            except Exception: pass
+            try:
+                from .db import release_conn
+                release_conn(conn)
+            except Exception:
+                try: conn.close()
+                except Exception: pass
 
 def _fetch_one(sql: str, params=()):
     rows = _fetch_all(sql, params)
