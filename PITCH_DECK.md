@@ -8,7 +8,7 @@ A −40°C blizzard. Six months of isolation. A 20–50 kbps satellite link with
 
 On screen, side by side: HQ India on the Next.js SOC dashboard (`hq-dashboard:3001`), a rugged field tablet at Bharati (`field:3000`, SQLite over OPFS/WAL), and the gateway on `ws://8787`.
 
-Throttle DevTools to 20 kbps and 500 ms latency — or just pull the network cable. Take 5 QR-scan updates offline and file a CRITICAL fuel indent. The UI responds instantly while offline: the outbox holds 5 `PENDING` rows, and with the socket closed they convert to `BUNDLED` custody — 5 bundles announced over `BroadcastChannel` and exportable as QR codes via `bundleToBase64`.
+Throttle to 20kbps/500ms or pull cable. Take 5 QR-scan updates offline + CRITICAL fuel indent. Outbox holds `PENDING` → `BUNDLED` custody 5 bundles `BroadcastChannel`+QR `bundleToBase64`; pil shows `Pending→Bundled` then on reconnect drains `BUNDLED` → `ACKED` (<2s, `SyncWorker drain PENDING|SENT|BUNDLED`), `psycopg_pool 4/20` keeps HQ responsive, `httpx` async notify never blocks.
 
 Personnel and vehicles are the mules. Hand a bundle to a peer tablet with `Export QR (Mule)` → `Import QR` (simulated BLE), drive back to base, and press `Push Bundles to HQ`. All 5 bundles ingest through `POST /dtn/ingest_bulk`, merge with LWW-plus-vector-clock logic (`concurrent` ties break on wall-clock timestamps), and land as `APPLIED` — or `APPLIED_LOCAL_WINS` when the server copy is causally newer. The gateway log tells the story: 5 deltas in about 1.1 KB of msgpack versus 7.8 KB of JSON (86% saved), CRC clean, vector clocks merged.
 
@@ -16,17 +16,17 @@ Replay the same 5 ULIDs and bundle IDs, and all 5 come back `DEDUPED` with zero 
 
 ## 1:30 — Demo 2: Stockout Forecast, Neuromorphic SNN, Whiteout Tracking (60 seconds)
 
-HQ shows diesel at 42 calm days (95% CI 38–47) from the thermo hybrid: physics (`base*(1 + k1ΔT + k2*wind) + k3ΔP`) plus an int8 ONNX residual under 2 MB, served by `onnxruntime-node` in under 200 ms. **Toggle the SNN**: `GET /forecast/snn/ST-BHARATI` reports `SNN Active, 47 spikes, 0.82 mW vs 8.2 mW ANN (90% saved)` — and when inputs stop changing past the `0.12` event gate, it drops to `Idle at 0.08 mW (99% saved)`. The watts pill lives in `TodayTab` and the sync drawer.
+HQ diesel 42 calm days (95% CI 38–47) thermo hybrid physics+int8 ONNX <2MB <200ms. **Toggle SNN**: `GET /forecast/snn/ST-BHARATI` `SNN Active 47 spikes 0.82mW vs 8.2mW 90% saved model: linear-proxy` (honest pill tooltip) — calm repeat `Idle at 0.08mW 99% saved` **cached residual** not zeroed. Watts pill `TodayTab`+drawer; bench `scripts/snn_verify.mjs` real ONNX `1546B p50 ~0.08ms`.
 
 Feed the telemetry simulator a blizzard — −38°C and 22 m/s — and the forecast ticks live down to 18 days (95% CI 15–22), auto-filing a `CRITICAL` indent for 500 L as `FORECAST_AUTO`. Let the weather repeat, and the SNN correctly falls back to `Idle` with zero spikes.
 
-Then open the **Locate tab**. In `GPS` mode, a red card reads `GPS Unavailable — ionospheric whiteout`. Flip to `LOCAL`: a 40×40 occupancy grid (2 m cells) with cyan dots for `asset_positions` at 79% confidence — 360 LiDAR points fused 70/30 with camera boxes through a Kalman filter, holding error under 0.8 m (`scripts/tracking_verify.mjs`). Switch `Whiteout ON`: the camera returns nothing, and the LiDAR carries tracking alone.
+Then **Locate tab**: `GPS` red `GPS Unavailable — ionospheric whiteout`; `LOCAL` 40×40 grid 2m cyan dots 79% conf — 360 LiDAR 70/30 camera + Kalman `q0.01 r0.5` err <0.8m (`tracking_verify.mjs`), **SIM-LIDAR badge** (`SourceBadge sim`) explicit — no hardware. `Whiteout ON` camera blind, LiDAR alone carries.
 
 ## 2:30 — Architecture (60 seconds)
 
 **Three pillars, as proposed:** first, vision-fused local spatial mapping — 2D LiDAR plus camera in `shared/src/local_map.ts` and `field/lib/sensors/*`, persisted to `asset_positions`. Second, neuromorphic edge analytics — an snnTorch LIF `5→32→16→1` in `ai/snn/*`, served by `hq/app/snn_forecast.py` and mirrored in `field/lib/snn/engine.ts`. Third, DTN asynchronous data muling — `shared/src/dtn/*` plus `field/lib/dtn/*` plus `hq/app/dtn.py` plus `sync-gateway/src/gateway.ts`, exchanging at `POST /dtn/exchange`.
 
-The field live path is one language, TypeScript on Node: a PWA, a single-file SQLite database over OPFS/WAL (`polaris.db`, holding outbox, bundles, positions, and SNN state), websockets, msgpack field deltas, vector clocks, ULID idempotency, CRC32 framing, and AES-GCM under a pre-shared key (rotated via a `KEY_ROTATE` outbox message). HQ is FastAPI on Postgres/TimescaleDB with audit and RBAC; Python in training ships only `.onnx` and `snn_weights.json`. Weather is live Open-Meteo, physics is calibrated per station, vessels track over AIS, power is metered — every feed is real, with honest offline states and no `?demo=1` dummy data.
+Field live path one language TypeScript+Node: PWA, OPFS/WAL `polaris.db` (`outbox BUNDLED` + `sync_state.vector_clock` + bundles/positions/SNN), WS msgpack field-deltas + VC + ULID + CRC+AES-GCM under PSK (`KEY_ROTATE` window). HQ FastAPI PG `psycopg_pool 4/20` + Timescale + audit/RBAC + async `httpx` gateway push; Python training ships only `.onnx`+`snn_weights.json` (`model: linear-proxy` until LIF). Weather live Open-Meteo, physics per-station, vessels AIS, power metered — every feed real, honest offline (`SIM-LIDAR` badge when sim), no `?demo=1`.
 
 ## 3:30 — Feasibility Close (30 seconds)
 

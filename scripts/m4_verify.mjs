@@ -22,7 +22,7 @@ const db=new DatabaseSync(FIELD_DB); db.exec(schema);
 db.exec(`INSERT OR IGNORE INTO stations VALUES ('ST-BHARATI','Bharati','a',24)`); db.exec(`INSERT OR IGNORE INTO containers VALUES ('C1','ST-BHARATI','ISO_20ft','A1')`); db.prepare('INSERT OR IGNORE INTO crates VALUES (?,?,?,?)').run('C1-K1','C1','{"x":0,"y":0}','AMBIENT');
 const now=new Date().toISOString();
 db.prepare('INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run('A1','FUEL-DIESEL-001','Diesel','FUEL_DIESEL',4200,'L',null,'CRITICAL','C1-K1','FUEL-DIESEL-001',1,now);
-db.prepare("INSERT OR IGNORE INTO sync_state VALUES ('DEV-01',NULL,0)").run();
+db.prepare("INSERT OR IGNORE INTO sync_state (device_id, last_acked_ulid, last_server_version, vector_clock) VALUES ('DEV-01',NULL,0,NULL)").run();
 console.log(' field seeded');
 
 // Chaos Test 3: WAL power-kill

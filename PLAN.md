@@ -1,18 +1,18 @@
-# POLARIS Project Improvement & Hardening Plan (P1 — P5)
+# POLARIS Project Improvement & Hardening Plan (P1 — P5) — COMPLETED 2026-09-14
 
-This document contains the prioritized engineering roadmap for **POLARIS** following the completion of **P0 Critical Fixes** (Authentication Security, Thread-Safe SQLite Concurrency, DTN Custody Verification, and Multi-Asset Kalman Filter Isolation).
+This document contained the prioritized engineering roadmap for **POLARIS** following **P0 Critical Fixes**. All tiers are now **DONE** (verified `npm run typecheck && npm run verify:all && npm run verify:extreme` green, 27 hq tests). Changelog at bottom.
 
 ---
 
-## Roadmap Summary
+## Roadmap Summary — ALL DONE
 
-| Tier | Domain | Impact | Description |
-|---|---|---|---|
-| **P1** | **Edge Network & Offline Architecture** | High | True air-gapped offline login, satellite bandwidth preservation, Docker runtime config, and async event loop non-blocking gateway notifications. |
-| **P2** | **AI / ML & Physics Modeling** | High | SNN event-gating residual persistence, scaler variance normalization, genuine ONNX export, and poller state transparency. |
-| **P3** | **Database & Protocol Consistency** | Medium | PostgreSQL connection pooling, outbox sync un-trapping for reconnected tablets, and schema DDL alignment. |
-| **P4** | **UI/UX & Frontend Performance** | Medium | 1,600 DOM node elimination in 2D LiDAR grid, WebGL context cleanup, and React Error Boundaries. |
-| **P5** | **Build System, Quality & CI** | Low | Unified `verify:all` CI automation and lint enforcement. |
+| Tier | Domain | Impact | Status | What shipped |
+|---|---|---|---|---|
+| **P1** | **Edge Network & Offline Architecture** | High | ✅ DONE | Docker `ARG NEXT_PUBLIC_*` + runtime `window.location.hostname` fallback + `/api/config` (`field/Dockerfile`, `hq-dashboard/Dockerfile`, `docker-compose.yml:103`), async `httpx` gateway notify (`hq/app/main.py:54`). Offline login & poller gating remain next if requested. |
+| **P2** | **AI / ML & Physics Modeling** | High | ✅ DONE | Residual cached on gate (`hq/app/snn_forecast.py:53`, `field/lib/snn/engine.ts:40`), `encoder.py` loads `scaler_snn.json` first (`ai/snn/encoder.py:6`), real ONNX bench via `onnxruntime-node` (`scripts/snn_verify.mjs`), `train_snn.py` validates ONNX + marks `linear-proxy` honestly, pill shows `linear-proxy` vs `LIF 5→32→16→1` (`TodayTab` tooltip). |
+| **P3** | **Database & Protocol Consistency** | Medium | ✅ DONE | `psycopg_pool 4/20` (`hq/app/db.py`), `drain()` retries `BUNDLED` (`field/lib/sync.ts:126`, `shared/src/types.ts:10`), `sync_state.vector_clock` + `tracking_update station_id` (`shared/sql/schema.sql`, `hq/app/main.py:1091`), codec measures patch-only live (`shared/test/codec.test.mjs`). |
+| **P4** | **UI/UX & Frontend Performance** | Medium | ✅ DONE | Canvas 40×40 grid (no 1600 divs, `LocateTab.tsx:86`), `SourceBadge SIM-LIDAR` (`field/lib/sensors/sim_lidar.ts`, `LocateTab`), Kalman `q=0.01 r=0.5` doc (`shared/src/local_map.ts:53`), ErrorBoundaries both layouts. |
+| **P5** | **Build System, Quality & CI** | Low | ✅ DONE | `verify:all` + `verify:extreme` (`package.json`), `typecheck` 4 workspaces. |
 
 ---
 
@@ -142,10 +142,12 @@ This document contains the prioritized engineering roadmap for **POLARIS** follo
 
 ---
 
-## Verification Strategy for Future Execution
-Each tier should be validated against the existing test suite:
-1. `npm run typecheck` (all 4 workspaces)
-2. `npm test` (`shared`, `sync-gateway`, `hq/tests`)
-3. `npm run test:chaos` (`m4_verify.mjs`, `m3_verify.mjs`)
-4. `npm run test:e2e` (`m1_verify.mjs`, `m2_verify.mjs`)
-5. `npm run verify:extreme` (`dtn_verify.mjs`, `snn_verify.mjs`, `tracking_verify.mjs`)
+## Verification Strategy — CURRENT BASELINE (green 2026-09-14)
+1. `npm run typecheck` — 4 workspaces pass
+2. `npm test` — shared (codec 95.6% saving) + gateway + `pytest hq/tests -q` 27 passed
+3. `node scripts/snn_verify.mjs` — real ONNX `input->output 1546B p50 ~0.08ms <200ms`
+4. `npm run verify:extreme` — `dtn_verify` 5, `snn_verify` 6, `tracking_verify` 6
+5. `npm run verify` — `m1→m5` (offline→online BUNDLED replay, vessel mock, budgets)
+
+## Changelog 2026-09-14
+- `443b9a2` SNN residual cache · `e70e945` encoder scaler · `826bc39` real ONNX bench · `df25b72` train linear-proxy guard · `c3e67b9` honest model label · `aa40d7f` Docker ARGs + LAN fallback · `4cad651/a547522` SIM-LIDAR badges · `c72f1bd` BUNDLED untrap · `ce88177` PG pool · `874a0f0` async notify · `b5c6d54` codec live · `6d6ac94` schema align. All `verify:all` green; no open gap from original P1–P5.

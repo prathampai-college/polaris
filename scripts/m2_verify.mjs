@@ -27,7 +27,7 @@ const assets=[['A1','FUEL-DIESEL-001','Diesel (Winter Grade)','FUEL_DIESEL',4200
 for(const a of assets) fieldDb.prepare('INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(...a);
 // add expired asset for expiry test
 fieldDb.prepare('INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run('A99','MED-EXPIRED-099','Expired Med','MEDICAL',5,'kits','2025-01-01','CRITICAL','C2-K3','MED-EXPIRED-099',1,now);
-fieldDb.prepare("INSERT OR IGNORE INTO sync_state VALUES ('BHARATI-TABLET-01',NULL,0)").run();
+fieldDb.prepare("INSERT OR IGNORE INTO sync_state (device_id, last_acked_ulid, last_server_version, vector_clock) VALUES ('BHARATI-TABLET-01',NULL,0,NULL)").run();
 console.log(' seeded field assets', fieldDb.prepare('SELECT COUNT(*) as c FROM assets').get().c);
 
 console.log('\n1) QR scan + IN/OUT/CONSUME (offline, SQLite WAL tx + outbox)...');
