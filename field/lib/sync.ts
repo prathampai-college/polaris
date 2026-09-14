@@ -89,13 +89,23 @@ export class SyncWorker {
           return;
         }
 
-        // 3. Handle upstream ACK
+        // 3. Handle upstream ACK — only success acks clear the outbox.
+        // FAILED must NOT be marked ACKED (was: every ack cleared the row,
+        // silently dropping failed/conflicted frames). CONFLICT_* rows are
+        // left for retry — HQ dedupes by ULID so replays are idempotent.
         this.stats.acked++;
         if (frame.status === 'DEDUPED') this.stats.deduped++;
         const { getDb } = await import('./db');
         const db = await getDb();
-        if (frame.ulid) db.exec({ sql: "UPDATE outbox SET status='ACKED' WHERE ulid=?", bind: [frame.ulid] });
-        if (frame.server_version !== undefined) {
+        const okStatuses = ['APPLIED', 'DEDUPED', 'APPLIED_LOCAL_WINS'];
+        if (frame.ulid) {
+          if (okStatuses.includes(String(frame.status))) {
+            db.exec({ sql: "UPDATE outbox SET status='ACKED' WHERE ulid=?", bind: [frame.ulid] });
+          } else if (String(frame.status) === 'FAILED') {
+            db.exec({ sql: "UPDATE outbox SET status='FAILED' WHERE ulid=?", bind: [frame.ulid] });
+          }
+        }
+        if (frame.server_version !== undefined && okStatuses.includes(String(frame.status))) {
           db.exec({
             sql: 'UPDATE sync_state SET last_acked_ulid=?, last_server_version=? WHERE device_id=?',
             bind: [frame.ulid, frame.server_version, this.deviceId],
@@ -161,7 +171,13 @@ export class SyncWorker {
         const { savingPct } = sizeReport(frame);
         this.stats.savingPct = savingPct;
         const wire = await toWire(frame);
-        if (wire.length > MAX_WIRE_SIZE) { console.warn('[sync] frame >2KB', wire.length); continue; }
+        if (wire.length > MAX_WIRE_SIZE) {
+          // dead-letter: row stays PENDING/SENT/BUNDLED otherwise and drain
+          // re-sends it every 2s forever. FAILED rows are excluded from drain.
+          console.warn('[sync] frame >2KB, dead-lettering', wire.length, r.ulid);
+          db.exec({ sql: "UPDATE outbox SET status='FAILED' WHERE ulid=?", bind: [r.ulid] });
+          continue;
+        }
         (this.ws as unknown as { send(d: Uint8Array): void }).send(wire);
         this.stats.sent++;
         if (r.status === 'PENDING') db.exec({ sql: "UPDATE outbox SET status='SENT', retry_count=retry_count+1 WHERE ulid=?", bind: [r.ulid] });

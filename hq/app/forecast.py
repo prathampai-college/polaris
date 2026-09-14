@@ -8,21 +8,22 @@ def load_physics(station_id: str | None = None):
     """Per-station physics: if station_id given, try DB physics_params, else fallback to global file."""
     if station_id:
         try:
-            from .db import get_conn, USE_PG
+            from .db import get_conn, release_conn, USE_PG
             conn = get_conn()
             if USE_PG:
-                import psycopg as _pg
-                # use a fresh conn for thread safety; get_conn already returns new PG conn
-                with conn:
-                    with conn.cursor() as cur:
-                        cur.execute("SELECT T_INSIDE, BASE, K1, K2, K3 FROM physics_params WHERE station_id=%s", (station_id,))
-                        row = cur.fetchone()
-                        if row:
-                            # psycopg returns tuple; map
-                            return {"T_INSIDE": float(row[0]), "BASE": float(row[1]), "K1": float(row[2]), "K2": float(row[3]), "K3": float(row[4])}
-                # don't close here — context manager handles? get_conn returns new conn each call, so close
-                try: conn.close()
-                except Exception: pass
+                try:
+                    # use a fresh conn for thread safety; get_conn already returns new PG conn
+                    with conn:
+                        with conn.cursor() as cur:
+                            cur.execute("SELECT T_INSIDE, BASE, K1, K2, K3 FROM physics_params WHERE station_id=%s", (station_id,))
+                            row = cur.fetchone()
+                            if row:
+                                # psycopg returns tuple; map
+                                return {"T_INSIDE": float(row[0]), "BASE": float(row[1]), "K1": float(row[2]), "K2": float(row[3]), "K3": float(row[4])}
+                finally:
+                    # return pooled PG conns to the pool (close() would leak pool slots)
+                    try: release_conn(conn)
+                    except Exception: pass
             else:
                 cur = conn.execute("SELECT T_INSIDE, BASE, K1, K2, K3 FROM physics_params WHERE station_id=?", (station_id,))
                 row = cur.fetchone()

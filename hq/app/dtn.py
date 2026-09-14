@@ -22,6 +22,26 @@ def ingest_bundle(bundle: dict, cur) -> dict:
     patch = payload.get("patch") or {}
     src = bundle.get("src", "mule")
     dst = bundle.get("dstStation") or bundle.get("dst_station") or "ST-BHARATI"
+    created_at = bundle.get("createdAt") or bundle.get("created_at")
+    try:
+        ttl = int(bundle.get("ttlSec", bundle.get("ttl", 86400)))
+    except Exception:
+        ttl = 86400
+    custody = 1 if bundle.get("custody", True) else 0
+
+    # TTL enforcement (mirrors shared/src/dtn/bundle.ts isBundleExpired).
+    # Bundles without a parseable createdAt are treated as unexpired.
+    try:
+        if created_at:
+            import datetime as _dt
+            ref = _dt.datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+            if ref.tzinfo is None:
+                ref = ref.replace(tzinfo=_dt.timezone.utc)
+            age = (_dt.datetime.now(_dt.timezone.utc) - ref).total_seconds()
+            if age > ttl:
+                return {"bundleId": bid, "status": "EXPIRED"}
+    except Exception:
+        pass
 
     # dedupe via bundleId in dedupe table
     try:
@@ -97,12 +117,12 @@ def ingest_bundle(bundle: dict, cur) -> dict:
                     if USE_PG:
                         cur.execute("UPDATE assets SET qty=%s, version=%s, updated_at=%s, vector_clock=%s WHERE id=%s", (new_qty, new_ver or 1, now, merged_s, entity_id))
                         cur.execute("INSERT INTO dedupe (ulid, processed_at) VALUES (%s,%s) ON CONFLICT DO NOTHING", (bid, now))
-                        cur.execute("INSERT INTO dtn_bundles (bundle_id, src, dst_station, payload, vc, custody, created_at, ttl) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING", (bid, src, dst, json.dumps(payload), merged_s, 0, now, 86400))
+                        cur.execute("INSERT INTO dtn_bundles (bundle_id, src, dst_station, payload, vc, custody, created_at, ttl) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING", (bid, src, dst, json.dumps(payload), merged_s, custody, now, ttl))
                     else:
                         use_conn = cur if hasattr(cur, "execute") else get_conn()
                         use_conn.execute("UPDATE assets SET qty=?, version=?, updated_at=?, vector_clock=? WHERE id=?", (new_qty, new_ver or 1, now, merged_s, entity_id))
                         use_conn.execute("INSERT OR IGNORE INTO dedupe (ulid, processed_at) VALUES (?,?)", (bid, now))
-                        use_conn.execute("INSERT OR IGNORE INTO dtn_bundles (bundle_id, src, dst_station, payload, vc, custody, created_at, ttl) VALUES (?,?,?,?,?,?,?,?)", (bid, src, dst, json.dumps(payload), merged_s, 0, now, 86400))
+                        use_conn.execute("INSERT OR IGNORE INTO dtn_bundles (bundle_id, src, dst_station, payload, vc, custody, created_at, ttl) VALUES (?,?,?,?,?,?,?,?)", (bid, src, dst, json.dumps(payload), merged_s, custody, now, ttl))
                 except Exception as e:
                     return {"bundleId": bid, "status": "FAILED", "error": str(e)}
             return {"bundleId": bid, "status": "APPLIED", "winner": winner, "cmp": cmp}
@@ -135,7 +155,7 @@ def ingest_bundle(bundle: dict, cur) -> dict:
                     cur.execute("UPDATE indents SET status=%s WHERE id=%s", (patch.get("status"), entity_id))
                 cur.execute("INSERT INTO dedupe (ulid, processed_at) VALUES (%s,%s) ON CONFLICT DO NOTHING", (bid, now))
                 cur.execute("INSERT INTO dtn_bundles (bundle_id, src, dst_station, payload, vc, custody, created_at, ttl) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
-                            (bid, src, dst, json.dumps(payload), vc_s, 0, now, 86400))
+                            (bid, src, dst, json.dumps(payload), vc_s, custody, now, ttl))
             else:
                 # BUGFIX: use passed cur (conn) without inner commit — caller manages transaction
                 use_conn = cur if hasattr(cur, "execute") else get_conn()
@@ -147,7 +167,7 @@ def ingest_bundle(bundle: dict, cur) -> dict:
                     use_conn.execute("UPDATE indents SET status=? WHERE id=?", (patch.get("status"), entity_id))
                 use_conn.execute("INSERT OR IGNORE INTO dedupe (ulid, processed_at) VALUES (?,?)", (bid, now))
                 use_conn.execute("INSERT OR IGNORE INTO dtn_bundles (bundle_id, src, dst_station, payload, vc, custody, created_at, ttl) VALUES (?,?,?,?,?,?,?,?)",
-                             (bid, src, dst, json.dumps(payload), vc_s, 0, now, 86400))
+                             (bid, src, dst, json.dumps(payload), vc_s, custody, now, ttl))
             return {"bundleId": bid, "status": "APPLIED"}
         except Exception as e:
             return {"bundleId": bid, "status": "FAILED", "error": str(e)}

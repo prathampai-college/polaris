@@ -115,9 +115,20 @@ export async function deleteBundle(bundleId: string): Promise<void> {
 }
 
 export async function clearExpired(): Promise<number> {
-  const db = await getDb();
-  const n = db.selectValue("SELECT COUNT(*) FROM dtn_bundles WHERE (strftime('%s','now') - strftime('%s', created_at)) > ttl") as number;
-  if (n > 0) db.exec("DELETE FROM dtn_bundles WHERE (strftime('%s','now') - strftime('%s', created_at)) > ttl");
+  // Evaluate expiry in JS with the shared helper: created_at is stored as an
+  // ISO string (Date.toISOString) and SQLite strftime() parsing of that
+  // format is build-dependent (NULL on some builds → rows never expire).
+  const rows = await listBundles();
+  const now = Date.now();
+  let n = 0;
+  for (const r of rows as any[]) {
+    const t = Date.parse(r.created_at);
+    const ttl = Number(r.ttl ?? 86400);
+    if (!Number.isNaN(t) && now - t > ttl * 1000) {
+      await deleteBundle(r.bundle_id);
+      n++;
+    }
+  }
   return n;
 }
 

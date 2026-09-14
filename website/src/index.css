@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { scrollbar-width: thin; scrollbar-color: #1a3a52 #020a12; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #020a12; }
+::-webkit-scrollbar-thumb { background: #14344f; border-radius: 99px; }
+html { scroll-behavior: smooth; }
+body { font-family: Inter, system-ui, sans-serif; background: #020a12; }
+::selection { background: rgba(34,240,216,.3); }
+
+/* range sliders */
+input[type='range'] { -webkit-appearance: none; appearance: none; height: 6px; border-radius: 99px; background: rgba(255,255,255,.12); outline: none; cursor: pointer; }
+input[type='range']::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #fff; border: 3px solid #22f0d8; box-shadow: 0 0 16px rgba(34,240,216,.6); cursor: grab; }
+input[type='range']::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #fff; border: 3px solid #22f0d8; box-shadow: 0 0 16px rgba(34,240,216,.6); cursor: grab; }
+input[type='range'].amber::-webkit-slider-thumb { border-color: #ffb84d; box-shadow: 0 0 16px rgba(255,184,77,.6); }
+input[type='range'].amber::-moz-range-thumb { border-color: #ffb84d; }
+
+/* dotted world texture */
+.dotgrid { background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,.5) 1px, transparent 0); background-size: 18px 18px; }
+.blueprint { background-image: linear-gradient(rgba(255,255,255,.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px); background-size: 44px 44px; }
+
+/* shimmer text */
+.shimmer { background: linear-gradient(110deg, #fff 30%, #22f0d8 50%, #fff 70%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 3.5s linear infinite; }
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+
+/* terminal caret */
+.caret::after { content: '▊'; animation: blink 1.1s steps(2) infinite; color: #22f0d8; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* hide scrollbars for chip rails */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
