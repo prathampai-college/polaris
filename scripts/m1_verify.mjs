@@ -40,7 +40,7 @@ const assets = [
   ['A5','MED-ANTIBIOTIC-005','Antibiotic Kit','MEDICAL',12,'kits','2026-09-20','CRITICAL','C2-K3','MED-ANTIBIOTIC-005',1,new Date().toISOString()],
 ];
 for(const a of assets) fieldDb.prepare('INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(...a);
-fieldDb.prepare("INSERT OR IGNORE INTO sync_state VALUES ('BHARATI-TABLET-01', NULL, 0)").run();
+fieldDb.prepare("INSERT OR IGNORE INTO sync_state VALUES ('BHARATI-TABLET-01', NULL, 0, NULL)").run();
 console.log('   seeded', fieldDb.prepare('SELECT COUNT(*) as c FROM assets').get().c, 'assets');
 
 console.log('2) Chaos Test 3: WAL crash recovery — 5 offline CONSUME writes (no network) ...');

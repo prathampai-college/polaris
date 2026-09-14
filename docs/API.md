@@ -4,7 +4,7 @@ Base: `http://localhost:8000` (or `hq:8000` in Docker). All JSON. CORS via `ALLO
 
 ## Health
 
-`GET /health` → `{status:"ok", db:"postgres"|"sqlite-fallback", ts}`
+`GET /health` → `{status:"ok", db:"postgres"|"sqlite-fallback", ts}` (+ PG `pool: {size,waiting}` when pooled)
 
 ## Assets
 
@@ -52,12 +52,12 @@ Uses `load_physics(station_id)` `hq/app/forecast.py:7` per-station `physics_para
   "station_id":"ST-BHARATI", "asset_sku":"FUEL-DIESEL-001", "qty":4200,
   "physics":163.5, "snn_residual":1.8, "total_per_day":165.3,
   "days_to_stockout":42, "ci":[38,47],
-  "snn_active":true, "spike_count":47, "saved_pct":90.0,
+  "snn_active":true, "spike_count":47, "saved_pct":90.0, "model":"linear-proxy",
   "tele":{"temp_outside":-15,"wind_speed":5,"pressure":1013,"dg_load":0.7}
 }
 ```
 
-SNN LIF event-gated `hq/app/snn_forecast.py:1` `predict_snn_total()` — if `|Δnorm|<0.12` idle `snn_active:false, snn_residual 0, saved 99%`. `hq/app/main.py:917`.
+SNN LIF event-gated `hq/app/snn_forecast.py:1` `predict_snn_total()` — if `|Δnorm|<0.12` idle `snn_active:false` **residual = cached `_last_residual` (not zero)** `saved 99%`, `model: linear-proxy|lif-5-32-16-1` (honest pill tooltip). `hq/app/main.py:917`.
 
 `GET /physics/{station}` → `{station_id, T_INSIDE, BASE, K1, K2, K3}` per-station `hq/app/main.py:499` or `global_fallback` + `source` flag. Used by `scripts/calibrate_physics.py`.
 
@@ -79,7 +79,7 @@ SNN LIF event-gated `hq/app/snn_forecast.py:1` `predict_snn_total()` — if `|Δ
 
 `GET /vessels/sources` → poller health `{mode, poll_interval_sec, ais_configured, live_enabled, cache, last}` `hq/app/main.py:533` `hq/app/vessel_poller.py:11` (`LIVE_AIS_ENABLED` gate, `VESSEL_MODE`).
 
-`GET /sync/state/{device_id}` → `{device_id, last_acked_ulid, last_server_version}` `hq/app/main.py:683` (now includes `vector_clock` convergence via `_vc.py:1`).
+`GET /sync/state/{device_id}` → `{device_id, last_acked_ulid, last_server_version, vector_clock}` `hq/app/main.py:683` (VC convergence via `hq/app/_vc.py:1`, DDL `sync_state.vector_clock` `shared/sql/schema.sql`).
 
 `POST /vessels/poll` → manual trigger `hq/app/main.py:541` `poll_once()`.
 
@@ -91,13 +91,13 @@ SNN LIF event-gated `hq/app/snn_forecast.py:1` `predict_snn_total()` — if `|Δ
 
 `GET /telemetry/history?station_id=ST-BHARATI&days=30` → `[{day, avg_temp, avg_load}]` aggregated history `hq/app/main.py:351`.
 
-`GET /telemetry/sources` → poller health `{source_setting:both|sim|imd|openmeteo, poll_interval_sec, coords, imd_configured, live_enabled, last_poll:{ts,results,error}}` `hq/app/main.py:354` `hq/app/telemetry_poller.py:11` (Open-Meteo free + optional IMD, `TELEMETRY_SOURCE` + `LIVE_WEATHER_ENABLED` gate).
+`GET /telemetry/sources` → poller health `{source_setting:both|sim|imd|openmeteo, poll_interval_sec, coords, imd_configured, live_enabled, last_poll:{ts,results,error}}` `hq/app/main.py:354` `hq/app/telemetry_poller.py:11` (Open-Meteo free + optional IMD, `TELEMETRY_SOURCE` + `LIVE_WEATHER_ENABLED=true` default).
 
 `GET /telemetry/stream` → SSE `text/event-stream` (`event: telemetry`) `hq/app/main.py:363` `asyncio.Queue` 100 keepalive 30s.
 
 ## Tracking (Vision-Fused Local)
 
-`POST /tracking/update` body `{asset_id, x, y, theta?, conf?, station_id}` → `{asset_id, x, y, conf}` `hq/app/main.py:903` `INSERT INTO asset_positions ON CONFLICT UPDATE` per `shared/src/local_map.ts:1` `asset_positions` table. Called by `field/lib/sensors/fusion.ts:1` `runFusionCycle()` every 3s; `x,y` in meters local frame (not GPS lat/lon).
+`POST /tracking/update` body `{asset_id, x, y, theta?, conf?, station_id}` → `{asset_id, x, y, conf}` `hq/app/main.py:1089` `INSERT ... ON CONFLICT(asset_id) DO UPDATE SET x,y,theta,conf,last_sensor_ts,station_id` (`hq/app/main.py:1091`). Called by `fusion.ts:1` every 3s; local frame meters; **SIM-LIDAR** badge (`LocateTab`).
 
 `GET /tracking/positions?station_id=ST-BHARATI` → `AssetPosition[] {asset_id, x, y, theta, conf, last_sensor_ts, station_id, sku, name}` via join `hq/app/main.py:917`.
 

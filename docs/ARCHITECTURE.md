@@ -2,24 +2,24 @@
 
 ## Stack
 
-Field tablets and the HQ Dashboard run **Next.js 14**, HQ and training run **Python 3.11**, and the Sync Gateway runs **Node 20**. The stack is settled: the system is production-ready on these pillars, and no rewrite is planned.
+Field tablets + HQ Dashboard **Next.js 14** (Docker `ARG NEXT_PUBLIC_*` + runtime `window.location.hostname` fallback + `/api/config` `field/app/api/config:1` `hq-dashboard/app/api/config:1`), HQ/training **Python 3.11** (`httpx` async, `psycopg_pool`), Gateway **Node 20**. Stack settled; production-ready.
 
-## 3-Pillar Extreme-Edge
+## 3-Pillar Extreme-Edge (honest labels)
 
 | Pillar | Standard Trap (Will Fail) | POLARIS Resilient | Code |
 |--------|---------------------------|-------------------|------|
-| **I Vision-Fused Local Tracking** | GPS geotags sent to a central database, which fail under ionospheric disturbance and 0.8 m whiteout visibility. | 360-point 2D LiDAR scans and camera bounding boxes fuse on a 40×40 grid (2 m cells): `fuse()` blends 70% LiDAR with 30% camera, then a Kalman filter writes `[x, y, theta]` into `asset_positions` — a local frame with GPS denied. | `field/lib/sensors/sim_lidar.ts:1` `field/lib/sensors/fusion.ts:1` `shared/src/local_map.ts:1` `hq/app/main.py:903` |
-| **II Neuromorphic SNN** | A continuously running dense ANN in the cloud at 8.2 mW. | An snnTorch LIF network (`5→32→16→1`) with rate-coded spikes (`T=20`), gated to run only when inputs move more than `Δ 0.12` — idling at 0.8 mW (about 90% saved, `shared/src/snn-config.ts:1`). | `ai/snn/encoder.py:1` `ai/snn/train_snn.py:1` `hq/app/snn_forecast.py:1` `field/lib/snn/engine.ts:1` `shared/src/snn-config.ts:1` |
-| **III DTN Data Muling** | Continuous REST calls over an uplink that drops by default. | `dtn_bundles` held in custody and carried by `BroadcastChannel`/QR mules, merging with LWW plus vector clocks (`compare`/`merge`, single-sourced in `hq/app/_vc.py:1`). | `shared/src/dtn/vector_clock.ts:1` `shared/src/dtn/bundle.ts:1` `field/lib/dtn/mule.ts:1` `hq/app/dtn.py:1` `hq/app/_vc.py:1` |
+| **I Vision-Fused Local Tracking** | GPS geotags, 0.8m whiteout fail | 360pt LiDAR + camera bbox on 40×40 (2m) `fuse()` 70/30 + Kalman `q0.01 r0.5` → `asset_positions` local frame; **SIM-LIDAR** badge (`SourceBadge sim`) makes simulation explicit | `field/lib/sensors/sim_lidar.ts:1` `fusion.ts:1` `shared/src/local_map.ts:1` `hq/app/main.py:1089` `field/components/tabs/LocateTab.tsx:1` |
+| **II Neuromorphic SNN** | Dense ANN 8.2mW always-on | snnTorch LIF `5→32→16→1` rate-coded `T=20` gated `Δ0.12` — **residual cached on gate** (`_last_residual` `hq/app/snn_forecast.py:53` `field/lib/snn/engine.ts:40`), `scaler_snn.json` first (`encoder.py:6`), **real ONNX bench** `snn_verify.mjs` `onnxruntime-node`, `model: linear-proxy` honest until LIF matrices ship (pill tooltip) | `ai/snn/encoder.py:1` `train_snn.py:1` `snn_forecast.py:1` `field/lib/snn/engine.ts:1` `shared/src/snn-config.ts:1` |
+| **III DTN Data Muling** | REST fails on blackout | `dtn_bundles` custody `BUNDLED` + `BroadcastChannel`/QR, **re-tries `BUNDLED` on reconnect** (`field/lib/sync.ts:126` `BUNDLED→ACKED`), LWW+VC (`hq/app/_vc.py:1`) | `shared/src/dtn/vector_clock.ts:1` `bundle.ts:1` `field/lib/dtn/mule.ts:1` `hq/app/dtn.py:1` |
 
 The proposal's risks are covered: hardware thresholds are respected (JS LIF engine, 40-cell grid), conflicts resolve deterministically (LWW plus vector clocks with `dedupe`), and the SNN pipeline is exact (`encoder.py` maps sigmoid outputs to rates to Poisson spikes).
 
 ## 3D Container X-Ray & Shared Specs
 - **3D X-Ray Locator:** A React Three Fiber visualizer (`@react-three/fiber` and `@react-three/drei`) renders ISO-20ft containers and maps coordinate-indexed crates (`{x,y}`) in 3D on both field tablets and the HQ dashboard. Specs are centralized in `shared/src/containers.ts` (`CONTAINER_SPECS`/`CRATE_COORDS`) imported via `@polaris/shared/containers.js` (avoids pulling `node:crypto` into browser bundle), implemented in `field/components/Container3D.tsx` (`Stocked`) and `hq-dashboard/components/Container3D.tsx` (`Normal`).
 - **Shared helpers (refactor):** `shared/src/wire.ts:1` `MAX_WIRE_SIZE` (used by `codec.ts`, `codec.web.ts`, `sync-gateway/src/gateway.ts:3`, `field/lib/sync.ts:2`), `shared/src/url.ts:1` `toHttpUrl()`, `shared/src/snn-config.ts:1` `SNN_EVENT_THRESH`/`SNN_DEFAULT_WEIGHTS` (used by `field/lib/snn/engine.ts:1` + `hq/app/snn_forecast.py:1`), `hq/app/db.py:1` `utc_now()`, `hq/app/_vc.py:1` VC single source.
-- **Offline DB:** SQLite WASM over OPFS/WAL (`@sqlite.org/sqlite-wasm`) keeps a single `polaris.db` holding `outbox`, `dedupe`, `sync_state`, `vessels`, `dtn_bundles`, `asset_positions`, and `snn_state`. The schema in `shared/sql/schema.sql:1` is mirrored inline for the browser (`field/lib/db.ts:18`) and adapted for Postgres by `hq/app/db.py:118` (which strips `PRAGMA` statements and maps `BLOB` to `BYTEA`). The `vector_clock TEXT` columns are backfilled on older databases with `ALTER TABLE ADD COLUMN` (`_ensure_dtn_sqlite` in `hq/app/db.py:115`, plus the matching migration in `field/lib/db.ts:56`). Procurement seeds come from a single source: `procurement_targets` in `shared/seed.json:4`.
-- **Vessel Map:** Leaflet `1.9.4` with `react-leaflet` `4.2.1` in `hq-dashboard/components/VesselMap.tsx:1`. The map probes `tile.openstreetmap.org` (`HEAD 0/0/0.png`, 2-second timeout); when offline or air-gapped, it falls back to a schematic map with an ETA pill (speed in knots, from the `shared/vessel_schedule.json` mock). Field tablets show offline vessel ETAs through `listVessels()` (`field/lib/db.ts:296`), fed by `DOWNSTREAM_DELTA vessels`.
-- **Local Grid:** `shared/src/local_map.ts:1` provides the grid (`GRID_SIZE 40`, `CELL_M 2`) with `polarToCart`, `cartToGrid`, `createGrid`, `insertPoints`, `fuse()`, and `Kalman1D`. Fusion (`field/lib/sensors/fusion.ts:1`) runs every 3 s through `startFusionLoop()`, injects 0.8 m whiteouts 15% of the time (camera blind), and keeps tracking on LiDAR alone at confidence 0.75.
+- **Offline DB:** SQLite WASM over OPFS/WAL (`@sqlite.org/sqlite-wasm`) keeps a single `polaris.db` holding `outbox` (incl. `BUNDLED`), `dedupe`, `sync_state.vector_clock`, `vessels`, `dtn_bundles`, `asset_positions`, and `snn_state`. Canonical DDL `shared/sql/schema.sql:1` is mirrored inline (`field/lib/db.ts:9`) and adapted for Postgres by `hq/app/db.py:45` (strips `PRAGMA`, `BLOB→BYTEA`). `vector_clock`/`sync_state.vector_clock`/`local_coord` backfilled via `ALTER TABLE ADD COLUMN IF NOT EXISTS` (`hq/app/db.py:115` both SQLite + PG pools, `field/lib/db.ts:56`). HQ now uses **`psycopg_pool ConnectionPool 4/20`** (`hq/app/db.py:_get_pool`, `release_conn` in `main.py:_fetch_all`) with per-request fallback.
+- **Vessel Map:** Leaflet `1.9.4` + `react-leaflet` `4.2.1` in `hq-dashboard/components/VesselMap.tsx:1` (probe `HEAD 0/0/0.png` 2s → schematic ETA pill offline). Field `listVessels()` (`field/lib/db.ts:296`) feeds offline ETA via `DOWNSTREAM_DELTA vessels`.
+- **Local Grid:** `shared/src/local_map.ts:1` `GRID_SIZE 40 CELL_M 2` `polarToCart/cartToGrid/fuse/Kalman1D` (`q=0.01 r=0.5` per-axis, ponytail: 2D EKF if needed). Fusion (`field/lib/sensors/fusion.ts:1`) every 3s, 15% whiteout 0.8m (camera blind), LiDAR alone 0.75 conf. **SIM-LIDAR provenance:** `sim_lidar.ts` header + `SourceBadge SIM-LIDAR` in `LocateTab` + both `SourceBadge.tsx` (`sim` kind).
 - **Power:** `GET /forecast/snn` `saved_pct` (0.8mW vs 8.2mW, 90% idle saved) drives the `TodayTab` watts pill.
 
 ## Data-Flow `write → outbox → wire/bundle → HQ → downstream`
@@ -29,9 +29,9 @@ Field UI (React) --(local call)--> SQLite WASM OPFS/WAL polaris.db
       |-- BEGIN IMMEDIATE; SELECT asset; check expiry (fail-safe invalid→expired) + qty<0; UPDATE assets SET qty, version, vector_clock=merge; INSERT transactions/audit/outbox{vector_clock}; COMMIT (atomic, WAL, TOCTOU-safe)
       |-- outbox row {ulid, device_id, patch:msgpack, base_version, op:UPSERT|CONSUME|IN|..., status PENDING, vector_clock VC}
       v
-SyncWorker (field/lib/sync.ts:13) -- drain PENDING|SENT every 2s, draining guard --
-      | if ws OPEN: encode patch → msgpack (field-level diff) → encrypt AES-GCM (PSK 32B hex) → prepend CRC32 → ws.send(binary) + vector_clock
-      | if ws CLOSED: createAndSaveMuleBundle(src,dst,VC,payload) → dtn_bundles custody + BroadcastChannel('polaris-mule') QR base64 → status BUNDLED
+SyncWorker (field/lib/sync.ts:13) -- drain `PENDING|SENT|BUNDLED` every 2s, draining guard --
+      | if ws OPEN: `SELECT ... WHERE status IN ('PENDING','SENT','BUNDLED')` → msgpack field-diff → AES-GCM (PSK 32B) + CRC32 → ws.send + VC; also `pushBundlesToHQ()` before send
+      | if ws CLOSED: `createAndSaveMuleBundle` → `dtn_bundles` custody + `BroadcastChannel('polaris-mule')` QR → `BUNDLED` (re-tried on next OPEN)
       | when online: pushBundlesToHQ() → POST /dtn/ingest_bulk via POST /dtn/exchange gateway
       v
 Gateway (sync-gateway/src/gateway.ts:20) ws server :8787
@@ -41,15 +41,15 @@ Gateway (sync-gateway/src/gateway.ts:20) ws server :8787
       | on >2KB: sends FAILED ACK instead of silent drop
       | POST /dtn/exchange mule bundles → HQ DTN
       v
-HQ FastAPI (hq/app/main.py:76) :8000
+HQ FastAPI (hq/app/main.py:76) :8000, **`psycopg_pool 4/20`**, **`_notify_gateway_async` via httpx 1s (non-blocking)**
       | BEGIN IMMEDIATE; dedupe(ulid) → DEDUPED if replay
-      | if assets: SELECT FOR UPDATE (PG) / BEGIN IMMEDIATE (SQLite), vector_clock compare_vc(existing, remote) → gt: APPLIED_LOCAL_WINS, concurrent→LWW ts, else merge_vc → UPDATE qty, version, vector_clock
+      | if assets: SELECT FOR UPDATE (PG pooled) / BEGIN IMMEDIATE (SQLite), VC `compare_vc` → `gt:APPLIED_LOCAL_WINS` / `concurrent→LWW ts` else `merge_vc` → UPDATE qty, version, vector_clock
       | if indents: upsert indents / status+vessel_imo patch, strict ALLOWED {DRAFT→APPROVED→DISPATCHED→RECEIVED}, vessel_imo FK validated
       | INSERT dedupe, audit_log, sync_state last_acked_ulid, dtn_bundles custody
       | COMMIT → 200 {status: APPLIED|DEDUPED|CONFLICT_CRITICAL|APPLIED_LOCAL_WINS, server_version, reason}
-      | PING/PONG keepalive survives satellite dropouts
+      | PING/PONG 30s keepalive
 Gateway ← ACK (toWire ACK, sizeReport) ← HQ
-Field ← onmessage fromWire → UPDATE outbox SET ACKED, sync_state + applyDownstreamAsset VC merge
+Field ← fromWire → `UPDATE outbox SET ACKED`, `sync_state.vector_clock`, `applyDownstreamAsset` VC merge; `BUNDLED` rows ACKed same path
 ```
 
 Downstream (HQ to field) is a full-duplex websocket push. HQ's `notify_gateway` (authenticated with the `X-PSK` header, `hq/app/main.py:52`) triggers the gateway's `/internal/broadcast_delta` on indent status changes (`APPROVED`, and `DISPATCHED` with `vessel_imo`), automatic critical-forecast escalations, asset mutations, and vessel positions (`hq/app/vessel_poller.py:62`). The gateway broadcasts encrypted `DOWNSTREAM_DELTA` wire frames (under 50 ms) to the connected tablets matching `station_id` — the `SYNC_INIT` device and station IDs are trusted after PSK decryption, and broadcasts are filtered on top. The initial handshake catches tablets up through binary `SYNC_INIT` / `SYNC_INIT_RESP` frames that include pending `bundles` (`sync-gateway/src/gateway.ts:57`). Key rotation arrives as a `KEY_ROTATE` outbox operation on the next sync window, with the old key retained for one window.
@@ -57,7 +57,7 @@ Downstream (HQ to field) is a full-duplex websocket push. HQ's `notify_gateway` 
 DTN mule flow (offline 6h): field 5 writes → `BUNDLED` → QR `bundleToBase64` `field/lib/dtn/mule.ts:1` → personnel carries to base → `POST /dtn/exchange` gateway → `POST /dtn/ingest_bulk` HQ LWW+VC → `DEDUPED` via `bundleId`.
 
 Pollers (HQ, 15m adaptive, explicit gating):
-- **Telemetry** (`hq/app/telemetry_poller.py:11`) polls free Open-Meteo (`https://api.open-meteo.com/v1/forecast`, no key needed) with an optional IMD branch (`https://mausam.imd.gov.in/api`). `TELEMETRY_SOURCE` selects `both`, `openmeteo`, `imd`, or `sim`, and the explicit `LIVE_WEATHER_ENABLED` gate defaults to `false` (forcing mock data) until set to `true`. `GET /telemetry/sources` reports health including `live_enabled`. The poller starts with the app lifespan (`hq/app/main.py:76`), and generator load is synthesized as `0.7 + 0.1*sin(hour)`.
+- **Telemetry** (`hq/app/telemetry_poller.py:11`) polls free Open-Meteo (no key) + optional IMD. `TELEMETRY_SOURCE` `both|openmeteo|imd|sim`, **`LIVE_WEATHER_ENABLED` defaults `true`** (free tier) — set `false` to force sim; offline 429 degrades to poll error not crash. `GET /telemetry/sources` reports health including `live_enabled`. The poller starts with the app lifespan (`hq/app/main.py:76`), and generator load is synthesized as `0.7 + 0.1*sin(hour)`.
 - **Vessels** (`hq/app/vessel_poller.py:11`) fetch live `lat/lon/sog/eta` from AISHub (`https://data.aishub.net/ws.php?username={AIS_API_KEY}&format=1`), falling back to Sagar Nidhi interpolation from `shared/vessel_schedule.json` when the key is missing or a `429` arrives; responses are cached in `/tmp/ais_cache.json`. `VESSEL_MODE` selects `auto`, `live`, or `mock`, and the explicit `LIVE_AIS_ENABLED`/`AIS_ENABLED` gate defaults to `false`. `GET /vessels?station_id` serves positions, `PATCH /indents {vessel_imo}` validates the assignment, and `get_status()` exposes `live_enabled`.
 
 ## Offline-First Invariants
