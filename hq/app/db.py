@@ -41,6 +41,38 @@ _SEED = _load_seed()
 _local = threading.local()
 _initialized = False
 
+def _ensure_sqlite_schema(conn):
+    """Ensure a SQLite connection targets a fully-initialized DB file.
+
+    Starlette TestClient runs endpoints in worker threads, each opening its
+    own thread-local connection. If the DB file was (re)created after another
+    thread cached its handle, a fresh connection can land on an empty file.
+    This check makes every new connection self-healing: missing schema is
+    created and seed data inserted (both idempotent).
+    """
+    try:
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stations'")
+        if cur.fetchone() is not None:
+            return
+    except Exception:
+        pass
+    if SCHEMA_SQL:
+        conn.executescript(SCHEMA_SQL)
+    try:
+        cur = conn.execute("SELECT COUNT(*) FROM stations")
+        if cur.fetchone()[0] == 0:
+            seed_sqlite(conn)
+        else:
+            _ensure_procurement_targets_sqlite(conn)
+            _ensure_physics_params_sqlite(conn)
+            _ensure_vessels_sqlite(conn)
+            _ensure_dtn_sqlite(conn)
+    except Exception:
+        try:
+            seed_sqlite(conn)
+        except Exception:
+            pass
+
 def get_sqlite():
     conn = getattr(_local, "conn", None)
     if conn is None:
@@ -51,6 +83,24 @@ def get_sqlite():
         conn.execute("PRAGMA foreign_keys=ON;")
         conn.execute("PRAGMA busy_timeout=15000;")
         _local.conn = conn
+        # New handle (e.g. TestClient worker thread) may target an empty or
+        # freshly-created file — ensure schema + seed before use.
+        _ensure_sqlite_schema(conn)
+    else:
+        # Detect stale handle: DB file unlinked/recreated after this handle
+        # was cached (e.g. a test deleted hq.db mid-run). If the file is gone
+        # or the handle no longer sees the schema, reopen fresh.
+        try:
+            if not HQ_DB_PATH.exists():
+                raise sqlite3.OperationalError("db file removed")
+            conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stations'").fetchone()
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            _local.conn = None
+            return get_sqlite()
     return conn
 
 _PROCUREMENT_FALLBACK = [
@@ -172,7 +222,6 @@ def _ensure_dtn_sqlite(conn):
         pass
 
 def init_db():
-    global _sqlite_conn
     if USE_PG:
         import psycopg
         with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
@@ -236,8 +285,22 @@ def init_db():
                         except Exception: pass
         print(f"[hq] Postgres init ok {DATABASE_URL.split('@')[-1]}")
     else:
+        # Drop any cached handle first: it may point at an unlinked inode if
+        # the DB file was removed between runs. get_sqlite() then reopens the
+        # current file and self-heals schema + seed.
+        try:
+            old = getattr(_local, "conn", None)
+            if old is not None:
+                try:
+                    old.close()
+                except Exception:
+                    pass
+                _local.conn = None
+        except Exception:
+            pass
         conn = get_sqlite()
-        conn.executescript(SCHEMA_SQL)
+        if SCHEMA_SQL:
+            conn.executescript(SCHEMA_SQL)
         cur = conn.execute("SELECT COUNT(*) FROM stations")
         if cur.fetchone()[0] == 0:
             seed_sqlite(conn)

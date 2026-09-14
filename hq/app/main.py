@@ -774,11 +774,12 @@ def ingest(frame: DeltaFrame, request: Request):
         patch_bytes_len = 0
     if patch_bytes_len > 2048:
         raise HTTPException(413, "patch too large >2KB")
-    if len(frame.ulid) < 20 or len(frame.ulid) > 30:
+    if len(frame.ulid) != 26:
         raise HTTPException(400, "ulid must be 26 chars")
     if frame.entity not in ["assets", "indents", "telemetry", "stations", "containers", "crates"]:
         raise HTTPException(400, f"unsupported entity {frame.entity}")
-    if frame.op not in ["UPSERT", "DELETE", "CONSUME", "IN", "ADJUST"]:
+    # keep in sync with shared/src/schemas.ts deltaFrameSchema op enum + outbox CHECK
+    if frame.op not in ["UPSERT", "DELETE", "CONSUME", "IN", "OUT", "ADJUST"]:
         raise HTTPException(400, f"unsupported op {frame.op}")
     conn=get_conn()
     ulid=frame.ulid
@@ -994,6 +995,8 @@ def dtn_ingest_bulk(body: BulkIn):
                         "vectorClock": b.get("vectorClock") or b.get("vc") or b.get("vector_clock") or {},
                         "payload": b.get("payload") or b,
                         "createdAt": b.get("createdAt") or b.get("created_at"),
+                        "ttlSec": b.get("ttlSec", b.get("ttl", 86400)),
+                        "custody": b.get("custody", True),
                     }
                     r = ingest_bundle(nb, cur)
                     results.append(r)
@@ -1010,6 +1013,8 @@ def dtn_ingest_bulk(body: BulkIn):
                     "vectorClock": b.get("vectorClock") or b.get("vc") or b.get("vector_clock") or {},
                     "payload": b.get("payload") or b,
                     "createdAt": b.get("createdAt") or b.get("created_at"),
+                    "ttlSec": b.get("ttlSec", b.get("ttl", 86400)),
+                    "custody": b.get("custody", True),
                 }
                 # need cursor-like; pass conn
                 r = ingest_bundle(nb, conn)
@@ -1052,6 +1057,9 @@ async def dtn_exchange(request: Request):
                         "dstStation": b.get("dstStation") or b.get("dst_station") or "ST-BHARATI",
                         "vectorClock": b.get("vectorClock") or b.get("vc") or {},
                         "payload": b.get("payload") or b,
+                        "createdAt": b.get("createdAt") or b.get("created_at"),
+                        "ttlSec": b.get("ttlSec", b.get("ttl", 86400)),
+                        "custody": b.get("custody", True),
                     }
                     results.append(ingest_bundle(nb, cur))
                 c.commit()
@@ -1066,6 +1074,9 @@ async def dtn_exchange(request: Request):
                     "dstStation": b.get("dstStation") or b.get("dst_station") or "ST-BHARATI",
                     "vectorClock": b.get("vectorClock") or b.get("vc") or {},
                     "payload": b.get("payload") or b,
+                    "createdAt": b.get("createdAt") or b.get("created_at"),
+                    "ttlSec": b.get("ttlSec", b.get("ttl", 86400)),
+                    "custody": b.get("custody", True),
                 }
                 results.append(ingest_bundle(nb, conn))
             conn.execute("COMMIT")

@@ -4,12 +4,11 @@ os.environ.pop("DATABASE_URL", None)  # force SQLite fallback for CI
 import tempfile
 from fastapi.testclient import TestClient
 
-# ensure clean DB
-db_path = pathlib.Path(__file__).parent.parent / "app" / "hq.db"
-for p in [db_path, pathlib.Path(str(db_path)+"-wal"), pathlib.Path(str(db_path)+"-shm")]:
-    try: p.unlink()
-    except: pass
-
+# NOTE: never unlink hq.db at import/collection time — pytest imports all test
+# modules before running any test, so deleting the file here races with other
+# modules' cached SQLite handles and TestClient worker-thread connections
+# ("no such table" flakes). init_db() is idempotent; per-test row cleanup
+# below keeps isolation without touching the file.
 from hq.app.main import app
 from hq.app.db import init_db, get_conn
 init_db()

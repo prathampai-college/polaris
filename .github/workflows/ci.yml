@@ -41,11 +41,17 @@ jobs:
 
   hq:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ""
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: '3.11' }
       - run: pip install -r hq/requirements.txt
+      # Hermetic hq-submodule run: drop any stale SQLite file BEFORE pytest
+      # collection (never during collection — see hq/tests/test_ingest.py),
+      # then run only the hq submodule suite.
+      - run: rm -f hq/app/hq.db hq/app/hq.db-wal hq/app/hq.db-shm
       - run: pytest hq/tests -v
       - run: python -m py_compile hq/app/main.py hq/app/db.py hq/app/forecast.py hq/app/snn_forecast.py hq/app/dtn.py hq/app/config.py hq/app/auth.py hq/app/telemetry_poller.py hq/app/vessel_poller.py
       - name: Check budgets (ONNX <2MB, synthetic CSV exists)
