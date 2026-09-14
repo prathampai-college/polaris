@@ -290,9 +290,31 @@ def seed_sqlite(conn):
         conn.execute("INSERT OR IGNORE INTO physics_params VALUES (?,?,?,?,?,?)", (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
     conn.commit()
 
+_pool = None  # type: ignore
+_pool_failed = False
+
+def _get_pool():
+    global _pool, _pool_failed
+    if _pool is not None or _pool_failed:
+        return _pool
+    if not USE_PG:
+        return None
+    try:
+        from psycopg_pool import ConnectionPool  # type: ignore
+        _pool = ConnectionPool(conninfo=DATABASE_URL, min_size=4, max_size=20, timeout=10, open=True)
+        logger.info(f"[hq] PG pool 4/20 open {DATABASE_URL.split('@')[-1]}")
+    except Exception as e:
+        logger.warning(f"[hq] psycopg_pool unavailable ({e}), falling back to per-request connect")
+        _pool_failed = True
+        _pool = None
+    return _pool
+
 def get_conn():
     global _initialized
     if USE_PG:
+        pool = _get_pool()
+        if pool is not None:
+            return pool.getconn()
         import psycopg
         return psycopg.connect(DATABASE_URL)
     else:
@@ -300,3 +322,18 @@ def get_conn():
             init_db()
             _initialized = True
         return get_sqlite()
+
+def release_conn(conn):
+    """Return PG pooled conn or close direct conn. No-op for SQLite."""
+    if USE_PG:
+        pool = _get_pool()
+        if pool is not None:
+            try:
+                pool.putconn(conn)
+                return
+            except Exception:
+                pass
+        try:
+            conn.close()
+        except Exception:
+            pass
