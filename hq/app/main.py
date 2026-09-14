@@ -1088,9 +1088,9 @@ def tracking_update(body: Dict[str, Any]):
         import psycopg
         with psycopg.connect(os.getenv("DATABASE_URL"), autocommit=True) as c:
             with c.cursor() as cur:
-                cur.execute("INSERT INTO asset_positions (asset_id, x, y, theta, conf, last_sensor_ts, station_id) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (asset_id) DO UPDATE SET x=EXCLUDED.x, y=EXCLUDED.y, theta=EXCLUDED.theta, conf=EXCLUDED.conf, last_sensor_ts=EXCLUDED.last_sensor_ts", (asset_id, x, y, theta, conf, now, station_id))
+                cur.execute("INSERT INTO asset_positions (asset_id, x, y, theta, conf, last_sensor_ts, station_id) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (asset_id) DO UPDATE SET x=EXCLUDED.x, y=EXCLUDED.y, theta=EXCLUDED.theta, conf=EXCLUDED.conf, last_sensor_ts=EXCLUDED.last_sensor_ts, station_id=EXCLUDED.station_id", (asset_id, x, y, theta, conf, now, station_id))
     else:
-        conn.execute("INSERT INTO asset_positions (asset_id, x, y, theta, conf, last_sensor_ts, station_id) VALUES (?,?,?,?,?,?,?) ON CONFLICT(asset_id) DO UPDATE SET x=excluded.x, y=excluded.y, theta=excluded.theta, conf=excluded.conf, last_sensor_ts=excluded.last_sensor_ts", (asset_id, x, y, theta, conf, now, station_id))
+        conn.execute("INSERT INTO asset_positions (asset_id, x, y, theta, conf, last_sensor_ts, station_id) VALUES (?,?,?,?,?,?,?) ON CONFLICT(asset_id) DO UPDATE SET x=excluded.x, y=excluded.y, theta=excluded.theta, conf=excluded.conf, last_sensor_ts=excluded.last_sensor_ts, station_id=excluded.station_id", (asset_id, x, y, theta, conf, now, station_id))
         conn.commit()
     return {"asset_id": asset_id, "x": x, "y": y, "conf": conf}
 

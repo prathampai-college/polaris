@@ -28,7 +28,7 @@ export interface Indent { id: string; station_id: string; asset_id: string; qty_
 export interface Telemetry { ts: string; station_id: string; temp_outside: number; wind_speed: number; pressure: number; dg_load: number; }
 export interface AuditLog { id: string; actor_id: string; action: string; entity: string; before: string | null; after: string | null; ts: string; }
 export interface OutboxRow { ulid: string; device_id: string; entity: string; entity_id: string; op: OutboxOp; patch: Uint8Array; base_version: number; retry_count: number; created_at: string; status: OutboxStatus; }
-export interface SyncState { device_id: string; last_acked_ulid: string | null; last_server_version: number; }
+export interface SyncState { device_id: string; last_acked_ulid: string | null; last_server_version: number; vector_clock?: VectorClock | null; }
 
 export type VectorClock = Record<string, number>;
 
