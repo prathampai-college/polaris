@@ -1,7 +1,7 @@
 'use client';
 import React, { useEffect, useState } from 'react';
 
-export type SourceKind = 'live' | 'stale_cache' | 'mock' | 'offline';
+export type SourceKind = 'live' | 'stale_cache' | 'mock' | 'offline' | 'sim';
 
 function relTime(fetchedAt?: string | null, ageSec?: number | null): string {
   let age: number | null = ageSec ?? null;
@@ -37,7 +37,8 @@ export function SourceBadge({
   void tick;
   const offline = typeof navigator !== 'undefined' && !navigator.onLine;
   let kind: SourceKind = 'mock';
-  if (offline) kind = 'offline';
+  if (source === 'sim') kind = 'sim';
+  else if (offline) kind = 'offline';
   else if (source === 'live') kind = 'live';
   else if (source === 'stale_cache' || source === 'stale') kind = 'stale_cache';
   const age = relTime(fetchedAt, ageSec);
@@ -45,6 +46,8 @@ export function SourceBadge({
     return <span className={`pill pill-live ${className}`}><span className="dot-live" />{liveLabel}{age ? ` · ${age}` : ''}</span>;
   if (kind === 'stale_cache')
     return <span className={`pill pill-stale ${className}`}><span className="w-2 h-2 rounded-full bg-amber-400" />STALE{age ? ` · ${age}` : ''}</span>;
+  if (kind === 'sim')
+    return <span className={`pill border-cyan-400/25 bg-cyan-500/10 text-cyan-300 ${className}`} title="Simulated sensor — no hardware">SIM-LIDAR{age ? ` · ${age}` : ''}</span>;
   if (kind === 'offline')
     return <span className={`pill border-white/15 bg-white/5 text-white/50 ${className}`}>OFFLINE{age ? ` · last ${age}` : ''}</span>;
   return <span className={`pill pill-stale ${className}`}>MOCK SCHEDULE</span>;
