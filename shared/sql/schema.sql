@@ -111,7 +111,8 @@ CREATE TABLE IF NOT EXISTS outbox (
 CREATE TABLE IF NOT EXISTS sync_state (
   device_id TEXT PRIMARY KEY,
   last_acked_ulid TEXT,
-  last_server_version INTEGER DEFAULT 0
+  last_server_version INTEGER DEFAULT 0,
+  vector_clock TEXT
 );
 
 CREATE TABLE IF NOT EXISTS dedupe (

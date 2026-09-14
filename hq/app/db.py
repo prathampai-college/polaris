@@ -154,8 +154,8 @@ def _ensure_dtn_sqlite(conn):
                 conn.commit()
             except Exception:
                 pass
-    # ensure vector_clock cols
-    for tbl, col in [("assets","vector_clock"), ("outbox","vector_clock"), ("outbox","local_coord"), ("assets","local_coord")]:
+    # ensure vector_clock cols (incl. sync_state for offline VC resume)
+    for tbl, col in [("assets","vector_clock"), ("outbox","vector_clock"), ("outbox","local_coord"), ("assets","local_coord"), ("sync_state","vector_clock")]: 
         try:
             cur = conn.execute(f"PRAGMA table_info({tbl})")
             cols = [r[1] for r in cur.fetchall()]
@@ -230,6 +230,7 @@ def init_db():
                         "ALTER TABLE assets ADD COLUMN IF NOT EXISTS local_coord TEXT",
                         "ALTER TABLE outbox ADD COLUMN IF NOT EXISTS vector_clock TEXT",
                         "ALTER TABLE outbox ADD COLUMN IF NOT EXISTS local_coord TEXT",
+                        "ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS vector_clock TEXT",
                     ]:
                         try: cur.execute(alter)
                         except Exception: pass
