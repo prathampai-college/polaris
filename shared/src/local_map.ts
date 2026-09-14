@@ -50,7 +50,8 @@ export function fuse(lidarPoints: Point[], bboxes: Bbox[]): { x: number; y: numb
   return { x: lidarCx*0.7 + camCx*0.3, y: lidarCy*0.7 + camCy*0.3, conf: 0.7*0.75 + 0.3*camConf };
 }
 
-// Simple 1D Kalman stub for smoothing
+// 1D per-axis Kalman filter (q=0.01 process, r=0.5 measurement) — lightweight EKF simplification
+// ponytail: full 2D EKF if cross-axis covariance matters
 export class Kalman1D {
   x = 0; p = 1; q = 0.01; r = 0.5;
   initialized = false;

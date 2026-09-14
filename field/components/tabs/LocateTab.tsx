@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import { SourceBadge } from '../SourceBadge';
 export function LocateTab({ assets, highlightCrate, setHighlightCrate, LocatorWrap }: any) {
   const [mode, setMode] = useState<'LOCAL'|'GPS'>('LOCAL');
   const [localPos, setLocalPos] = useState<any[]>([]);
@@ -34,7 +35,7 @@ export function LocateTab({ assets, highlightCrate, setHighlightCrate, LocatorWr
     <div className="grid lg:grid-cols-[1.25fr_0.75fr] gap-4">
       <div className="card p-4 space-y-3">
         <div className="flex items-center justify-between">
-          <div><h2 className="font-bold text-base text-white">Vision-Fused Local Tracking</h2><p className="text-xs text-white/50">2D LiDAR + Camera fusion • Local frame (GPS-denied whiteout)</p></div>
+          <div className="flex items-center gap-2 flex-wrap"><div><h2 className="font-bold text-base text-white">Vision-Fused Local Tracking</h2><p className="text-xs text-white/50">2D LiDAR + Camera fusion • Local frame (GPS-denied whiteout)</p></div><SourceBadge source="sim" liveLabel="SIM-LIDAR" /></div>
           <div className="flex items-center gap-2">
             <button onClick={()=>setMode(mode==='LOCAL'?'GPS':'LOCAL')} className={`px-3 py-1.5 rounded-full text-[11px] font-bold border ${mode==='LOCAL'?'bg-cyan-500/20 text-cyan-300 border-cyan-500/30':'bg-white/5 text-white/50 border-white/10'}`}>{mode==='LOCAL'?'LOCAL (No GPS)':'GPS Mode'}</button>
             <button onClick={()=>setWhiteout(v=>!v)} className={`px-2 py-1 rounded-full text-[10px] font-mono border ${whiteout?'bg-white text-black border-white':'bg-white/5 text-white/40 border-white/10'}`}>Whiteout {whiteout?'ON':'OFF'}</button>
