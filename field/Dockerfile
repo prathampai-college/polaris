@@ -4,6 +4,10 @@ COPY shared ./shared
 RUN cd shared && (npm ci --silent || npm install --silent) && npx tsc
 COPY field ./field
 WORKDIR /workspace/field
+ARG NEXT_PUBLIC_HQ_URL=http://localhost:8000
+ARG NEXT_PUBLIC_GATEWAY_URL=ws://localhost:8787
+ENV NEXT_PUBLIC_HQ_URL=$NEXT_PUBLIC_HQ_URL
+ENV NEXT_PUBLIC_GATEWAY_URL=$NEXT_PUBLIC_GATEWAY_URL
 RUN (npm ci --silent || npm install --silent) && npm run build
 
 FROM node:20-alpine

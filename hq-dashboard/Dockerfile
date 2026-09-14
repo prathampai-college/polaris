@@ -4,6 +4,8 @@ COPY shared ./shared
 RUN cd shared && (npm ci --silent || npm install --silent) && npx tsc
 COPY hq-dashboard ./hq-dashboard
 WORKDIR /workspace/hq-dashboard
+ARG NEXT_PUBLIC_HQ_URL=http://localhost:8000
+ENV NEXT_PUBLIC_HQ_URL=$NEXT_PUBLIC_HQ_URL
 RUN mkdir -p ./public && (npm ci --silent || npm install --silent) && npm run build
 
 FROM node:20-alpine

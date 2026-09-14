@@ -4,7 +4,15 @@ import { TrendChart, ProcurementTable } from '../components/TrendChart';
 import { SourceBadge } from '../components/SourceBadge';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 
-const HQ = process.env.NEXT_PUBLIC_HQ_URL || 'http://localhost:8000';
+const _BAKED_HQ = process.env.NEXT_PUBLIC_HQ_URL || 'http://localhost:8000';
+function _resolveHQ(): string {
+  if (typeof window !== 'undefined' && _BAKED_HQ.includes('localhost')) {
+    const h = window.location.hostname;
+    if (h && h !== 'localhost' && h !== '127.0.0.1') { try { const u = new URL(_BAKED_HQ); u.hostname = h; return u.toString().replace(/\/$/, ''); } catch {} }
+  }
+  return _BAKED_HQ;
+}
+const HQ = _resolveHQ();
 
 type Tab = 'overview' | 'forecast' | 'stations' | 'indents' | 'inventory' | 'audit' | 'locate';
 

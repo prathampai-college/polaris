@@ -25,7 +25,18 @@ import { LocateTab } from '../components/tabs/LocateTab';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 
 import { toHttpUrl } from '@shared/url.js';
-const HQ_URL = process.env.NEXT_PUBLIC_HQ_URL || toHttpUrl(process.env.NEXT_PUBLIC_GATEWAY_URL || 'ws://localhost:8787');
+const _BAKED_HQ = process.env.NEXT_PUBLIC_HQ_URL || toHttpUrl(process.env.NEXT_PUBLIC_GATEWAY_URL || 'ws://localhost:8787');
+// Runtime LAN fix: stale localhost bake is repaired on client when accessed via LAN/tablet IP
+function resolveHQ(): string {
+  if (typeof window !== 'undefined' && _BAKED_HQ.includes('localhost')) {
+    const host = window.location.hostname;
+    if (host && host !== 'localhost' && host !== '127.0.0.1') {
+      try { const u = new URL(_BAKED_HQ); u.hostname = host; return u.toString().replace(/\/$/, ''); } catch {}
+    }
+  }
+  return _BAKED_HQ;
+}
+const HQ_URL = resolveHQ();
 
 type Tab = 'today' | 'inventory' | 'scan' | 'indents' | 'locate';
 
