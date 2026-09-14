@@ -36,6 +36,7 @@ export interface SNNResult {
 }
 
 let _lastFeats: number[] | null = null;
+let _lastResidual = 0; // ponytail: cached residual keeps calm-weather burn continuous when event-gated
 
 export async function predictSNN(feats: number[]): Promise<SNNResult> {
   // feats: [temp, wind, pressure, crew, dg_load]
@@ -46,7 +47,7 @@ export async function predictSNN(feats: number[]): Promise<SNNResult> {
     const lastNorm = normalize(_lastFeats, mean, scale);
     const delta = norm.reduce((a, v, i) => a + Math.abs(v - lastNorm[i]), 0) / norm.length;
     if (delta < EVENT_THRESH) {
-      return { residual: 0, spikeCount: 0, active: false, rate: Array(feats.length).fill(0) };
+      return { residual: _lastResidual, spikeCount: 0, active: false, rate: Array(feats.length).fill(0) };
     }
   }
   _lastFeats = [...feats];
@@ -58,7 +59,8 @@ export async function predictSNN(feats: number[]): Promise<SNNResult> {
   for (let i=0;i<w.length;i++) residual += rate[i] * w[i] * 12; // scale to ~ L/day
   // fallback to physics-informed
   if (!Number.isFinite(residual) || Math.abs(residual) > 50) residual = 5*feats[4] + 0.3*feats[3] - 2;
+  _lastResidual = residual;
   return { residual, spikeCount, active: spikeCount > 0, rate };
 }
 
-export function resetSNN() { _lastFeats = null; }
+export function resetSNN() { _lastFeats = null; _lastResidual = 0; }
