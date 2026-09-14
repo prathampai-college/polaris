@@ -3,8 +3,16 @@ import json, pathlib
 import numpy as np
 
 def load_scaler():
+    import warnings
+    # training output first (exact match with train_snn.py OUT_SCALER)
+    for p in [pathlib.Path(__file__).parent / "scaler_snn.json", pathlib.Path("/app/ai/snn/scaler_snn.json")]:
+        if p.exists():
+            j = json.loads(p.read_text())
+            return np.array(j["mean"], dtype=np.float32), np.array(j["scale"], dtype=np.float32)
+    # legacy fallback (warn: scale may mismatch trained weights)
     for p in [pathlib.Path(__file__).parent.parent / "scaler.json", pathlib.Path("/app/ai/scaler.json")]:
         if p.exists():
+            warnings.warn(f"encoder using legacy scaler {p}; prefer ai/snn/scaler_snn.json")
             j = json.loads(p.read_text())
             return np.array(j["mean"], dtype=np.float32), np.array(j["scale"], dtype=np.float32)
     # fallback from training scaler
