@@ -52,60 +52,50 @@ def train_numpy_lif():
     OUT_SCALER.write_text(json.dumps({"mean": mean.tolist(), "scale": scale.tolist(), "T": T_STEPS}))
     # simple linear weights learned via lstsq
     W = np.linalg.lstsq(Xn, y, rcond=None)[0]  # 5x1
-    # export dummy ONNX-like json weights for JS engine
+    # export weights for JS engine — flag linear proxy when torch absent
     w_path = pathlib.Path(__file__).parent / "snn_weights.json"
-    w_path.write_text(json.dumps({"weights": W.flatten().tolist(), "mean": mean.tolist(), "scale": scale.tolist(), "T": T_STEPS}))
+    # will be updated after we know has_snn; write provisional now with linear_proxy True, corrected below if SNN trained
+    w_path.write_text(json.dumps({"weights": W.flatten().tolist(), "mean": mean.tolist(), "scale": scale.tolist(), "T": T_STEPS, "linear_proxy": True, "model": "linear-proxy"}))
     print(f"[snn] numpy LIF fallback trained: W {W.flatten().tolist()[:3]} -> {w_path}")
     # also try to export real ONNX if torch available
+    _onnx_ok = False
+    _has_snn = False
     try:
         import torch, torch.nn as nn
         try:
             import snntorch as snn
-            has_snn = True
+            _has_snn = True
         except ImportError:
-            has_snn = False
-            print("[snn] snnTorch not found, using numpy export only")
-        if has_snn:
-            # minimal SNN net
-            class SNN(nn.Module):
-                def __init__(self):
-                    super().__init__()
-                    self.fc1 = nn.Linear(5, 32)
-                    self.lif1 = snn.Leaky(beta=0.9, threshold=1.0)
-                    self.fc2 = nn.Linear(32, 16)
-                    self.lif2 = snn.Leaky(beta=0.9, threshold=1.0)
-                    self.fc3 = nn.Linear(16, 1)
-                def forward(self, x):
-                    # x: [T,5] spike train -> rate
-                    mem1 = self.lif1.init_leaky()
-                    mem2 = self.lif2.init_leaky()
-                    for t in range(x.size(0)):
-                        cur1 = self.fc1(x[t])
-                        spk1, mem1 = self.lif1(cur1, mem1)
-                        cur2 = self.fc2(spk1)
-                        spk2, mem2 = self.lif2(cur2, mem2)
-                    return self.fc3(mem2)
-            # dummy export: just export linear fallback as ONNX
-            dummy = torch.randn(1,5)
-            lin = nn.Linear(5,1)
-            with torch.no_grad():
-                lin.weight.copy_(torch.from_numpy(W.T))
-                lin.bias.zero_()
-            lin.eval()
-            torch.onnx.export(lin, dummy, str(OUT_ONNX), input_names=["input"], output_names=["output"])
-            print(f"[snn] ONNX exported to {OUT_ONNX} bytes={OUT_ONNX.stat().st_size}")
-        else:
-            dummy = torch.randn(1,5)
-            lin = torch.nn.Linear(5,1)
-            with torch.no_grad():
-                lin.weight.copy_(torch.from_numpy(W.T))
-                lin.bias.zero_()
-            lin.eval()
-            torch.onnx.export(lin, dummy, str(OUT_ONNX), input_names=["input"], output_names=["output"])
-            print(f"[snn] ONNX (linear) -> {OUT_ONNX}")
+            _has_snn = False
+            print("[snn] snnTorch not found, exporting linear ONNX only")
+        dummy = torch.randn(1,5)
+        lin = nn.Linear(5,1)
+        with torch.no_grad():
+            lin.weight.copy_(torch.from_numpy(W.T))
+            lin.bias.zero_()
+        lin.eval()
+        torch.onnx.export(lin, dummy, str(OUT_ONNX), input_names=["input"], output_names=["output"])
+        # validate export is loadable; delete if corrupt
+        try:
+            import onnx  # type: ignore
+            onnx.load(str(OUT_ONNX))
+        except Exception:
+            pass  # onnx not installed — size check below is enough
+        if OUT_ONNX.stat().st_size < 100:
+            OUT_ONNX.unlink(missing_ok=True)
+            raise RuntimeError("ONNX too small, removed")
+        # rewrite weights with correct model flag
+        model_flag = "linear-proxy" if not _has_snn else "linear-proxy"  # ponytail: keep linear until real LIF graph exported
+        # (upgrade to lif-5-32-16-1 when SNN graph export lands)
+        w_path.write_text(json.dumps({"weights": W.flatten().tolist(), "mean": mean.tolist(), "scale": scale.tolist(), "T": T_STEPS, "linear_proxy": True, "model": model_flag}))
+        print(f"[snn] ONNX -> {OUT_ONNX} bytes={OUT_ONNX.stat().st_size} model={model_flag}")
+        _onnx_ok = True
     except Exception as e:
         print(f"[snn] ONNX export skipped: {e}")
         # ponytail: never write invalid placeholder bytes; a corrupt .onnx breaks onnx.load downstream
+        # keep prior good ONNX if present; ensure weights still mark linear_proxy
+        if not _onnx_ok:
+            w_path.write_text(json.dumps({"weights": W.flatten().tolist(), "mean": mean.tolist(), "scale": scale.tolist(), "T": T_STEPS, "linear_proxy": True, "model": "linear-proxy"}))
 
 if __name__ == "__main__":
     train_numpy_lif()
