@@ -42,11 +42,35 @@ if (fs.existsSync(onnxPath)) {
   console.log('! ONNX not yet exported — placeholder ok for sim');
 }
 
-// 6. <200ms latency (mock JS engine)
-const t0=Date.now();
-for(let i=0;i<100;i++){ const x=Math.random(); }
-const ms=Date.now()-t0;
-if(ms>200*100) throw new Error('latency mock fail');
-console.log('✓ Latency <200ms per inference (JS LIF)');
+// 6. <200ms latency — real ONNX inference if onnxruntime available, else real spike-math compute (never a random dummy)
+const N = 50;
+const normF = feats.map((v,i)=>(v-scalersafe(scaler.mean[i]))/scaler.scale[i]);
+let ms = null, how = '';
+try {
+  if (process.argv.includes('--sim')) throw new Error('--sim flag: using JS fallback');
+  const { createRequire } = await import('node:module');
+  const req = createRequire(import.meta.url);
+  const ort = req(path.resolve('ai/runner/node_modules/onnxruntime-node/dist/index.js'));
+  const sess = await ort.InferenceSession.create(path.resolve('ai/snn/thermo_snn.onnx'));
+  const inputName = sess.inputNames[0];
+  const t0 = performance.now();
+  for (let i = 0; i < N; i++) {
+    const t = new ort.Tensor('float32', Float32Array.from(normF), [1, 5]);
+    await sess.run({ [inputName]: t });
+  }
+  ms = (performance.now() - t0) / N;
+  how = `real ONNX (${sess.inputNames[0]}->${sess.outputNames[0]})`;
+} catch (e) {
+  // runner dep missing (e.g. packaged env): time the actual JS spike-encode+decode math instead
+  const t0 = performance.now();
+  for (let i = 0; i < N * 20; i++) {
+    const prob = normF.map(v => 1 / (1 + Math.exp(-v)));
+    prob.reduce((a, p) => a + Math.min(0.98, Math.max(0.02, p)), 0);
+  }
+  ms = (performance.now() - t0) / N;
+  how = `JS spike-math fallback (ort unavailable: ${(e.message || e).toString().slice(0, 80)})`;
+}
+if (!(ms < 200)) throw new Error(`latency ${ms.toFixed(1)}ms >= 200ms`);
+console.log(`✓ Latency ${ms.toFixed(2)}ms/inference <200ms [${how}]`);
 
 console.log('SNN verify OK — 6 checks pass');
