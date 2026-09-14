@@ -4,9 +4,10 @@ import numpy as np
 _SCALER_SNN = None
 _W = None
 _T = 20
+_SNN_MODEL = "linear-proxy"
 
 def _load_snn():
-    global _SCALER_SNN, _W, _T
+    global _SCALER_SNN, _W, _T, _SNN_MODEL
     if _W is not None:
         return
     # try snn weights
@@ -18,6 +19,7 @@ def _load_snn():
             _W = np.array(j["weights"], dtype=np.float32)
             _SCALER_SNN = {"mean": np.array(j["mean"], dtype=np.float32), "scale": np.array(j["scale"], dtype=np.float32)}
             _T = j.get("T", 20)
+            _SNN_MODEL = j.get("model", "linear-proxy" if j.get("linear_proxy") else "lif-5-32-16-1")
             return
     # fallback to scaler.json
     for p in [pathlib.Path(__file__).parent.parent.parent / "ai" / "scaler.json",
@@ -29,6 +31,7 @@ def _load_snn():
             return
     _SCALER_SNN = {"mean": np.array([-15,5,1013,24,0.7], dtype=np.float32), "scale": np.array([10,5,15,5,0.3], dtype=np.float32)}
     _W = np.array([0.02, 0.01, 0.005, 0.3, 5.0], dtype=np.float32)
+    _SNN_MODEL = "linear-proxy"
 
 _last_feats = None
 _last_residual = None

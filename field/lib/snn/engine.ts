@@ -6,14 +6,21 @@ let _weights: number[] | null = null;
 let _mean: number[] | null = null;
 let _scale: number[] | null = null;
 let _T = 20;
+let _model: string = 'linear-proxy'; // honest label until LIF matrices ship (see ai/snn/train_snn.py)
 
-async function loadWeights(): Promise<{ w: number[]; mean: number[]; scale: number[]; T: number }> {
-  if (_weights) return { w: _weights, mean: _mean!, scale: _scale!, T: _T };
+async function loadWeights(): Promise<{ w: number[]; mean: number[]; scale: number[]; T: number; model: string }> {
+  if (_weights) return { w: _weights, mean: _mean!, scale: _scale!, T: _T, model: _model };
   const { SNN_DEFAULT_WEIGHTS, SNN_MEAN, SNN_SCALE } = await import('@shared/snn-config.js');
   _weights = [...SNN_DEFAULT_WEIGHTS];
   _mean = [...SNN_MEAN];
   _scale = [...SNN_SCALE];
-  return { w: _weights, mean: _mean, scale: _scale, T: _T };
+  // try to pick up trained flag for pill label (best-effort, never fails offline)
+  try {
+    const hq = process.env.NEXT_PUBLIC_HQ_URL || 'http://localhost:8000';
+    const r = await fetch(`${hq}/forecast/snn/ST-BHARATI`, { signal: AbortSignal.timeout(800) }).then(x=>x.json()).catch(()=>null);
+    if (r?.model) _model = r.model;
+  } catch {}
+  return { w: _weights, mean: _mean, scale: _scale, T: _T, model: _model };
 }
 
 function normalize(feats: number[], mean: number[], scale: number[]): number[] {
@@ -33,6 +40,7 @@ export interface SNNResult {
   spikeCount: number;
   active: boolean;
   rate: number[];
+  model: string;
 }
 
 let _lastFeats: number[] | null = null;
@@ -40,14 +48,14 @@ let _lastResidual = 0; // ponytail: cached residual keeps calm-weather burn cont
 
 export async function predictSNN(feats: number[]): Promise<SNNResult> {
   // feats: [temp, wind, pressure, crew, dg_load]
-  const { w, mean, scale, T } = await loadWeights();
+  const { w, mean, scale, T, model } = await loadWeights();
   // event gating: skip if delta small
   if (_lastFeats) {
     const norm = normalize(feats, mean, scale);
     const lastNorm = normalize(_lastFeats, mean, scale);
     const delta = norm.reduce((a, v, i) => a + Math.abs(v - lastNorm[i]), 0) / norm.length;
     if (delta < EVENT_THRESH) {
-      return { residual: _lastResidual, spikeCount: 0, active: false, rate: Array(feats.length).fill(0) };
+      return { residual: _lastResidual, spikeCount: 0, active: false, rate: Array(feats.length).fill(0), model };
     }
   }
   _lastFeats = [...feats];
@@ -60,7 +68,7 @@ export async function predictSNN(feats: number[]): Promise<SNNResult> {
   // fallback to physics-informed
   if (!Number.isFinite(residual) || Math.abs(residual) > 50) residual = 5*feats[4] + 0.3*feats[3] - 2;
   _lastResidual = residual;
-  return { residual, spikeCount, active: spikeCount > 0, rate };
+  return { residual, spikeCount, active: spikeCount > 0, rate, model };
 }
 
 export function resetSNN() { _lastFeats = null; _lastResidual = 0; }
