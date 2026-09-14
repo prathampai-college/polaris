@@ -140,8 +140,8 @@ export class SyncWorker {
         }
         return;
       }
-      const rows = db.selectObjects("SELECT * FROM outbox WHERE status IN ('PENDING','SENT') ORDER BY created_at LIMIT 20") as Array<Record<string, unknown>>;
-      this.stats.pending = db.selectValue("SELECT COUNT(*) FROM outbox WHERE status IN ('PENDING','SENT')") as number;
+      const rows = db.selectObjects("SELECT * FROM outbox WHERE status IN ('PENDING','SENT','BUNDLED') ORDER BY created_at LIMIT 20") as Array<Record<string, unknown>>;
+      this.stats.pending = db.selectValue("SELECT COUNT(*) FROM outbox WHERE status IN ('PENDING','SENT','BUNDLED')") as number;
       this.stats.bundled = db.selectValue("SELECT COUNT(*) FROM dtn_bundles") as number;
       // Try push bundles via HTTP when online (DTN mule flush)
       try {
