@@ -51,25 +51,32 @@ async def _broadcast_telemetry(tele: dict):
 
 GATEWAY_INTERNAL_URL = os.getenv("GATEWAY_INTERNAL_URL", os.getenv("GATEWAY_URL", "http://localhost:8787"))
 
-def notify_gateway(station_id: str, entity: str, entity_id: str, op: str, patch: dict):
-    """Notify Sync Gateway to broadcast a downstream delta frame to active station tablets."""
-    import urllib.request, json
+async def _notify_gateway_async(station_id: str, entity: str, entity_id: str, op: str, patch: dict):
+    """Async gateway push — never blocks event loop (httpx, 1s timeout)."""
     try:
+        import httpx
         url = f"{GATEWAY_INTERNAL_URL}/internal/broadcast_delta"
-        data = json.dumps({
-            "station_id": station_id,
-            "entity": entity,
-            "entity_id": entity_id,
-            "op": op,
-            "patch": patch
-        }).encode("utf-8")
         psk = os.getenv("PSK_HEX", os.getenv("SECRET_KEY", "a" * 64))
-        hdrs = {"Content-Type": "application/json", "X-PSK": psk}
-        req = urllib.request.Request(url, data=data, headers=hdrs)
-        with urllib.request.urlopen(req, timeout=1.0) as resp:
-            pass
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            await client.post(url, json={"station_id": station_id, "entity": entity, "entity_id": entity_id, "op": op, "patch": patch}, headers={"X-PSK": psk})
     except Exception as e:
         logger.debug(f"Gateway downstream notification ignored: {e}")
+
+def notify_gateway(station_id: str, entity: str, entity_id: str, op: str, patch: dict):
+    """Fire-and-forget gateway notify — sync callers stay non-blocking."""
+    try:
+        loop = asyncio.get_running_loop()
+        if loop.is_running():
+            loop.create_task(_notify_gateway_async(station_id, entity, entity_id, op, patch))
+            return
+    except RuntimeError:
+        pass
+    # no running loop (e.g. sync test) — run in background thread so request never blocks
+    try:
+        import threading
+        threading.Thread(target=lambda: asyncio.run(_notify_gateway_async(station_id, entity, entity_id, op, patch)), daemon=True).start()
+    except Exception as e:
+        logger.debug(f"Gateway notify thread ignored: {e}")
 
 
 @asynccontextmanager
