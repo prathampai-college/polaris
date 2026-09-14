@@ -93,6 +93,9 @@ services:
     build:
       context: .
       dockerfile: field/Dockerfile
+      args:
+        NEXT_PUBLIC_HQ_URL: "${NEXT_PUBLIC_HQ_URL:-http://localhost:8000}"
+        NEXT_PUBLIC_GATEWAY_URL: "${NEXT_PUBLIC_GATEWAY_URL:-ws://localhost:8787}"
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -122,6 +125,8 @@ services:
     build:
       context: .
       dockerfile: hq-dashboard/Dockerfile
+      args:
+        NEXT_PUBLIC_HQ_URL: "${NEXT_PUBLIC_HQ_URL:-http://localhost:8000}"
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
