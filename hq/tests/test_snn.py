@@ -24,3 +24,11 @@ def test_snn_weights_exist():
     assert p.exists()
     j = json.loads(p.read_text())
     assert len(j["weights"])==5
+
+def test_encoder_scaler_matches_training():
+    from ai.snn.encoder import MEAN, SCALE
+    p = pathlib.Path(__file__).parent.parent.parent / "ai" / "snn" / "scaler_snn.json"
+    assert p.exists()
+    j = json.loads(p.read_text())
+    assert list(map(float, MEAN)) == list(map(float, j["mean"]))
+    assert list(map(float, SCALE)) == list(map(float, j["scale"]))
