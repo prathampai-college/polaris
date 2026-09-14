@@ -7,7 +7,7 @@ export type IndentStatus = 'DRAFT' | 'APPROVED' | 'DISPATCHED' | 'RECEIVED';
 export type IndentUrgency = 'LOW' | 'MEDIUM' | 'CRITICAL';
 export type SyncStatus = 'PENDING' | 'SYNCED' | 'FAILED';
 export type OutboxOp = 'UPSERT' | 'DELETE' | 'CONSUME' | 'IN' | 'OUT' | 'ADJUST';
-export type OutboxStatus = 'PENDING' | 'SENT' | 'ACKED' | 'FAILED';
+export type OutboxStatus = 'PENDING' | 'SENT' | 'ACKED' | 'FAILED' | 'BUNDLED';
 export type UserRole = 'NCPOR_ADMIN' | 'HQ_LOGISTICS' | 'DISPATCH' | 'STATION_LEAD' | 'FIELD_OP' | 'VIEWER';
 
 export interface AuthPayload {
