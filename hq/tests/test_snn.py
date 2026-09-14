@@ -7,10 +7,10 @@ def test_snn_gating():
     reset_snn()
     phys, res, total, active, spike = predict_snn_total(-15, 5, 1013, 24, 0.7, "ST-BHARATI")
     assert active is True
-    # second call same feats -> idle (event-gated)
+    # second call same feats -> idle (event-gated) but residual stays cached, not zeroed
     phys2, res2, total2, active2, spike2 = predict_snn_total(-15, 5, 1013, 24, 0.7, "ST-BHARATI")
     assert active2 is False
-    assert res2 == 0.0
+    assert res2 == res
 
 def test_snn_active_on_change():
     reset_snn()

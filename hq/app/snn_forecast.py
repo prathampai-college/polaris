@@ -31,10 +31,11 @@ def _load_snn():
     _W = np.array([0.02, 0.01, 0.005, 0.3, 5.0], dtype=np.float32)
 
 _last_feats = None
+_last_residual = None
 _EVENT_THRESH = 0.12
 
 def predict_snn_total(temp_out, wind, pressure, crew, dg_load, station_id=None):
-    global _last_feats
+    global _last_feats, _last_residual
     _load_snn()
     feats = np.array([temp_out, wind, pressure, crew, dg_load], dtype=np.float32)
     mean = _SCALER_SNN["mean"]; scale = _SCALER_SNN["scale"]
@@ -51,7 +52,8 @@ def predict_snn_total(temp_out, wind, pressure, crew, dg_load, station_id=None):
     from .forecast import physics_pred
     phys = physics_pred(temp_out, wind, pressure, station_id)
     if not active:
-        return phys, 0.0, phys, False, 0
+        cached = _last_residual if _last_residual is not None else 0.0
+        return phys, cached, phys + cached, False, 0
     # spike rate coding via sigmoid
     prob = 1/(1+np.exp(-norm))
     prob = np.clip(prob, 0.02, 0.98)
@@ -61,10 +63,12 @@ def predict_snn_total(temp_out, wind, pressure, crew, dg_load, station_id=None):
     residual = float(np.dot(rate, _W) * 12)
     if not np.isfinite(residual) or abs(residual) > 50:
         residual = 5*dg_load + 0.3*crew - 2
+    _last_residual = residual
     total = phys + residual
     spike_count = int(spikes.sum())
     return phys, residual, total, True, spike_count
 
 def reset_snn():
-    global _last_feats
+    global _last_feats, _last_residual
     _last_feats = None
+    _last_residual = None
