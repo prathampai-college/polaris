@@ -18,6 +18,7 @@ except Exception:
 CSV = pathlib.Path(__file__).parent / "weather_fuel_history.csv"
 OUT = pathlib.Path(__file__).parent.parent / "thermo_residual.onnx"
 SCALER_NPY = pathlib.Path(__file__).parent.parent / "scaler.npz"
+SCALER_JSON = pathlib.Path(__file__).parent.parent / "scaler.json"
 
 df=pd.read_csv(CSV)
 X=df[["temp_outside","wind_speed","pressure","crew_count","dg_load"]].values.astype(np.float32)
@@ -27,6 +28,9 @@ scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 # save scaler for Node fallback (also embed as ONNX preprocessing? we do scaling in JS, simpler to bake)
 np.savez(SCALER_NPY, mean=scaler.mean_, scale=scaler.scale_)
+# single writer: keep scaler.json atomically in sync with scaler.npz (infer.mjs + hq read .json)
+import json as _json
+SCALER_JSON.write_text(_json.dumps({"mean": [float(v) for v in scaler.mean_], "scale": [float(v) for v in scaler.scale_]}))
 
 X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.15, random_state=42)
 
@@ -54,12 +58,36 @@ for epoch in range(120):
         print(f"epoch {epoch} train {loss.item():.3f} test {tl:.3f}")
 
 model.eval()
-# export ONNX
+# export ONNX as single file (no external .data sidecar)
 dummy=torch.randn(1,5)
 torch.onnx.export(model, dummy, str(OUT), input_names=["input"], output_names=["residual"], dynamic_axes={"input":{0:"batch"},"residual":{0:"batch"}}, opset_version=14)
+# dynamo exporter may split weights to .data — re-embed into a single file
+try:
+    from onnx.external_data_helper import load_external_data_for_model as _load_ext
+    _m = onnx.load(str(OUT))
+    try:
+        _load_ext(_m, str(OUT.parent))
+    except Exception:
+        pass
+    onnx.save_model(_m, str(OUT), save_as_external_data=False)
+    for _ext in [pathlib.Path(str(OUT) + ".data"), OUT.parent / (OUT.stem + ".data"), OUT.with_suffix(".data")]:
+        try:
+            if _ext.exists() and _ext.resolve() != OUT.resolve():
+                _ext.unlink()
+        except Exception:
+            pass
+except Exception as _emb:
+    print(f"single-file embed skipped ({_emb}); keeping exporter output")
 print(f"exported {OUT} {OUT.stat().st_size/1024:.1f}KB")
 
-# quantize to int8 via onnxruntime quantization would need extra tool; we keep float32 which is still <50KB. For int8 <2MB we already satisfy.
+# int8 quantize (optional, keeps <2MB budget; falls back to float32 on failure)
+try:
+    from onnxruntime.quantization import quantize_dynamic, QuantType
+    _q = OUT.parent / "thermo_residual.int8.onnx"
+    quantize_dynamic(str(OUT), str(_q), weight_type=QuantType.QInt8)
+    print(f"int8 {str(_q)} {_q.stat().st_size/1024:.1f}KB")
+except Exception as _qe:
+    print(f"int8 quant skipped ({_qe}); float32 already <2MB")
 # Optionally run onnx checker
 onnx_model=onnx.load(str(OUT)); onnx.checker.check_model(onnx_model)
 print("ONNX check ok")
