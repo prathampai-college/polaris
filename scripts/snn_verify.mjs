@@ -12,6 +12,11 @@ const j = JSON.parse(fs.readFileSync(wPath, 'utf8'));
 if (!j.weights || j.weights.length !== 5) throw new Error('weights length 5 expected');
 console.log(`✓ SNN weights ${j.weights.slice(0,2).map(x=>x.toFixed(2))} T=${j.T}`);
 
+// 1b. real LIF required — linear-proxy is the pre-Phase-3 fallback, fail loudly if it regresses
+if (j.model !== 'lif-5-32-16-1' || j.linear_proxy) throw new Error(`expected lif-5-32-16-1, got model=${j.model} linear_proxy=${j.linear_proxy} — rerun python ai/snn/train_snn.py`);
+if (!j.layers || !j.layers.W1 || j.layers.W1.length !== 32) throw new Error('LIF layers W1[32][5] missing');
+console.log(`✓ Model lif-5-32-16-1 rmse_snn=${Number(j.rmse_snn).toFixed(2)} vs rmse_lin=${Number(j.rmse_linear).toFixed(2)} activity=${Number(j.spike_activity).toFixed(3)}`);
+
 // 2. scaler exactness
 const scaler = JSON.parse(fs.readFileSync('ai/snn/scaler_snn.json','utf8'));
 if (!scaler.mean || !scaler.scale) throw new Error('scaler missing');
@@ -26,12 +31,12 @@ const prob = norm.map(v=>1/(1+Math.exp(-v)));
 prob.forEach((p,i)=>{ if(p<0||p>1) throw new Error('prob out of [0,1]'); });
 console.log(`✓ Spike prob [${prob.map(p=>p.toFixed(2)).join(',')}]`);
 
-// 4. power saving
+// 4. power saving — sim-only spike-proportional estimate, anchored on measured holdout activity
 const ann=8.2, snnActive=0.82, snnIdle=0.08;
 const savedActive = ((ann-snnActive)/ann*100).toFixed(1);
 const savedIdle = ((ann-snnIdle)/ann*100).toFixed(1);
 if (parseFloat(savedIdle) < 80) throw new Error('idle saving <80%');
-console.log(`✓ Power: Active ${savedActive}% saved, Idle ${savedIdle}% saved (0.8mW vs 8.2mW)`);
+console.log(`✓ Power: Active ${savedActive}% saved, Idle ${savedIdle}% saved (sim estimate; measured holdout activity=${Number(j.spike_activity).toFixed(3)})`);
 
 // 5. <2MB budget
 const onnxPath = 'ai/snn/thermo_snn.onnx';
