@@ -72,10 +72,10 @@ export async function predict({ temp_outside, wind_speed, pressure, crew_count, 
 }
 
 export function forecastDays({ qty, consumptionPerDay }) {
-  if (consumptionPerDay<=0) return { days: 999, ci:[999,999] };
+  if (consumptionPerDay<=0) return { days: 999, ci:[999,999], ciSource: 'placeholder_15pct' };
   const days=qty/consumptionPerDay;
-  // 95% CI ±15%
-  return { days, ci:[days*0.85, days*1.15] };
+  // 95% CI ±15% — honest placeholder until 30d live burn lands (scripts/calibrate_physics.py)
+  return { days, ci:[days*0.85, days*1.15], ciSource: 'placeholder_15pct' };
 }
 
 // CLI test handled via direct import
