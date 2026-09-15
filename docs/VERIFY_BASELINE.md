@@ -1,6 +1,7 @@
-# Verify Baseline — CURRENT 2026-09-14
+# Verify Baseline — CURRENT 2026-09-15
 
-Captured 2026-09-14 on `main` @ `6d6ac94` (P1–P5 DONE). Prior baseline `b74170c` (2026-09-05) archived below.
+Captured 2026-09-15 after live-data + real-SNN build (14 commits on top of `75a35d7`).
+Prior baseline 2026-09-14 @ `6d6ac94` archived below.
 
 ## Commands
 ```
@@ -20,7 +21,38 @@ npx tsc -p field/tsconfig.json --noEmit
 npx tsc -p hq-dashboard/tsconfig.json --noEmit
 ```
 
-## Results — CURRENT (P1–P5 done, B+D+C shipped)
+## Results — CURRENT (real LIF SNN + live-data wiring)
+- `npm run typecheck`: 4 workspaces pass
+- `shared test`: PASS (msgpack roundtrip, wire CRC+AES 195B <2KB, CRC tamper, **patch-only 95.6% saving**)
+- `hq/tests`: **28 passed** (filled `test_dtn_ingest_endpoint` + TTL expiry, `test_tracking_update`; `_clean_ingest` resets A1 VC for isolation)
+- `snn_verify`: **PASS 6/6 real LIF ONNX** `375252B <2MB p50 ~0.6ms <200ms input->output`, `model: lif-5-32-16-1 rmse_snn=6.52 vs rmse_lin=11.05 activity=0.231`; fails on `linear-proxy` regression
+- `dtn_verify`: 5 pass, `tracking_verify`: 6 pass (`err <0.8m`, SIM-LIDAR 360pts, whiteout)
+- `m3_verify`: PASS (thermo ONNX 2052B single-file, calm 25.2d / blizzard 18.2d + auto CRITICAL indent)
+- HQ numpy LIF mirror bit-exact vs ONNX (diff <1e-6); field JS engine vs ONNX to 4e-5; event-gate caches residual
+- `/forecast*` carry `ci_source: placeholder_15pct`; `/forecast/snn` carries `saved_pct_source`; poller reports `dg_source` (`synthetic` until `DG_SOURCE=meter`)
+- `verify:extreme`: green (shared + hq + dtn + snn + tracking)
+
+## Results (2026-09-14 @ 6d6ac94, P1–P5 DONE)
+
+## Commands
+```
+npm --prefix shared test
+python -m pytest hq/tests -q
+node scripts/m1_verify.mjs
+node scripts/m2_verify.mjs
+node scripts/m3_verify.mjs
+node scripts/m4_verify.mjs
+node scripts/m5_verify.mjs
+node scripts/dtn_verify.mjs
+node scripts/snn_verify.mjs
+node scripts/tracking_verify.mjs
+npx tsc -p shared/tsconfig.json --noEmit
+npx tsc -p sync-gateway/tsconfig.json --noEmit
+npx tsc -p field/tsconfig.json --noEmit
+npx tsc -p hq-dashboard/tsconfig.json --noEmit
+```
+
+## Results (2026-09-14 @ 6d6ac94, P1–P5 DONE)
 - `npm run typecheck`: 4 workspaces pass
 - `shared test`: PASS (msgpack roundtrip, wire CRC+AES 195B <2KB, CRC tamper, **patch-only 95.6% saving** `mpEncode({qty})` vs row)`
 - `hq/tests`: **27 passed** (added `test_encoder_scaler_matches_training`)
