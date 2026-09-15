@@ -78,7 +78,13 @@ def train_lif(Xn_tr, y_tr, Xn_te, y_te, epochs=300, lr=2e-3, steps_per_epoch=4):
     spike_grad = surrogate.atan()
 
     class ThermoSNN(nn.Module):
-        """LIF 5->32->16->1, beta=0.9. Input repeated over T steps; rate-decoded output."""
+        """LIF 5->32->16->1, beta=0.9. Input repeated over T steps; rate-decoded output.
+
+        Inference contract (hq/app/snn_forecast.py + field/lib/snn/engine.ts mirror this
+        exactly): snnTorch 1.0 Leaky default reset_delay=True gives one-step-delayed
+        subtract reset — reset=(mem_old>=1); mem=beta*mem_old+cur-reset; spk=(mem>=1).
+        Do NOT change Leaky defaults without updating both mirrors (verify diff <1e-3).
+        """
 
         def __init__(self):
             super().__init__()
@@ -89,8 +95,9 @@ def train_lif(Xn_tr, y_tr, Xn_te, y_te, epochs=300, lr=2e-3, steps_per_epoch=4):
             self.fc3 = nn.Linear(16, 1)
 
         def forward(self, x):
-            mem1 = self.lif1.init_leaky()
-            mem2 = self.lif2.init_leaky()
+            # explicit zero-state (NOT init_leaky(): empty-tensor init silently skips reset)
+            mem1 = torch.zeros(x.size(0), 32, device=x.device, dtype=x.dtype)
+            mem2 = torch.zeros(x.size(0), 16, device=x.device, dtype=x.dtype)
             out_sum = 0
             for _ in range(T_STEPS):
                 cur1 = self.fc1(x)
@@ -136,8 +143,8 @@ def train_lif(Xn_tr, y_tr, Xn_te, y_te, epochs=300, lr=2e-3, steps_per_epoch=4):
         te_pred_raw = net(Xte.to(device)) * y_std + y_mean
         rmse = float(torch.sqrt(loss_fn(te_pred_raw, yte_raw.to(device))).item())
         # mean spike activity on holdout (energy proxy)
-        m1 = net.lif1.init_leaky()
-        m2 = net.lif2.init_leaky()
+        m1 = torch.zeros(len(Xte), 32)
+        m2 = torch.zeros(len(Xte), 16)
         spikes = 0
         tot = 0
         for _ in range(T_STEPS):
