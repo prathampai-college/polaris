@@ -16,8 +16,12 @@ export class SyncWorker {
   stationId: string;
   onAck?: (ack: unknown) => void;
   onDownstreamDelta?: (delta: unknown) => void;
+  onStatus?: (connected: boolean) => void;
+  connected = false;
   stats: SyncStats = { sent: 0, acked: 0, deduped: 0, pending: 0, receivedDeltas: 0 };
   private timer: ReturnType<typeof setInterval> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private closedManually = false;
   private draining = false;
 
   constructor(deviceId: string, stationId = 'ST-BHARATI') {
@@ -25,13 +29,26 @@ export class SyncWorker {
     this.stationId = stationId;
   }
 
+  isConnected() {
+    return this.connected && !!this.ws && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  private setConnected(v: boolean) {
+    if (this.connected !== v) {
+      this.connected = v;
+      try { this.onStatus?.(v); } catch {}
+    }
+  }
+
   connect() {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+    this.closedManually = false;
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
     const ws = new WebSocket(GATEWAY_URL);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = async () => {
       console.log('[sync] connected, sending SYNC_INIT');
+      this.setConnected(true);
       try {
         const initFrame = {
           type: 'SYNC_INIT',
@@ -111,6 +128,9 @@ export class SyncWorker {
             bind: [frame.ulid, frame.server_version, this.deviceId],
           });
         }
+        try {
+          this.stats.pending = (db.selectValue("SELECT COUNT(*) FROM outbox WHERE status IN ('PENDING','SENT','BUNDLED')") as number) || 0;
+        } catch {}
         this.onAck?.(frame);
       } catch (e) {
         console.error('[sync] message decode fail', e);
@@ -119,12 +139,30 @@ export class SyncWorker {
 
     ws.onclose = () => {
       console.log('[sync] closed, retry in 3s');
-      setTimeout(() => this.connect(), 3000);
+      this.setConnected(false);
+      // Refresh pending count immediately so the badge flips to
+      // "Pending" instead of lingering on the last online value.
+      void this.refreshPendingCount();
+      if (this.closedManually) return;
+      if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = setTimeout(() => this.connect(), 3000);
     };
 
-    ws.onerror = (e: Event) => console.error('[sync] ws error', e);
+    ws.onerror = (e: Event) => {
+      console.error('[sync] ws error', e);
+      this.setConnected(false);
+    };
     this.ws = ws;
     if (!this.timer) this.timer = setInterval(() => void this.drain(), 2000);
+  }
+
+  async refreshPendingCount() {
+    try {
+      const { getDb } = await import('./db');
+      const db = await getDb();
+      this.stats.pending = (db.selectValue("SELECT COUNT(*) FROM outbox WHERE status IN ('PENDING','SENT','BUNDLED')") as number) || 0;
+      this.stats.bundled = (db.selectValue("SELECT COUNT(*) FROM dtn_bundles") as number) || 0;
+    } catch {}
   }
 
   async drain() {
@@ -146,8 +184,10 @@ export class SyncWorker {
             await createAndSaveMuleBundle({ src: String(r.device_id), dstStation: this.stationId, payload: bundlePayload, vc });
             db.exec({ sql: "UPDATE outbox SET status='BUNDLED' WHERE ulid=?", bind: [r.ulid] });
           }
-          this.stats.bundled = (db.selectValue("SELECT COUNT(*) FROM dtn_bundles") as number) || 0;
         }
+        // Keep stats honest while offline so UI shows queued, not synced.
+        this.stats.pending = (db.selectValue("SELECT COUNT(*) FROM outbox WHERE status IN ('PENDING','SENT','BUNDLED')") as number) || 0;
+        this.stats.bundled = (db.selectValue("SELECT COUNT(*) FROM dtn_bundles") as number) || 0;
         return;
       }
       const rows = db.selectObjects("SELECT * FROM outbox WHERE status IN ('PENDING','SENT','BUNDLED') ORDER BY created_at LIMIT 20") as Array<Record<string, unknown>>;
@@ -182,12 +222,20 @@ export class SyncWorker {
         this.stats.sent++;
         if (r.status === 'PENDING') db.exec({ sql: "UPDATE outbox SET status='SENT', retry_count=retry_count+1 WHERE ulid=?", bind: [r.ulid] });
       }
+      try {
+        this.stats.pending = (db.selectValue("SELECT COUNT(*) FROM outbox WHERE status IN ('PENDING','SENT','BUNDLED')") as number) || 0;
+        this.stats.bundled = (db.selectValue("SELECT COUNT(*) FROM dtn_bundles") as number) || 0;
+      } catch {}
     } finally { this.draining = false; }
   }
 
   disconnect() {
-    if (this.timer) clearInterval(this.timer);
-    this.ws?.close();
+    this.closedManually = true;
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    try { this.ws?.close(); } catch {}
+    this.ws = null;
+    this.setConnected(false);
   }
 }
 

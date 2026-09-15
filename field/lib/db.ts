@@ -96,9 +96,19 @@ export async function getAssetByBarcode(barcode: string) {
 }
 export async function outboxPending() {
   const db = await getDb();
-  return db.selectObjects("SELECT * FROM outbox WHERE status='PENDING' ORDER BY created_at");
+  return db.selectObjects("SELECT * FROM outbox WHERE status IN ('PENDING','SENT','BUNDLED') ORDER BY created_at");
 }
-export async function outboxCount() { const db = await getDb(); return db.selectValue("SELECT COUNT(*) FROM outbox WHERE status='PENDING'"); }
+// Unacked frames = anything not yet ACKED/FAILED. BUNDLED rows are still
+// unsynced (local DTN custody only) and MUST count as pending — otherwise the
+// UI flips to "Fully Synced" the moment the link drops.
+export async function outboxCount() { const db = await getDb(); return db.selectValue("SELECT COUNT(*) FROM outbox WHERE status IN ('PENDING','SENT','BUNDLED')"); }
+export async function outboxBreakdown() {
+  const db = await getDb();
+  const rows = db.selectObjects("SELECT status, COUNT(*) as n FROM outbox WHERE status IN ('PENDING','SENT','BUNDLED','FAILED') GROUP BY status") as Array<{ status: string; n: number }>;
+  const m: Record<string, number> = { PENDING: 0, SENT: 0, BUNDLED: 0, FAILED: 0 };
+  for (const r of rows) m[r.status] = Number(r.n) || 0;
+  return { ...m, total: m.PENDING + m.SENT + m.BUNDLED };
+}
 export async function listTransactions(limit=20) {
   const db = await getDb();
   return db.selectObjects('SELECT t.*, a.sku, a.name FROM transactions t LEFT JOIN assets a ON a.id=t.asset_id ORDER BY t.ts DESC LIMIT ?', [limit]);
