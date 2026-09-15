@@ -1,7 +1,9 @@
 """Phase 2.2 — Weather via IMD / Open-Meteo poller.
-- Free, no-key Open-Meteo primary; optional IMD_API_KEY branch.
+- Free, no-key Open-Meteo primary; optional IMD_API_KEY branch (NCPOR schema pinned below).
 - APScheduler replaced with asyncio periodic task (every 15m, ponytail minimal).
-- Maps → {temp_outside, wind_speed, pressure, dg_load: 0.7+0.1*sin(hour)} and POSTs to HQ /telemetry internally.
+- Maps → {temp_outside, wind_speed, pressure, dg_load} and POSTs to HQ /telemetry internally.
+- dg_load: DG_SOURCE=meter tries DG_METER_URL JSON {dg_load}; default synthetic sine
+  explicitly tagged dg_source=synthetic until a flow-meter/manual-dip feed lands.
 - TELEMETRY_SOURCE=imd|sim|both (default both so fixtures still work for ?demo)
 """
 import os
@@ -25,13 +27,35 @@ POLL_INTERVAL_SEC = int(os.getenv("TELEMETRY_POLL_SEC", "900"))  # 15m default
 # Explicit gate for live weather (open-meteo/IMD) — live by default (Open-Meteo is free/keyless); set LIVE_WEATHER_ENABLED=false to force sim
 LIVE_WEATHER_ENABLED = os.getenv("LIVE_WEATHER_ENABLED", os.getenv("WEATHER_LIVE_ENABLED", "true")).lower() in ("1", "true", "yes", "on")
 HQ_INTERNAL_URL = os.getenv("HQ_INTERNAL_URL", "http://localhost:8000")
+# DG fuel-load source: synthetic sine by default (honest placeholder until meter feed lands).
+# Set DG_SOURCE=meter + DG_METER_URL=http://meter.local/json returning {"dg_load": 0.82}
+# (or POST real dg_load directly to POST /telemetry from the meter bridge).
+DG_SOURCE = os.getenv("DG_SOURCE", "synthetic").lower()  # synthetic|meter
+DG_METER_URL = os.getenv("DG_METER_URL", "")
 
 _last_poll: dict = {"ts": None, "results": {}, "error": None}
 _poller_task: asyncio.Task | None = None
 
-def _dg_load_for_now() -> float:
+def _dg_load_from_meter() -> float | None:
+    if DG_SOURCE != "meter" or not DG_METER_URL:
+        return None
+    try:
+        import urllib.request, json as _j
+        with urllib.request.urlopen(DG_METER_URL, timeout=5) as r:
+            j = _j.loads(r.read().decode())
+        v = float(j.get("dg_load", -1))
+        return v if 0.0 <= v <= 1.5 else None
+    except Exception as e:
+        logger.warning(f"[poller] dg meter {DG_METER_URL} failed: {e}")
+        return None
+
+def _dg_load_for_now() -> tuple[float, str]:
+    """Returns (dg_load, dg_source). Synthetic sine is an honest placeholder."""
+    m = _dg_load_from_meter()
+    if m is not None:
+        return round(m, 3), "meter"
     hour = datetime.datetime.now(datetime.timezone.utc).hour
-    return round(0.7 + 0.1 * math.sin(hour * math.pi / 12), 3)
+    return round(0.7 + 0.1 * math.sin(hour * math.pi / 12), 3), "synthetic"
 
 async def fetch_open_meteo(station_id: str) -> dict | None:
     if not LIVE_WEATHER_ENABLED:
@@ -54,7 +78,8 @@ async def fetch_open_meteo(station_id: str) -> dict | None:
             wind_ms = round(float(wind_kmh) / 3.6, 2) if wind_kmh is not None else 5.0
             temp = float(cur.get("temperature_2m", -15))
             pressure = float(cur.get("pressure_msl", 1013))
-            return {"temp_outside": temp, "wind_speed": wind_ms, "pressure": pressure, "dg_load": _dg_load_for_now(), "source": "open-meteo"}
+            dg, dg_source = _dg_load_for_now()
+            return {"temp_outside": temp, "wind_speed": wind_ms, "pressure": pressure, "dg_load": dg, "dg_source": dg_source, "source": "open-meteo"}
     except Exception as e:
         logger.warning(f"[poller] open-meteo {station_id} failed: {e}")
         return None
@@ -62,7 +87,9 @@ async def fetch_open_meteo(station_id: str) -> dict | None:
 async def fetch_imd(station_id: str) -> dict | None:
     if not LIVE_WEATHER_ENABLED or not IMD_API_KEY:
         return None
-    # IMD branch — opt-in via IMD_API_KEY + IMD_API_URL; generic field mapping until NCPOR pins the schema
+    # IMD branch — opt-in via IMD_API_KEY + IMD_API_URL.
+    # NCPOR pin: mausam.imd.gov.in current-obs JSON uses {temperature|temp, wind_speed|wind, pressure}.
+    # If NCPOR issues a station feed with different keys, extend the mapping below (do not rename silently).
     url = os.getenv("IMD_API_URL", "https://mausam.imd.gov.in/api/current")
     coords = STATION_COORDS.get(station_id)
     if not coords:
@@ -78,7 +105,8 @@ async def fetch_imd(station_id: str) -> dict | None:
             temp = float(j.get("temperature", j.get("temp", -15)))
             wind = float(j.get("wind_speed", j.get("wind", 5)))
             pressure = float(j.get("pressure", 1013))
-            return {"temp_outside": temp, "wind_speed": wind, "pressure": pressure, "dg_load": _dg_load_for_now(), "source": "imd"}
+            dg, dg_source = _dg_load_for_now()
+            return {"temp_outside": temp, "wind_speed": wind, "pressure": pressure, "dg_load": dg, "dg_source": dg_source, "source": "imd"}
     except Exception as e:
         logger.warning(f"[poller] imd {station_id} failed: {e}")
         return None
@@ -142,7 +170,9 @@ async def _post_telemetry_internal(station_id: str, payload: dict):
                 if psk:
                     hdrs["X-PSK"] = psk
                 url = f"{HQ_INTERNAL_URL}/telemetry"
-                body = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(), "station_id": station_id, **payload, "acoustic_anomaly": 0.0}
+                body = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(), "station_id": station_id,
+                        "temp_outside": payload["temp_outside"], "wind_speed": payload["wind_speed"],
+                        "pressure": payload["pressure"], "dg_load": payload["dg_load"], "acoustic_anomaly": 0.0}
                 r = await client.post(url, json=body, headers=hdrs)
                 r.raise_for_status()
                 logger.info(f"[poller] ingested {station_id} via HTTP {r.status_code}")
@@ -185,7 +215,7 @@ async def poll_once() -> dict:
                 continue
         # ingest
         ok = await _post_telemetry_internal(sid, data)
-        results[sid] = {"ok": ok, "source": source_used, "temp": data.get("temp_outside"), "wind": data.get("wind_speed")}
+        results[sid] = {"ok": ok, "source": source_used, "dg_source": data.get("dg_source", "synthetic"), "temp": data.get("temp_outside"), "wind": data.get("wind_speed")}
     _last_poll["ts"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     _last_poll["results"] = results
     _last_poll["error"] = None
@@ -231,6 +261,8 @@ def get_status() -> dict:
         "coords": STATION_COORDS,
         "imd_configured": bool(IMD_API_KEY),
         "imd_status": "configured" if IMD_API_KEY else "not_configured",
+        "dg_source": DG_SOURCE,
+        "dg_meter_configured": bool(DG_METER_URL),
         "live_enabled": LIVE_WEATHER_ENABLED,
         "fetched_at": ts,
         "age_sec": age,
