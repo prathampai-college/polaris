@@ -67,7 +67,7 @@ def _lif_forward(xn):
         reset2 = (mem2 >= 1.0).astype(np.float32)
         mem2 = _BETA * mem2 + (W2 @ spk1 + b2) - reset2 * 1.0
         spk2 = (mem2 >= 1.0).astype(np.float32)
-        out_sum += float(W3 @ spk2 + b3)
+        out_sum += float((W3 @ spk2 + b3)[0])
         spikes += int(spk1.sum() + spk2.sum())
     return float(out_sum / _T * _Y_STD + _Y_MEAN), spikes
 
