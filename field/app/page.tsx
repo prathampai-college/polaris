@@ -49,6 +49,7 @@ export default function FieldPage() {
   const [txns, setTxns] = useState<any[]>([]);
   const [audit, setAudit] = useState<any[]>([]);
   const [outbox, setOutbox] = useState(0);
+  const [linkUp, setLinkUp] = useState(true);
   const [log, setLog] = useState<string[]>([]);
   const [scan, setScan] = useState('');
   const [syncStats, setSyncStats] = useState<any>({});
@@ -198,6 +199,14 @@ export default function FieldPage() {
       await refresh();
 
       worker = new SyncWorker(DEVICE_ID, STATION_ID);
+      worker.onStatus = (up: boolean) => {
+        setLinkUp(up);
+        setLog((l) => [`${up ? 'LINK UP — gateway reachable' : 'LINK DOWN — queuing offline (DTN custody)'}`, ...l].slice(0, 25));
+        if (!up) pushToast('Satellite link down — updates queued as Pending');
+        else pushToast('Satellite link restored — draining outbox');
+        setSyncStats({ ...worker?.stats });
+        refresh();
+      };
       worker.onAck = (ack: any) => {
         setLog((l) => [`ACK ${String(ack.ulid).slice(0, 8)} ${ack.status} v${ack.server_version ?? ''}`, ...l].slice(0, 25));
         refresh();
@@ -217,9 +226,21 @@ export default function FieldPage() {
       worker.connect();
 
       rt = setInterval(refresh, 3000);
-      st = setInterval(() => setSyncStats({ ...worker?.stats }), 1500);
+      st = setInterval(() => {
+        setSyncStats({ ...worker?.stats });
+        if (worker) setLinkUp(worker.isConnected());
+      }, 1500);
 
       (window as any).__polaris_drain = () => worker?.drain();
+      // Demo helper: pull / restore the "satellite plug" without killing the
+      // gateway process: __polaris_link(false) = link down, (true) = link up.
+      (window as any).__polaris_link = (up: boolean) => {
+        if (!worker) return false;
+        if (up) worker.connect();
+        else worker.disconnect();
+        // Re-arm auto-reconnect on restore: connect() clears closedManually.
+        return worker.isConnected();
+      };
     })();
 
     return () => {
@@ -480,21 +501,27 @@ export default function FieldPage() {
           </div>
 
           <div className="ml-auto flex items-center gap-2">
-            {/* Outbox status button */}
+            {/* Outbox status button — outbox now counts PENDING+SENT+BUNDLED,
+                so BUNDLED (DTN custody) can never masquerade as "Fully Synced". */}
             <button
               onClick={() => setShowSyncDrawer(true)}
               className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border transition ${
-                outbox > 0
+                outbox > 0 || !linkUp
                   ? 'bg-amber-500 text-black border-amber-400 shadow-md shadow-amber-500/20 animate-pulse'
                   : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
               }`}
             >
-              <span className={`w-2 h-2 rounded-full ${outbox > 0 ? 'bg-black' : 'bg-emerald-400'}`} />
-              {outbox > 0 ? `${outbox} Outbox Pending` : 'Fully Synced'}
+              <span className={`w-2 h-2 rounded-full ${outbox > 0 || !linkUp ? 'bg-black' : 'bg-emerald-400'}`} />
+              {!linkUp ? `Offline · ${outbox} Pending` : outbox > 0 ? `${outbox} Outbox Pending` : 'Fully Synced'}
             </button>
 
-            <span className="hidden md:inline-flex text-[11px] px-2.5 py-1 rounded-full border bg-white/5 text-white/50 border-white/10">
-              📡 HTTP/SSE Live
+            <span
+              title={linkUp ? 'Gateway WebSocket OPEN' : 'Gateway unreachable — queuing offline'}
+              className={`hidden md:inline-flex text-[11px] px-2.5 py-1 rounded-full border ${
+                linkUp ? 'bg-white/5 text-white/50 border-white/10' : 'bg-red-500/15 text-red-300 border-red-500/30 animate-pulse'
+              }`}
+            >
+              {linkUp ? '📡 WS Live' : '📡 Offline — queued'}
             </span>
 
             {/* Font Toggle */}
@@ -645,11 +672,11 @@ export default function FieldPage() {
             </div>
 
             <div className="p-3 bg-black/30 rounded-xl border border-white/10">
-              <div className="text-xs text-white/50 font-medium">Outbox Buffer</div>
+              <div className="text-xs text-white/50 font-medium">Outbox Buffer {linkUp ? '' : '· OFFLINE'}</div>
               <div className="text-2xl font-black text-white mt-0.5">
-                {outbox} <span className="text-xs font-normal text-white/50">pending frames</span>
+                {outbox} <span className="text-xs font-normal text-white/50">pending frames (incl. DTN custody)</span>
               </div>
-              <div className="text-[11px] text-white/40 mt-1">Drains automatically every 2000ms</div>
+              <div className="text-[11px] text-white/40 mt-1">{linkUp ? 'Drains automatically every 2000ms' : 'Link down — held locally, will drain on reconnect'}</div>
             </div>
 
             <button
