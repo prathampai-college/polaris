@@ -20,6 +20,12 @@ def _clean_ingest():
         conn.execute("DELETE FROM dedupe WHERE ulid LIKE '01TEST%'")
         conn.commit()
     except: pass
+    try:
+        # isolate from prior runs (m1/m2 verifies merge VCs into the dev DB):
+        # reset A1's clock so the frameless-VC test delta wins deterministically
+        conn.execute("UPDATE assets SET vector_clock='{}', updated_at='2020-01-01T00:00:00' WHERE id='A1'")
+        conn.commit()
+    except: pass
 
 def test_health():
     r = client.get("/health")
