@@ -51,13 +51,13 @@ Uses `load_physics(station_id)` `hq/app/forecast.py:7` per-station `physics_para
 {
   "station_id":"ST-BHARATI", "asset_sku":"FUEL-DIESEL-001", "qty":4200,
   "physics":163.5, "snn_residual":1.8, "total_per_day":165.3,
-  "days_to_stockout":42, "ci":[38,47],
-  "snn_active":true, "spike_count":47, "saved_pct":90.0, "model":"linear-proxy",
+  "days_to_stockout":42, "ci":[38,47], "ci_source":"placeholder_15pct",
+  "snn_active":true, "spike_count":47, "saved_pct":90.0, "saved_pct_source":"spike-proportional estimate", "model":"lif-5-32-16-1",
   "tele":{"temp_outside":-15,"wind_speed":5,"pressure":1013,"dg_load":0.7}
 }
 ```
 
-SNN LIF event-gated `hq/app/snn_forecast.py:1` `predict_snn_total()` — if `|Δnorm|<0.12` idle `snn_active:false` **residual = cached `_last_residual` (not zero)** `saved 99%`, `model: linear-proxy|lif-5-32-16-1` (honest pill tooltip). `hq/app/main.py:917`.
+SNN LIF event-gated `hq/app/snn_forecast.py:1` `predict_snn_total()` — numpy mirror bit-exact vs `thermo_snn.onnx` (diff <1e-6) — if `|Δnorm|<0.12` idle `snn_active:false` **residual = cached `_last_residual` (not zero)** `saved 99%`, `model: lif-5-32-16-1`. `hq/app/main.py:917`.
 
 `GET /physics/{station}` → `{station_id, T_INSIDE, BASE, K1, K2, K3}` per-station `hq/app/main.py:499` or `global_fallback` + `source` flag. Used by `scripts/calibrate_physics.py`.
 
