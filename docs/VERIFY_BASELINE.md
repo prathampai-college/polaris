@@ -1,6 +1,7 @@
-# Verify Baseline — CURRENT 2026-09-15
+# Verify Baseline — CURRENT 2026-09-16
 
 Captured 2026-09-15 after live-data + real-SNN build (14 commits on top of `75a35d7`).
+Re-verified 2026-09-16: `hq/tests` now **34 passed** (was 28 at capture).
 Prior baseline 2026-09-14 @ `6d6ac94` archived below.
 
 ## Commands
@@ -24,7 +25,7 @@ npx tsc -p hq-dashboard/tsconfig.json --noEmit
 ## Results — CURRENT (real LIF SNN + live-data wiring)
 - `npm run typecheck`: 4 workspaces pass
 - `shared test`: PASS (msgpack roundtrip, wire CRC+AES 195B <2KB, CRC tamper, **patch-only 95.6% saving**)
-- `hq/tests`: **28 passed** (filled `test_dtn_ingest_endpoint` + TTL expiry, `test_tracking_update`; `_clean_ingest` resets A1 VC for isolation)
+- `hq/tests`: **34 passed** (was 28 at capture; filled `test_dtn_ingest_endpoint` + TTL expiry, `test_tracking_update`; `_clean_ingest` resets A1 VC for isolation)
 - `snn_verify`: **PASS 6/6 real LIF ONNX** `375252B <2MB p50 ~0.6ms <200ms input->output`, `model: lif-5-32-16-1 rmse_snn=6.52 vs rmse_lin=11.05 activity=0.231`; fails on `linear-proxy` regression
 - `dtn_verify`: 5 pass, `tracking_verify`: 6 pass (`err <0.8m`, SIM-LIDAR 360pts, whiteout)
 - `m3_verify`: PASS (thermo ONNX 2052B single-file, calm 25.2d / blizzard 18.2d + auto CRITICAL indent)

@@ -40,7 +40,9 @@ services:
     environment:
       DATABASE_URL: postgresql://polaris:polaris@db:5432/polaris
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3001}"
+      SECRET_KEY: "${SECRET_KEY:-}"
       PSK_HEX: "${PSK_HEX:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+      TOKEN_EXPIRY_HOURS: "${TOKEN_EXPIRY_HOURS:-8}"
       TELEMETRY_SOURCE: "${TELEMETRY_SOURCE:-both}"
       IMD_API_KEY: "${IMD_API_KEY:-}"
       TELEMETRY_POLL_SEC: "${TELEMETRY_POLL_SEC:-900}"
@@ -108,7 +110,7 @@ services:
     environment:
       NEXT_PUBLIC_GATEWAY_URL: "${NEXT_PUBLIC_GATEWAY_URL:-ws://localhost:8787}"
       NEXT_PUBLIC_HQ_URL: "${NEXT_PUBLIC_HQ_URL:-http://localhost:8000}"
-      NEXT_PUBLIC_PSK_HEX: "${NEXT_PUBLIC_PSK_HEX:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+      # NEXT_PUBLIC_PSK_HEX intentionally not set — PSK is provisioned via QR into IndexedDB; demo fallback is 'a'*64
     depends_on:
       gateway:
         condition: service_healthy

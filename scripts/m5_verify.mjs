@@ -34,7 +34,7 @@ const comp=[
   'Offline Data Integrity: WAL + outbox replay + dedupe (m1/m4)',
   'Bandwidth: msgpack 70.9% (patch vs row) + frame <2KB + DB <5MB@10k (m4)',
   'Sync Correctness: 5 offline + CONFLICT_CRITICAL + dedupe (m1/m4)',
-  'Embedded ML: ONNX 1.3KB <2MB, ort <200ms (m3/m4), fallback physics',
+  'Embedded ML: ONNX 2.0KB <2MB, ort <200ms (m3/m4), fallback physics',
   'Security: RBAC /rbac/me + audit_log + AES-GCM PSK+CRC + at-rest OPFS',
   'Domain: QR html5-qrcode + expiry <30d + indent DRAFT→RECEIVED (m2)',
   'Demo Resilience: fallback video script + PWA cached + polaris.db',

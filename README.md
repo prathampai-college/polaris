@@ -103,7 +103,7 @@ See `docs/ARCHITECTURE.md` and `docs/API.md` for the full specification.
 | `stations` | `id` | Bharati, Maitri, and Himadri, with `winter_crew_count` (`hq/app/db.py:170`). | 3 rows (`shared/seed.json:2`) |
 | `containers` | `id` → `stations` | ISO_20ft, ColdStore, and Hazmat bays with a 2D position. | 6 rows, C1–C6 |
 | `crates` | `id` → `containers` | Crate coordinates (`{x, y}` JSON) plus temperature zone. | 12 rows |
-| `assets` | `id`, `sku UNIQUE` → `crates` | Category (`FUEL_DIESEL`…`SCIENTIFIC`), quantity, unit, expiry date, criticality (`CRITICAL`/`HIGH`/`LOW`), barcode, version, vector clock, and local coordinates. | 20 SKUs, A1–A20 (including 4,200 L of diesel at C1-K1 and 24 oxygen cylinders at C2-K1 expiring 2026-09-15) |
+| `assets` | `id`, `sku UNIQUE` → `crates` | Category (`FUEL_DIESEL`…`SCIENTIFIC`), quantity, unit, expiry date, criticality (`CRITICAL`/`HIGH`/`LOW`), barcode, version, vector clock, and local coordinates. | 20 SKUs, A1–A20 (including 4,200 L of diesel at C1-K1 and 24 oxygen cylinders at C2-K1 expiring 2026-11-15) |
 | `transactions` | `id` → `assets` | Movement type (`IN`/`OUT`/`CONSUME`/`ADJUST`), quantity delta, actor, timestamp, and sync status. | — |
 | `indents` | `id` → `stations`, `assets`, `vessels` | Requested quantity, urgency (`LOW`/`MEDIUM`/`CRITICAL`), lifecycle status (`DRAFT → APPROVED → DISPATCHED → RECEIVED`, enforced by `hq/app/config.py:16 ALLOWED`), and optional `vessel_imo`. | — |
 | `vessels` | `imo` → `stations` | Name, position, speed, ETA, station, and last-seen timestamp — from live AIS or the built-in schedule (`shared/vessel_schedule.json:2`). | 3 mock vessels (`hq/app/vessel_poller.py:25`) |
@@ -157,8 +157,8 @@ npm install --prefix sync-gateway; npx tsc -p sync-gateway/tsconfig.json
 npm install --prefix field          # links @polaris/shared file:../shared
 npm install --prefix hq-dashboard   # links @polaris/shared + Leaflet
 pip install -r hq/requirements.txt  # fastapi, uvicorn[standard], psycopg[binary], onnxruntime, httpx, python-ulid, pydantic, numpy, pytest
-# optional SNN training
-pip install snnTorch torch --index-url https://download.pytorch.org/whl/cpu  # or skip — JS fallback OK
+# optional SNN training (pinned versions in ai/requirements.txt)
+pip install -r ai/requirements.txt  # torch + snntorch + onnx + sklearn/pandas (CPU) — or skip, JS fallback OK
 python ai/snn/train_snn.py          # generates ai/snn/snn_weights.json + scaler_snn.json
 ```
 
@@ -244,7 +244,7 @@ node scripts/import_inventory.mjs --file scripts/template_inventory.csv --hq htt
 | `NEXT_PUBLIC_GATEWAY_URL` | Field (`field/lib/sync.ts:5`, `field/Dockerfile ARG`) | `ws://localhost:8787` | `SyncWorker` WS URL — same `ARG` + LAN fallback as above. |
 | `NEXT_PUBLIC_PSK_HEX` | Field (`field/lib/sync.ts:6`) | `a…a` (64 chars) | **Demo only.** Omit it in production — the PSK is stored in IndexedDB via QR scan, never in the bundle. |
 | `ALLOWED_ORIGINS` | HQ (`hq/app/main.py:17`) | `*` in dev | CORS origins. HQ logs a warning when `*` is combined with `DATABASE_URL`; set an explicit per-deploy list in production. |
-| `TOKEN_EXPIRY_DAYS` | HQ (`hq/app/config.py:10`) | `30` | JWT lifetime in days. |
+| `TOKEN_EXPIRY_HOURS` | HQ (`hq/app/config.py:18`) | `8` | JWT lifetime in hours (8 h default). `TOKEN_EXPIRY_DAYS` is still honored as an override when `TOKEN_EXPIRY_HOURS` is unset. |
 | `TELEMETRY_SOURCE` | HQ (`hq/app/telemetry_poller.py:13`) | `both` | One of `both`, `openmeteo`, `imd`, or `sim`. `both` prefers IMD when a key is present and otherwise uses the free Open-Meteo endpoint (`hq/app/telemetry_poller.py:31`); `sim` disables external polling and uses fixtures only. |
 | `IMD_API_KEY` | HQ (`hq/app/telemetry_poller.py:11`) | Empty | Optional key for IMD (`mausam.imd.gov.in`). Leave it empty to use the free Open-Meteo tier. |
 | `LIVE_WEATHER_ENABLED` | HQ (`hq/app/telemetry_poller.py:24`) | `true` | Master switch for live weather. Open-Meteo needs no key, so live is the default; set it to `false` to force sim/offline mode. Offline fetch failures degrade to an `open-meteo unavailable` poll result, never a crash. |

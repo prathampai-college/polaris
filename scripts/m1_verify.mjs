@@ -35,9 +35,9 @@ for(const r of crates) fieldDb.prepare('INSERT OR IGNORE INTO crates VALUES (?,?
 const assets = [
   ['A1','FUEL-DIESEL-001','Diesel (Winter Grade)','FUEL_DIESEL',4200,'L',null,'CRITICAL','C1-K1','FUEL-DIESEL-001',1,new Date().toISOString()],
   ['A2','FUEL-KERO-JP8-002','Kerosene JP-8','FUEL_KEROSENE',1800,'L',null,'CRITICAL','C1-K2','FUEL-KERO-JP8-002',1,new Date().toISOString()],
-  ['A3','O2-CYL-47L-003','Oxygen Cylinder 47L','OXYGEN',24,'cyl','2026-09-15','CRITICAL','C2-K1','O2-CYL-47L-003',1,new Date().toISOString()],
+  ['A3','O2-CYL-47L-003','Oxygen Cylinder 47L','OXYGEN',24,'cyl','2026-11-15','CRITICAL','C2-K1','O2-CYL-47L-003',1,new Date().toISOString()],
   ['A4','RATION-FD-30D-004','Freeze-Dried Rations','FOOD',90,'packs','2027-06-01','HIGH','C2-K2','RATION-FD-30D-004',1,new Date().toISOString()],
-  ['A5','MED-ANTIBIOTIC-005','Antibiotic Kit','MEDICAL',12,'kits','2026-09-20','CRITICAL','C2-K3','MED-ANTIBIOTIC-005',1,new Date().toISOString()],
+  ['A5','MED-ANTIBIOTIC-005','Antibiotic Kit','MEDICAL',12,'kits','2026-09-21','CRITICAL','C2-K3','MED-ANTIBIOTIC-005',1,new Date().toISOString()],
 ];
 for(const a of assets) fieldDb.prepare('INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(...a);
 fieldDb.prepare("INSERT OR IGNORE INTO sync_state VALUES ('BHARATI-TABLET-01', NULL, 0, NULL)").run();

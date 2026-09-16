@@ -3,10 +3,23 @@ import { toWire as toWireWeb, fromWire as fromWireWeb } from '@shared/codec.web.
 import { sizeReport, MAX_WIRE_SIZE } from '@shared/codec.web.js';
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'ws://localhost:8787';
-const PSK_HEX = process.env.NEXT_PUBLIC_PSK_HEX || 'a'.repeat(64);
+// PSK is provisioned via QR into IndexedDB (see lib/db.ts provisionedPsk); NEXT_PUBLIC_PSK_HEX is
+// dev-only and is NOT baked into production images (docker-compose no longer sets it).
+const PSK_HEX_FALLBACK = process.env.NEXT_PUBLIC_PSK_HEX || 'a'.repeat(64);
 
-export const toWire = (frame: unknown, keyHex = PSK_HEX) => toWireWeb(frame, keyHex);
-export const fromWire = (wire: Uint8Array, keyHex = PSK_HEX) => fromWireWeb(wire, keyHex);
+function getPsk(): string {
+  // Prefer provisioned PSK from IndexedDB-backed localStorage if present (set by QR flow).
+  try {
+    if (typeof window !== 'undefined') {
+      const stored = window.localStorage?.getItem('polaris_psk_hex');
+      if (stored && /^[0-9a-fA-F]{64}$/.test(stored)) return stored;
+    }
+  } catch {}
+  return PSK_HEX_FALLBACK;
+}
+
+export const toWire = (frame: unknown, keyHex?: string) => toWireWeb(frame, keyHex || getPsk());
+export const fromWire = (wire: Uint8Array, keyHex?: string) => fromWireWeb(wire, keyHex || getPsk());
 
 export type SyncStats = { sent: number; acked: number; deduped: number; pending: number; receivedDeltas: number; savingPct?: number; bundled?: number; custody?: number };
 

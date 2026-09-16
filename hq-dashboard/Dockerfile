@@ -1,12 +1,14 @@
 FROM node:20-alpine AS builder
 WORKDIR /workspace
 COPY shared ./shared
-RUN cd shared && (npm ci --silent || npm install --silent) && npx tsc
+RUN cd shared && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund) && npx tsc
 COPY hq-dashboard ./hq-dashboard
 WORKDIR /workspace/hq-dashboard
 ARG NEXT_PUBLIC_HQ_URL=http://localhost:8000
 ENV NEXT_PUBLIC_HQ_URL=$NEXT_PUBLIC_HQ_URL
-RUN mkdir -p ./public && (npm ci --silent || npm install --silent) && npm run build
+# Disable Next telemetry phone-home during build (stalls/hangs on restricted networks)
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN mkdir -p ./public && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund) && npm run build
 
 FROM node:20-alpine
 WORKDIR /workspace

@@ -14,10 +14,16 @@ from .auth import sign_jwt, get_current_user, require_role
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("polaris.hq")
 
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
-# sanitize wildcard in prod – if PSK is set, restrict to known origins
-if os.getenv("DATABASE_URL") and ALLOWED_ORIGINS == ["*"]:
-    logger.warning("CORS allow * in production – set ALLOWED_ORIGINS")
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+# Hardening: wildcard is dev-only. In production (DATABASE_URL set) drop '*' and fall back to localhost allowlist.
+if os.getenv("DATABASE_URL") and "*" in ALLOWED_ORIGINS:
+    logger.warning("CORS allow * in production – set ALLOWED_ORIGINS (dropping * for safety)")
+    ALLOWED_ORIGINS = [o for o in ALLOWED_ORIGINS if o != "*"]
+    if not ALLOWED_ORIGINS:
+        ALLOWED_ORIGINS = ["http://localhost:3000", "http://localhost:3001"]
+if not ALLOWED_ORIGINS:
+    ALLOWED_ORIGINS = ["http://localhost:3000", "http://localhost:3001"]
 
 # in-memory bounded rate limiter
 _rate_store: dict = {}
