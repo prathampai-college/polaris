@@ -6,7 +6,7 @@
 
 ---
 
-## 0:00 – 0:35 — Open with a real incident, not a hypothetical
+## 0:00 – 0:35 — Problem: Open with a real incident, not a hypothetical
 
 > "In October 2013, something went wrong at India's own Bharati station in Antarctica. ISRO's ground operations there shut down. The Ministry of Earth Sciences ordered a formal inquiry — one serious enough that the minister said it would be examined from a national security angle. It's believed the crisis involved the station's diesel power supply being cut off, reportedly amid a fuel shortage.
 >
@@ -18,7 +18,7 @@
 
 ---
 
-## 0:35 – 1:20 — The real conditions this has to survive
+## 0:35 – 1:20 — Blizzard & Polar Conditions: The real environment this has to survive
 
 > "Bharati runs on a skeleton winter crew of about 23 people, cut off for six months. The satellite link is 20 to 50 kilobits per second, with multi-hour blackouts. GPS degrades under ionospheric disturbance. Visibility can drop below a meter in a whiteout.
 >
@@ -42,7 +42,7 @@
 
 ---
 
-## 2:10 – 2:45 — Beat 2: forecasting and tracking, walked through on slides
+## 2:10 – 2:45 — Beat 2: Stockout Forecast and tracking, walked through on slides
 
 > "Two more pieces, shown here rather than live, since they depend on hardware we don't have in this room."
 
@@ -54,13 +54,13 @@
 
 ---
 
-## 2:45 – 3:05 — How it's built (fast, plain-language)
+## 2:45 – 3:05 — Architecture: How it's built (fast, plain-language)
 
 > "Three ideas: a local sense of space that doesn't need GPS, a power-aware brain that thinks in bursts, and a network that uses people as carriers when the signal doesn't exist. All of it runs on hardware these stations already have."
 
 ---
 
-## 3:05 – 3:45 — What we're building next (the vision, clearly labeled)
+## 3:05 – 3:45 — Feasibility & Roadmap: What we're building next (the vision, clearly labeled)
 
 > "What you've seen so far is real and running. But the 2013 incident taught us something specific: the failure wasn't just technical, it was also about visibility and decision-making under pressure. So here's where we're taking this."
 

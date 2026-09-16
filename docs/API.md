@@ -139,7 +139,7 @@ Errors: `400` ulid length / entity / op allowlist, `404 asset/vessel not found`,
 
 ## Auth & RBAC
 
-`POST /auth/login` body `{device_id, pin, station_id, role?}` → `{token, role, station_id, device_id}`. `pin` per-station (`ST-BHARATI: BHARATI-2024` `hq/app/config.py:22`). **`role` is ignored** unless `device_id` contains `ADMIN`/`LEAD`/`TEST`/`HQ` — otherwise always `FIELD_OP` `hq/app/main.py:176`. Prevents PIN-holder escalation to `NCPOR_ADMIN`. Token is HMAC-SHA256 JWT, `64 hex` secret hex-decoded to 32B (`hexToBytes`/`bytes.fromhex`), compact JSON (`separators=(',',':')`) cross-verified Node ↔ Python, `exp` 30d (`TOKEN_EXPIRY_DAYS`).
+`POST /auth/login` body `{device_id, pin, station_id, role?}` → `{token, role, station_id, device_id}`. `pin` per-station (`ST-BHARATI: BHARATI-2024` `hq/app/config.py:22`). **`role` is ignored** unless `device_id` contains `ADMIN`/`LEAD`/`TEST`/`HQ` — otherwise always `FIELD_OP` `hq/app/main.py:176`. Prevents PIN-holder escalation to `NCPOR_ADMIN`. Token is HMAC-SHA256 JWT, `64 hex` secret hex-decoded to 32B (`hexToBytes`/`bytes.fromhex`), compact JSON (`separators=(',',':')`) cross-verified Node ↔ Python, `exp` 8h (`TOKEN_EXPIRY_HOURS`, overridable via `TOKEN_EXPIRY_DAYS`).
 
 `GET /rbac/me` → `{role, station_id, device_id, permissions}`. Requires `Authorization: Bearer <JWT>`; when absent returns `{role:"VIEWER", permissions:["READ"]}` (not `FIELD_OP`). Roles `NCPOR_ADMIN(5)>HQ_LOGISTICS(4)>DISPATCH(3)=STATION_LEAD(3)>FIELD_OP(2)>VIEWER(1)` `hq/app/auth.py:8`. Row-level: `device_id→station_id` at provisioning; queries `WHERE station_id=:mine`.
 

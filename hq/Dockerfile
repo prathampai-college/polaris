@@ -3,6 +3,9 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* && apt-get clean
 COPY hq/requirements.txt ./requirements.txt
+# Runtime-only deps (torch/snntorch/onnx intentionally excluded — see hq/requirements.txt).
+# Training uses ai/requirements.txt outside this image. Keep pip verbose (no -q)
+# so long downloads are visible instead of looking hung.
 RUN pip install --no-cache-dir -r requirements.txt
 COPY hq/app ./app
 COPY shared ./shared

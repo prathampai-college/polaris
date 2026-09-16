@@ -1,10 +1,10 @@
 FROM node:20-alpine AS builder
 WORKDIR /workspace
 COPY shared ./shared
-RUN cd shared && (npm ci --silent || npm install --silent) && npx tsc
+RUN cd shared && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund) && npx tsc
 COPY sync-gateway ./sync-gateway
 WORKDIR /workspace/sync-gateway
-RUN (npm ci --silent || npm install --silent) && npx tsc
+RUN (npm ci --no-audit --no-fund || npm install --no-audit --no-fund) && npx tsc
 
 FROM node:20-alpine
 WORKDIR /workspace

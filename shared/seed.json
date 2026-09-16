@@ -34,23 +34,23 @@
   "assets": [
     ["A1", "FUEL-DIESEL-001", "Diesel (Winter Grade)", "FUEL_DIESEL", 4200, "L", null, "CRITICAL", "C1-K1", "FUEL-DIESEL-001"],
     ["A2", "FUEL-KERO-JP8-002", "Kerosene JP-8", "FUEL_KEROSENE", 1800, "L", null, "CRITICAL", "C1-K2", "FUEL-KERO-JP8-002"],
-    ["A3", "O2-CYL-47L-003", "Oxygen Cylinder 47L", "OXYGEN", 24, "cyl", "2026-09-15", "CRITICAL", "C2-K1", "O2-CYL-47L-003"],
+    ["A3", "O2-CYL-47L-003", "Oxygen Cylinder 47L", "OXYGEN", 24, "cyl", "2026-11-15", "CRITICAL", "C2-K1", "O2-CYL-47L-003"],
     ["A4", "RATION-FD-30D-004", "Freeze-Dried Rations (30-day pack)", "FOOD", 90, "packs", "2027-06-01", "HIGH", "C2-K2", "RATION-FD-30D-004"],
-    ["A5", "MED-ANTIBIOTIC-005", "Antibiotic Kit (Amoxicillin)", "MEDICAL", 12, "kits", "2026-09-20", "CRITICAL", "C2-K3", "MED-ANTIBIOTIC-005"],
-    ["A6", "MED-TRAUMA-006", "Trauma Kit (Type A)", "MEDICAL", 6, "kits", "2026-10-10", "CRITICAL", "C2-K3", "MED-TRAUMA-006"],
+    ["A5", "MED-ANTIBIOTIC-005", "Antibiotic Kit (Amoxicillin)", "MEDICAL", 12, "kits", "2026-09-21", "CRITICAL", "C2-K3", "MED-ANTIBIOTIC-005"],
+    ["A6", "MED-TRAUMA-006", "Trauma Kit (Type A)", "MEDICAL", 6, "kits", "2026-10-11", "CRITICAL", "C2-K3", "MED-TRAUMA-006"],
     ["A7", "SPARE-BRG-6205-007", "DG Bearing 6205-2RS", "SPARES_DG", 8, "pcs", null, "HIGH", "C3-K1", "SPARE-BRG-6205-007"],
     ["A8", "SPARE-FILTER-FUEL-008", "DG Fuel Filter (Fleetguard)", "SPARES_DG", 14, "pcs", null, "HIGH", "C3-K1", "SPARE-FILTER-FUEL-008"],
     ["A9", "SPARE-HVAC-FAN-009", "HVAC Blower Motor", "SPARES_HVAC", 2, "pcs", null, "HIGH", "C3-K2", "SPARE-HVAC-FAN-009"],
     ["A10", "SCI-ICE-CORE-010", "Ice Core Drill Bit", "SCIENTIFIC", 4, "pcs", null, "LOW", "C3-K2", "SCI-ICE-CORE-010"],
     ["A11", "FUEL-DIESEL-011", "Diesel (Winter Grade)", "FUEL_DIESEL", 3800, "L", null, "CRITICAL", "C4-K1", "FUEL-DIESEL-011"],
     ["A12", "FUEL-KERO-JP8-012", "Kerosene JP-8", "FUEL_KEROSENE", 1600, "L", null, "CRITICAL", "C4-K2", "FUEL-KERO-JP8-012"],
-    ["A13", "O2-CYL-47L-013", "Oxygen Cylinder 47L", "OXYGEN", 20, "cyl", "2026-09-15", "CRITICAL", "C5-K1", "O2-CYL-47L-013"],
+    ["A13", "O2-CYL-47L-013", "Oxygen Cylinder 47L", "OXYGEN", 20, "cyl", "2026-11-15", "CRITICAL", "C5-K1", "O2-CYL-47L-013"],
     ["A14", "RATION-FD-30D-014", "Freeze-Dried Rations (30-day pack)", "FOOD", 80, "packs", "2027-06-01", "HIGH", "C5-K2", "RATION-FD-30D-014"],
-    ["A15", "MED-ANTIBIOTIC-015", "Antibiotic Kit (Amoxicillin)", "MEDICAL", 10, "kits", "2026-09-20", "CRITICAL", "C5-K1", "MED-ANTIBIOTIC-015"],
+    ["A15", "MED-ANTIBIOTIC-015", "Antibiotic Kit (Amoxicillin)", "MEDICAL", 10, "kits", "2026-09-21", "CRITICAL", "C5-K1", "MED-ANTIBIOTIC-015"],
     ["A16", "SPARE-BRG-6205-016", "DG Bearing 6205-2RS", "SPARES_DG", 6, "pcs", null, "HIGH", "C4-K1", "SPARE-BRG-6205-016"],
     ["A17", "FUEL-DIESEL-017", "Diesel (Winter Grade)", "FUEL_DIESEL", 1200, "L", null, "CRITICAL", "C6-K1", "FUEL-DIESEL-017"],
-    ["A18", "O2-CYL-47L-018", "Oxygen Cylinder 47L", "OXYGEN", 15, "cyl", "2026-09-15", "CRITICAL", "C6-K1", "O2-CYL-47L-018"],
+    ["A18", "O2-CYL-47L-018", "Oxygen Cylinder 47L", "OXYGEN", 15, "cyl", "2026-11-15", "CRITICAL", "C6-K1", "O2-CYL-47L-018"],
     ["A19", "RATION-FD-30D-019", "Freeze-Dried Rations (30-day pack)", "FOOD", 40, "packs", "2027-06-01", "HIGH", "C6-K1", "RATION-FD-30D-019"],
-    ["A20", "MED-TRAUMA-020", "Trauma Kit (Type A)", "MEDICAL", 4, "kits", "2026-10-10", "CRITICAL", "C6-K1", "MED-TRAUMA-020"]
+    ["A20", "MED-TRAUMA-020", "Trauma Kit (Type A)", "MEDICAL", 4, "kits", "2026-10-11", "CRITICAL", "C6-K1", "MED-TRAUMA-020"]
   ]
 }

@@ -28,10 +28,10 @@ def _secret_bytes(secret: str) -> bytes:
     return secret.encode()
 
 
-def sign_jwt(payload: dict, secret: str, expires_in_days: int = 30) -> str:
+def sign_jwt(payload: dict, secret: str, expires_in_days: float = 30) -> str:
     header = {"alg": "HS256", "typ": "JWT"}
     now = int(time.time())
-    full_payload = {**payload, "iat": now, "exp": now + expires_in_days * 86400}
+    full_payload = {**payload, "iat": now, "exp": now + int(expires_in_days * 86400)}
     header_b64 = _b64url_encode(json.dumps(header, separators=(",", ":")).encode())
     payload_b64 = _b64url_encode(json.dumps(full_payload, separators=(",", ":")).encode())
     data = f"{header_b64}.{payload_b64}"
