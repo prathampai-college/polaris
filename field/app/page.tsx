@@ -22,6 +22,12 @@ import {
   listEmergencies,
   createEmergencySOS,
   resolveEmergency,
+  listExpeditions,
+  pullExpeditionsFromHQ,
+  createExpeditionOffline,
+  listManifests,
+  pullManifestsFromHQ,
+  advanceManifestStage,
 } from '../lib/db';
 import { SyncWorker } from '../lib/sync';
 import { Icons } from '../components/Icons';
@@ -31,6 +37,7 @@ import { ScanTab } from '../components/tabs/ScanTab';
 import { IndentsTab } from '../components/tabs/IndentsTab';
 import { LocateTab } from '../components/tabs/LocateTab';
 import { PersonnelTab } from '../components/tabs/PersonnelTab';
+import { ExpeditionsTab } from '../components/tabs/ExpeditionsTab';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 
 import { toHttpUrl } from '@shared/url.js';
@@ -47,7 +54,7 @@ function resolveHQ(): string {
 }
 const HQ_URL = resolveHQ();
 
-type Tab = 'today' | 'inventory' | 'scan' | 'indents' | 'locate' | 'personnel';
+type Tab = 'today' | 'inventory' | 'scan' | 'indents' | 'locate' | 'personnel' | 'expeditions';
 
 
 
@@ -85,6 +92,10 @@ export default function FieldPage() {
   const [personnel, setPersonnel] = useState<any[]>([]);
   const [sorties, setSorties] = useState<any[]>([]);
   const [emergencies, setEmergencies] = useState<any[]>([]);
+  const [expeditions, setExpeditions] = useState<any[]>([]);
+  const [manifests, setManifests] = useState<any[]>([]);
+  // Winter-twin rehearsal flag: ?twin=1 routes telemetry to simulator, tags writes twin=1 (excluded from audit/sync)
+  const isTwin = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('twin') === '1';
 
   // UI state
   const [tab, setTab] = useState<Tab>('today');
@@ -170,6 +181,15 @@ export default function FieldPage() {
       setPersonnel(await listPersonnel(STATION_ID));
       setSorties(await listSorties(STATION_ID));
       setEmergencies(await listEmergencies(STATION_ID));
+      try {
+        const exps = await listExpeditions();
+        setExpeditions(exps);
+        const all: any[] = [];
+        for (const e of exps as any[]) {
+          try { all.push(...(await listManifests(e.id))); } catch {}
+        }
+        setManifests(all);
+      } catch {}
 
       const headers: Record<string, string> = authToken ? { Authorization: `Bearer ${authToken}` } : {};
       const r = await fetch(`${HQ_URL}/forecast/${STATION_ID}`, { headers });
@@ -268,7 +288,7 @@ export default function FieldPage() {
   // Tab deep link via hash
   useEffect(() => {
     const h = location.hash.replace('#', '') as Tab;
-    if (h && ['today', 'inventory', 'scan', 'indents', 'locate', 'personnel'].includes(h)) {
+    if (h && ['today', 'inventory', 'scan', 'indents', 'locate', 'personnel', 'expeditions'].includes(h)) {
       setTab(h);
     }
   }, []);
@@ -470,6 +490,45 @@ export default function FieldPage() {
       refresh();
     } catch (e: any) {
       pushToast(e.message);
+    }
+  }
+
+  async function handleCreateExpedition(program: string, name: string, season: string) {
+    try {
+      await createExpeditionOffline({ program, name, season, deviceId: DEVICE_ID, createdBy: ACTOR_ID });
+      pushToast(`Expedition queued offline — drains via outbox/DTN${isTwin ? ' (TWIN rehearsal)' : ''}`);
+      refresh();
+    } catch (e: any) {
+      pushToast(e.message);
+    }
+  }
+
+  async function handleAdvanceManifest(manifestId: string, stage: string) {
+    try {
+      await advanceManifestStage({ manifestId, stage, actorId: ACTOR_ID, deviceId: DEVICE_ID });
+      pushToast(`Manifest → ${stage} (offline WAL)`);
+      refresh();
+    } catch (e: any) {
+      pushToast(e.message);
+    }
+  }
+
+  async function handleRefreshExpeditions() {
+    try {
+      const { pulled } = await pullExpeditionsFromHQ(HQ_URL);
+      const exps = await listExpeditions();
+      let all: any[] = [];
+      for (const e of exps as any[]) {
+        try {
+          await pullManifestsFromHQ(HQ_URL, e.id);
+          all.push(...(await listManifests(e.id)));
+        } catch {}
+      }
+      setExpeditions(exps);
+      setManifests(all);
+      pushToast(`Expeditions synced (${pulled} pulled)`);
+    } catch (e: any) {
+      pushToast(`Expedition sync failed (offline OK): ${e.message}`);
     }
   }
 
@@ -684,6 +743,7 @@ export default function FieldPage() {
           <nav className="flex gap-1.5 overflow-x-auto scroll-thin">
             {[
               { id: 'today', label: 'Today', icon: Icons.home },
+              { id: 'expeditions', label: 'Expeditions', icon: Icons.file, badge: expeditions.length },
               { id: 'inventory', label: 'Inventory', icon: Icons.box, badge: assets.length },
               { id: 'personnel', label: 'Muster & SOS', icon: Icons.users, badge: emergencies.filter((e: any) => e.status === 'ACTIVE').length },
               { id: 'scan', label: 'QR Scan', icon: Icons.scan },
@@ -756,6 +816,19 @@ export default function FieldPage() {
             onUpdateSortieStatus={handleUpdateSortieStatus}
             onTriggerSOS={handleTriggerSOS}
             onResolveEmergency={handleResolveEmergency}
+            glove={glove}
+          />
+        )}
+
+        {/* TAB 7: EXPEDITION PLANNING */}
+        {tab === 'expeditions' && (
+          <ExpeditionsTab
+            expeditions={expeditions}
+            manifests={manifests}
+            currentStation={STATION_ID}
+            onCreateExpedition={handleCreateExpedition}
+            onAdvanceManifest={handleAdvanceManifest}
+            onRefreshExpeditions={handleRefreshExpeditions}
             glove={glove}
           />
         )}

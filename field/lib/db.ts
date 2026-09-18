@@ -28,8 +28,12 @@ CREATE TABLE IF NOT EXISTS dtn_bundles (bundle_id TEXT PRIMARY KEY, src TEXT, ds
 CREATE TABLE IF NOT EXISTS asset_positions (asset_id TEXT PRIMARY KEY, x REAL, y REAL, theta REAL, conf REAL, last_sensor_ts TEXT, station_id TEXT REFERENCES stations(id));
 CREATE TABLE IF NOT EXISTS snn_state (device_id TEXT PRIMARY KEY, last_features TEXT, spike_count INTEGER DEFAULT 0, last_infer_ts TEXT, total_saved_mw REAL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS personnel (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), name TEXT, role TEXT, blood_group TEXT, emergency_contact TEXT, status TEXT CHECK(status IN ('ON_STATION','FIELD_SORTIE','IN_TRANSIT','EVACUATED')) DEFAULT 'ON_STATION');
-CREATE TABLE IF NOT EXISTS field_sorties (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), lead_personnel_id TEXT REFERENCES personnel(id), destination TEXT, departure_time TEXT, expected_return_time TEXT, actual_return_time TEXT, safety_status TEXT CHECK(safety_status IN ('PLANNED','ACTIVE','RETURNED','OVERDUE','EMERGENCY')) DEFAULT 'PLANNED');
-CREATE TABLE IF NOT EXISTS emergencies (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), type TEXT CHECK(type IN ('SOS_MEDICAL','SOS_FIRE','SOS_WHITEOUT','SOS_POWER','SOS_VEHICLE')), reported_by TEXT, status TEXT CHECK(status IN ('ACTIVE','RESOLVED')) DEFAULT 'ACTIVE', ts TEXT, location_coord TEXT);
+CREATE TABLE IF NOT EXISTS field_sorties (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), lead_personnel_id TEXT REFERENCES personnel(id), destination TEXT, departure_time TEXT, expected_return_time TEXT, actual_return_time TEXT, safety_status TEXT CHECK(safety_status IN ('PLANNED','ACTIVE','RETURNED','OVERDUE','EMERGENCY')) DEFAULT 'PLANNED', expedition_id TEXT);
+CREATE TABLE IF NOT EXISTS emergencies (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), type TEXT CHECK(type IN ('SOS_MEDICAL','SOS_FIRE','SOS_WHITEOUT','SOS_POWER','SOS_VEHICLE')), reported_by TEXT, status TEXT CHECK(status IN ('ACTIVE','ACK','RESPONDING','RESOLVED')) DEFAULT 'ACTIVE', ts TEXT, location_coord TEXT, assignee TEXT, sortie_id TEXT);
+CREATE TABLE IF NOT EXISTS expeditions (id TEXT PRIMARY KEY, program TEXT DEFAULT 'ANTARCTIC', name TEXT, season TEXT, status TEXT DEFAULT 'PLANNED', created_by TEXT, created_at TEXT, vector_clock TEXT);
+CREATE TABLE IF NOT EXISTS voyage_legs (id TEXT PRIMARY KEY, expedition_id TEXT, seq INTEGER DEFAULT 0, from_point TEXT, to_point TEXT, mode TEXT DEFAULT 'SEA', vessel_imo TEXT, eta_depart TEXT, eta_arrive TEXT, status TEXT DEFAULT 'PLANNED');
+CREATE TABLE IF NOT EXISTS manifests (id TEXT PRIMARY KEY, expedition_id TEXT, owner_org TEXT, project_code TEXT, destination_station TEXT, sku TEXT, description TEXT, qty REAL, unit TEXT, weight_kg REAL, hazmat_class TEXT, temp_zone TEXT DEFAULT 'AMBIENT', customs_status TEXT DEFAULT 'PENDING', biosecurity_status TEXT DEFAULT 'PENDING', labelling_code TEXT UNIQUE, container_id TEXT, crate_id TEXT, stage TEXT DEFAULT 'GOA', vector_clock TEXT);
+CREATE TABLE IF NOT EXISTS personnel_positions (personnel_id TEXT PRIMARY KEY, x REAL, y REAL, theta REAL, conf REAL, last_sensor_ts TEXT, station_id TEXT);
 CREATE INDEX IF NOT EXISTS idx_assets_crate ON assets(crate_id);
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_vessels_station ON vessels(station_id);
@@ -38,6 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_asset_positions_station ON asset_positions(statio
 CREATE INDEX IF NOT EXISTS idx_personnel_station ON personnel(station_id);
 CREATE INDEX IF NOT EXISTS idx_sorties_station ON field_sorties(station_id);
 CREATE INDEX IF NOT EXISTS idx_emergencies_station ON emergencies(station_id, status);
+CREATE INDEX IF NOT EXISTS idx_manifests_expedition ON manifests(expedition_id, destination_station, stage);
 `;
 
 export async function getDb(): Promise<any> {
@@ -625,6 +630,147 @@ export async function applyDownstreamEmergency(emergencyId: string, patch: Recor
     db.exec('ROLLBACK');
     throw e;
   }
+}
+
+const EM_TRIAGE = ['ACTIVE', 'ACK', 'RESPONDING', 'RESOLVED'];
+
+export async function updateEmergencyStatus(opts: { emergencyId: string; status: string; actorId: string; deviceId: string; assignee?: string }) {
+  if (!EM_TRIAGE.includes(opts.status)) throw new Error(`invalid triage status ${opts.status}`);
+  const db = await getDb();
+  const { ulid } = await import('ulid');
+  const { encode } = await import('@msgpack/msgpack');
+  const ts = new Date().toISOString();
+  const cur = db.selectObjects('SELECT status FROM emergencies WHERE id=?', [opts.emergencyId])[0] as any;
+  if (cur && EM_TRIAGE.indexOf(opts.status) < EM_TRIAGE.indexOf(cur.status)) {
+    throw new Error(`illegal triage regression ${cur.status}->${opts.status}`);
+  }
+  const patch: any = { id: opts.emergencyId, status: opts.status, updated_at: ts };
+  if (opts.assignee) patch.assignee = opts.assignee;
+  const patchBytes = encode(patch);
+  const outboxUlid = ulid();
+  db.exec('BEGIN');
+  try {
+    if (opts.assignee) {
+      db.exec({ sql: 'UPDATE emergencies SET status=?, assignee=? WHERE id=?', bind: [opts.status, opts.assignee, opts.emergencyId] });
+    } else {
+      db.exec({ sql: 'UPDATE emergencies SET status=? WHERE id=?', bind: [opts.status, opts.emergencyId] });
+    }
+    db.exec({ sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)', bind: [ulid(), opts.actorId, `EMERGENCY_${opts.status}`, 'emergencies', null, JSON.stringify(patch), ts] });
+    db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, status) VALUES (?,?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'emergencies', opts.emergencyId, 'UPSERT', patchBytes, 0, ts, 'PENDING'] });
+    db.exec('COMMIT');
+    return { success: true, outboxUlid };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+// --- Expedition planning (offline-first, outbox VC) ---
+export async function listExpeditions(program?: string) {
+  const db = await getDb();
+  if (program) return db.selectObjects('SELECT * FROM expeditions WHERE program=? ORDER BY season DESC', [program]);
+  return db.selectObjects('SELECT * FROM expeditions ORDER BY program, season DESC');
+}
+
+export async function pullExpeditionsFromHQ(hqUrl: string) {
+  const db = await getDb();
+  const res = await fetch(`${hqUrl}/expeditions`);
+  if (!res.ok) return { pulled: 0 };
+  const rows = await res.json();
+  let n = 0;
+  for (const e of rows) {
+    try {
+      db.exec({ sql: 'INSERT INTO expeditions (id, program, name, season, status, created_by, created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status, name=excluded.name', bind: [e.id, e.program || 'ANTARCTIC', e.name, e.season, e.status, e.created_by || '', e.created_at || ''] });
+      n++;
+    } catch {}
+  }
+  return { pulled: n };
+}
+
+export async function createExpeditionOffline(opts: { program: string; name: string; season: string; deviceId: string; createdBy: string }) {
+  const db = await getDb();
+  const { ulid } = await import('ulid');
+  const { encode } = await import('@msgpack/msgpack');
+  const id = ulid();
+  const ts = new Date().toISOString();
+  const patch = { id, program: opts.program, name: opts.name, season: opts.season, status: 'PLANNED' };
+  db.exec('BEGIN');
+  try {
+    db.exec({ sql: 'INSERT INTO expeditions (id, program, name, season, status, created_by, created_at) VALUES (?,?,?,?,?,?,?)', bind: [id, opts.program, opts.name, opts.season, 'PLANNED', opts.createdBy, ts] });
+    db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, status) VALUES (?,?,?,?,?,?,?,?,?)', bind: [ulid(), opts.deviceId, 'expeditions', id, 'UPSERT', encode(patch), 0, ts, 'PENDING'] });
+    db.exec('COMMIT');
+    return { id, patch };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+export async function listManifests(expeditionId: string, stationId?: string) {
+  const db = await getDb();
+  if (stationId) return db.selectObjects('SELECT * FROM manifests WHERE expedition_id=? AND destination_station=? ORDER BY labelling_code', [expeditionId, stationId]);
+  return db.selectObjects('SELECT * FROM manifests WHERE expedition_id=? ORDER BY destination_station, labelling_code', [expeditionId]);
+}
+
+export async function pullManifestsFromHQ(hqUrl: string, expeditionId: string) {
+  const db = await getDb();
+  const res = await fetch(`${hqUrl}/expeditions/${expeditionId}/manifests`);
+  if (!res.ok) return { pulled: 0 };
+  const rows = await res.json();
+  let n = 0;
+  for (const m of rows) {
+    try {
+      db.exec({ sql: 'INSERT INTO manifests (id, expedition_id, owner_org, project_code, destination_station, sku, description, qty, unit, weight_kg, hazmat_class, temp_zone, customs_status, biosecurity_status, labelling_code, container_id, crate_id, stage) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET stage=excluded.stage, container_id=excluded.container_id', bind: [m.id, m.expedition_id, m.owner_org, m.project_code, m.destination_station, m.sku, m.description, m.qty, m.unit, m.weight_kg, m.hazmat_class, m.temp_zone, m.customs_status, m.biosecurity_status, m.labelling_code, m.container_id, m.crate_id, m.stage] });
+      n++;
+    } catch {}
+  }
+  return { pulled: n };
+}
+
+const MANIFEST_STAGES = ['GOA', 'MUMBAI', 'CAPETOWN', 'VESSEL', 'STATION', 'CRATE'];
+
+export async function advanceManifestStage(opts: { manifestId: string; stage: string; actorId: string; deviceId: string; containerId?: string }) {
+  if (!MANIFEST_STAGES.includes(opts.stage)) throw new Error('invalid stage');
+  const db = await getDb();
+  const { ulid } = await import('ulid');
+  const { encode } = await import('@msgpack/msgpack');
+  const ts = new Date().toISOString();
+  const cur = db.selectObjects('SELECT stage FROM manifests WHERE id=?', [opts.manifestId])[0] as any;
+  if (cur && MANIFEST_STAGES.indexOf(opts.stage) < MANIFEST_STAGES.indexOf(cur.stage)) {
+    throw new Error(`illegal stage regression ${cur.stage}->${opts.stage}`);
+  }
+  const patch: any = { id: opts.manifestId, stage: opts.stage, updated_at: ts };
+  if (opts.containerId) patch.container_id = opts.containerId;
+  db.exec('BEGIN');
+  try {
+    if (opts.containerId) {
+      db.exec({ sql: 'UPDATE manifests SET stage=?, container_id=? WHERE id=?', bind: [opts.stage, opts.containerId, opts.manifestId] });
+    } else {
+      db.exec({ sql: 'UPDATE manifests SET stage=? WHERE id=?', bind: [opts.stage, opts.manifestId] });
+    }
+    db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, status) VALUES (?,?,?,?,?,?,?,?,?)', bind: [ulid(), opts.deviceId, 'manifests', opts.manifestId, 'UPSERT', encode(patch), 0, ts, 'PENDING'] });
+    db.exec('COMMIT');
+    return { success: true };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+export async function applyDownstreamExpedition(expeditionId: string, patch: Record<string, any>) {
+  const db = await getDb();
+  try {
+    db.exec({ sql: 'INSERT INTO expeditions (id, program, name, season, status) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status, name=excluded.name', bind: [expeditionId, patch.program || 'ANTARCTIC', patch.name || 'Expedition', patch.season || '', patch.status || 'PLANNED'] });
+    return { applied: true };
+  } catch { return { applied: false }; }
+}
+
+export async function applyDownstreamManifest(manifestId: string, patch: Record<string, any>) {
+  const db = await getDb();
+  try {
+    db.exec({ sql: 'INSERT INTO manifests (id, expedition_id, destination_station, description, qty, unit, stage) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET stage=excluded.stage', bind: [manifestId, patch.expedition_id || '', patch.destination_station || 'ST-BHARATI', patch.description || '', patch.qty ?? 1, patch.unit || 'pcs', patch.stage || 'GOA'] });
+    return { applied: true };
+  } catch { return { applied: false }; }
 }
 
 
