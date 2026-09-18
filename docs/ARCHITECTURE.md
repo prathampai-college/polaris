@@ -1,5 +1,8 @@
 # Architecture — POLARIS (Production, Extreme-Edge)
 
+> **Problem Statement (exact):** "Develop a centralized digital platform for expedition
+> planning, cargo tracking, inventory management, personnel movement and emergency response."
+
 ## Stack
 
 Field tablets + HQ Dashboard **Next.js 14** (Docker `ARG NEXT_PUBLIC_*` + runtime `window.location.hostname` fallback + `/api/config` `field/app/api/config:1` `hq-dashboard/app/api/config:1`), HQ/training **Python 3.11** (`httpx` async, `psycopg_pool`), Gateway **Node 20**. Stack settled; production-ready.

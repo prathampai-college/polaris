@@ -30,6 +30,42 @@ export interface AuditLog { id: string; actor_id: string; action: string; entity
 export interface OutboxRow { ulid: string; device_id: string; entity: string; entity_id: string; op: OutboxOp; patch: Uint8Array; base_version: number; retry_count: number; created_at: string; status: OutboxStatus; }
 export interface SyncState { device_id: string; last_acked_ulid: string | null; last_server_version: number; vector_clock?: VectorClock | null; }
 
+export type PersonnelStatus = 'ON_STATION' | 'FIELD_SORTIE' | 'IN_TRANSIT' | 'EVACUATED';
+export type SortieSafetyStatus = 'PLANNED' | 'ACTIVE' | 'RETURNED' | 'OVERDUE' | 'EMERGENCY';
+export type EmergencyType = 'SOS_MEDICAL' | 'SOS_FIRE' | 'SOS_WHITEOUT' | 'SOS_POWER' | 'SOS_VEHICLE';
+export type EmergencyStatus = 'ACTIVE' | 'RESOLVED';
+
+export interface Personnel {
+  id: string;
+  station_id: string;
+  name: string;
+  role: string;
+  blood_group: string;
+  emergency_contact: string;
+  status: PersonnelStatus;
+}
+
+export interface FieldSortie {
+  id: string;
+  station_id: string;
+  lead_personnel_id: string;
+  destination: string;
+  departure_time: string;
+  expected_return_time: string;
+  actual_return_time?: string | null;
+  safety_status: SortieSafetyStatus;
+}
+
+export interface Emergency {
+  id: string;
+  station_id: string;
+  type: EmergencyType;
+  reported_by: string;
+  status: EmergencyStatus;
+  ts: string;
+  location_coord?: string | null;
+}
+
 export type VectorClock = Record<string, number>;
 
 export interface DeltaFrame {
@@ -58,7 +94,7 @@ export interface DownstreamDeltaFrame {
   type: 'DOWNSTREAM_DELTA';
   ulid: string;
   station_id: string;
-  entity: 'indents' | 'assets' | 'telemetry' | 'vessels';
+  entity: 'indents' | 'assets' | 'telemetry' | 'vessels' | 'personnel' | 'field_sorties' | 'emergencies';
   entity_id: string;
   op: 'UPSERT' | 'STATUS_CHANGE' | 'DELETE';
   patch: Record<string, unknown>;

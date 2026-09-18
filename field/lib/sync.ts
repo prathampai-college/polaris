@@ -91,6 +91,15 @@ export class SyncWorker {
             await applyDownstreamAsset(String(frame.entity_id), frame.patch as Record<string, unknown>);
           } else if (frame.entity === 'vessels') {
             await applyDownstreamVessel(String(frame.entity_id), frame.patch as Record<string, unknown>);
+          } else if (frame.entity === 'personnel') {
+            const { applyDownstreamPersonnel } = await import('./db');
+            await applyDownstreamPersonnel(String(frame.entity_id), frame.patch as Record<string, unknown>);
+          } else if (frame.entity === 'field_sorties') {
+            const { applyDownstreamSortie } = await import('./db');
+            await applyDownstreamSortie(String(frame.entity_id), frame.patch as Record<string, unknown>);
+          } else if (frame.entity === 'emergencies') {
+            const { applyDownstreamEmergency } = await import('./db');
+            await applyDownstreamEmergency(String(frame.entity_id), frame.patch as Record<string, unknown>);
           }
           this.onDownstreamDelta?.(frame);
           return;

@@ -85,19 +85,22 @@ def _interpolate_schedule(now: datetime.datetime):
 
 def _upsert_vessels(rows):
     try:
-        from .db import get_conn, USE_PG
+        from .db import get_conn, release_conn, USE_PG
         conn = get_conn()
-        if USE_PG:
-            with conn:
-                with conn.cursor() as cur:
-                    for r in rows:
-                        cur.execute("INSERT INTO vessels (imo, name, lat, lon, sog, eta, station_id, last_seen) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (imo) DO UPDATE SET name=EXCLUDED.name, lat=EXCLUDED.lat, lon=EXCLUDED.lon, sog=EXCLUDED.sog, eta=EXCLUDED.eta, station_id=EXCLUDED.station_id, last_seen=EXCLUDED.last_seen", (r["imo"], r["name"], r["lat"], r["lon"], r["sog"], r["eta"], r["station_id"], r["last_seen"]))
-            try: conn.close()
-            except Exception: pass
-        else:
-            for r in rows:
-                conn.execute("INSERT INTO vessels (imo, name, lat, lon, sog, eta, station_id, last_seen) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(imo) DO UPDATE SET name=excluded.name, lat=excluded.lat, lon=excluded.lon, sog=excluded.sog, eta=excluded.eta, station_id=excluded.station_id, last_seen=excluded.last_seen", (r["imo"], r["name"], r["lat"], r["lon"], r["sog"], r["eta"], r["station_id"], r["last_seen"]))
-            conn.commit()
+        try:
+            if USE_PG:
+                with conn:
+                    with conn.cursor() as cur:
+                        for r in rows:
+                            cur.execute("INSERT INTO vessels (imo, name, lat, lon, sog, eta, station_id, last_seen) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (imo) DO UPDATE SET name=EXCLUDED.name, lat=EXCLUDED.lat, lon=EXCLUDED.lon, sog=EXCLUDED.sog, eta=EXCLUDED.eta, station_id=EXCLUDED.station_id, last_seen=EXCLUDED.last_seen", (r["imo"], r["name"], r["lat"], r["lon"], r["sog"], r["eta"], r["station_id"], r["last_seen"]))
+            else:
+                for r in rows:
+                    conn.execute("INSERT INTO vessels (imo, name, lat, lon, sog, eta, station_id, last_seen) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(imo) DO UPDATE SET name=excluded.name, lat=excluded.lat, lon=excluded.lon, sog=excluded.sog, eta=excluded.eta, station_id=excluded.station_id, last_seen=excluded.last_seen", (r["imo"], r["name"], r["lat"], r["lon"], r["sog"], r["eta"], r["station_id"], r["last_seen"]))
+                conn.commit()
+        finally:
+            if USE_PG:
+                try: release_conn(conn)
+                except Exception: pass
         # cache for fallback persistence
         try:
             VESSEL_CACHE.parent.mkdir(parents=True, exist_ok=True)

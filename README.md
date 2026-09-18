@@ -1,5 +1,8 @@
 # POLARIS — Polar Logistics & Survival Engine
 
+> **Problem Statement (exact):** "Develop a centralized digital platform for expedition
+> planning, cargo tracking, inventory management, personnel movement and emergency response."
+
 **SIH26062 — Integrated Polar Expedition Logistics & Asset Management System** for the NCPOR/MoES stations **Bharati (69°24′S 76°11′E), Maitri (70°45′S 11°44′E), and Himadri (78°55′N 11°56′E)**.
 
 The system is offline-first, decentralized, and air-gapped. It is designed to survive **−40°C blizzards, six months of winter isolation, and 20–50 kbps Iridium links with multi-hour blackouts**. A diesel or oxygen stockout during the polar night is a survival failure, and this system exists to prevent it.

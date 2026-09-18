@@ -27,11 +27,17 @@ CREATE TABLE IF NOT EXISTS dedupe (ulid TEXT PRIMARY KEY, processed_at TEXT);
 CREATE TABLE IF NOT EXISTS dtn_bundles (bundle_id TEXT PRIMARY KEY, src TEXT, dst_station TEXT, payload BLOB, vc TEXT, custody INTEGER DEFAULT 1, created_at TEXT, ttl INTEGER DEFAULT 86400);
 CREATE TABLE IF NOT EXISTS asset_positions (asset_id TEXT PRIMARY KEY, x REAL, y REAL, theta REAL, conf REAL, last_sensor_ts TEXT, station_id TEXT REFERENCES stations(id));
 CREATE TABLE IF NOT EXISTS snn_state (device_id TEXT PRIMARY KEY, last_features TEXT, spike_count INTEGER DEFAULT 0, last_infer_ts TEXT, total_saved_mw REAL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS personnel (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), name TEXT, role TEXT, blood_group TEXT, emergency_contact TEXT, status TEXT CHECK(status IN ('ON_STATION','FIELD_SORTIE','IN_TRANSIT','EVACUATED')) DEFAULT 'ON_STATION');
+CREATE TABLE IF NOT EXISTS field_sorties (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), lead_personnel_id TEXT REFERENCES personnel(id), destination TEXT, departure_time TEXT, expected_return_time TEXT, actual_return_time TEXT, safety_status TEXT CHECK(safety_status IN ('PLANNED','ACTIVE','RETURNED','OVERDUE','EMERGENCY')) DEFAULT 'PLANNED');
+CREATE TABLE IF NOT EXISTS emergencies (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), type TEXT CHECK(type IN ('SOS_MEDICAL','SOS_FIRE','SOS_WHITEOUT','SOS_POWER','SOS_VEHICLE')), reported_by TEXT, status TEXT CHECK(status IN ('ACTIVE','RESOLVED')) DEFAULT 'ACTIVE', ts TEXT, location_coord TEXT);
 CREATE INDEX IF NOT EXISTS idx_assets_crate ON assets(crate_id);
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_vessels_station ON vessels(station_id);
 CREATE INDEX IF NOT EXISTS idx_dtn_bundles_dst ON dtn_bundles(dst_station, created_at);
 CREATE INDEX IF NOT EXISTS idx_asset_positions_station ON asset_positions(station_id);
+CREATE INDEX IF NOT EXISTS idx_personnel_station ON personnel(station_id);
+CREATE INDEX IF NOT EXISTS idx_sorties_station ON field_sorties(station_id);
+CREATE INDEX IF NOT EXISTS idx_emergencies_station ON emergencies(station_id, status);
 `;
 
 export async function getDb(): Promise<any> {
@@ -62,8 +68,31 @@ export async function getDb(): Promise<any> {
   return _db;
 }
 
+const SEED_PERSONNEL = [
+  ['PER-BHA-01', 'ST-BHARATI', 'Dr. Rajesh Sharma', 'Station Leader & Glaciologist', 'O+', '+91-9876543210', 'ON_STATION'],
+  ['PER-BHA-02', 'ST-BHARATI', 'Capt. Vikram Rao', 'Logistics & Field Ops Lead', 'A+', '+91-9876543211', 'ON_STATION'],
+  ['PER-BHA-03', 'ST-BHARATI', 'Dr. Ananya Sen', 'Medical Officer', 'B+', '+91-9876543212', 'ON_STATION'],
+  ['PER-BHA-04', 'ST-BHARATI', 'Sunil Gaikwad', 'HVAC & Power Tech', 'AB+', '+91-9876543213', 'ON_STATION'],
+  ['PER-BHA-05', 'ST-BHARATI', 'Priya Nambiar', 'Atmospheric Physicist', 'O-', '+91-9876543214', 'ON_STATION'],
+  ['PER-MAI-01', 'ST-MAITRI', 'Dr. Devendra Rathore', 'Station Leader', 'A+', '+91-9876543215', 'ON_STATION'],
+  ['PER-MAI-02', 'ST-MAITRI', 'Dr. Neha Verma', 'Medical Officer & Medic', 'O+', '+91-9876543216', 'ON_STATION'],
+  ['PER-MAI-03', 'ST-MAITRI', 'Harpreet Singh', 'Heavy Vehicle Tech', 'B+', '+91-9876543217', 'ON_STATION'],
+  ['PER-HIM-01', 'ST-HIMADRI', 'Dr. Arvind Joshi', 'Arctic Mission Leader', 'A-', '+91-9876543218', 'ON_STATION'],
+  ['PER-HIM-02', 'ST-HIMADRI', 'Meera Pillai', 'Marine Biologist', 'O+', '+91-9876543219', 'ON_STATION']
+];
+
 export async function seedIfEmpty(deviceId: string) {
   const db = await getDb();
+  // Check and seed personnel even if assets exist
+  try {
+    const pCnt = db.selectValue('SELECT COUNT(*) FROM personnel');
+    if (pCnt === 0) {
+      for (const p of SEED_PERSONNEL) {
+        db.exec({ sql: 'INSERT OR IGNORE INTO personnel (id, station_id, name, role, blood_group, emergency_contact, status) VALUES (?,?,?,?,?,?,?)', bind: p });
+      }
+    }
+  } catch {}
+
   const cnt = db.selectValue('SELECT COUNT(*) FROM assets');
   if (cnt > 0) return { seeded: false, count: cnt };
   const { SEED_STATIONS, SEED_CONTAINERS, SEED_CRATES, SEED_ASSETS } = await import('@shared/seed.js');
@@ -77,6 +106,7 @@ export async function seedIfEmpty(deviceId: string) {
     for (const c of containers) db.exec({ sql: 'INSERT OR IGNORE INTO containers VALUES (?,?,?,?)', bind: c });
     for (const c of crates) db.exec({ sql: 'INSERT OR IGNORE INTO crates VALUES (?,?,?,?)', bind: c });
     for (const a of assets) db.exec({ sql: 'INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)', bind: [...(a as unknown[]), new Date().toISOString()] });
+    for (const p of SEED_PERSONNEL) db.exec({ sql: 'INSERT OR IGNORE INTO personnel (id, station_id, name, role, blood_group, emergency_contact, status) VALUES (?,?,?,?,?,?,?)', bind: p });
     db.exec({ sql: 'INSERT OR IGNORE INTO sync_state (device_id, last_server_version) VALUES (?,0)', bind: [deviceId] });
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); throw e; }
@@ -385,4 +415,216 @@ export async function listCratesWithAssets() {
   const db = await getDb();
   return db.selectObjects('SELECT crates.id as crate_id, crates.coords, crates.container_id, containers.position_2d, assets.sku, assets.name, assets.qty, assets.unit FROM crates LEFT JOIN assets ON assets.crate_id=crates.id LEFT JOIN containers ON containers.id=crates.container_id ORDER BY crates.id');
 }
+
+// --- Pillar 4 & 5: Personnel Roster, Field Sorties & Emergency SOS ---
+
+export async function listPersonnel(stationId?: string) {
+  const db = await getDb();
+  if (stationId) return db.selectObjects('SELECT * FROM personnel WHERE station_id=? ORDER BY name', [stationId]);
+  return db.selectObjects('SELECT * FROM personnel ORDER BY name');
+}
+
+export async function updatePersonnelStatus(opts: { id: string; status: string; actorId: string; deviceId: string; stationId?: string }) {
+  const db = await getDb();
+  const { ulid } = await import('ulid');
+  const { encode } = await import('@msgpack/msgpack');
+  const ts = new Date().toISOString();
+  const outboxUlid = ulid();
+  const patch = { id: opts.id, status: opts.status, station_id: opts.stationId, updated_at: ts };
+  const patchBytes = encode(patch);
+  db.exec('BEGIN');
+  try {
+    db.exec({ sql: 'UPDATE personnel SET status=? WHERE id=?', bind: [opts.status, opts.id] });
+    db.exec({ sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)', bind: [ulid(), opts.actorId, `PERSONNEL_STATUS_${opts.status}`, 'personnel', null, JSON.stringify(patch), ts] });
+    db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, status) VALUES (?,?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'personnel', opts.id, 'UPSERT', patchBytes, 0, ts, 'PENDING'] });
+    db.exec('COMMIT');
+    return { success: true, outboxUlid };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+export async function listSorties(stationId?: string) {
+  const db = await getDb();
+  if (stationId) {
+    return db.selectObjects(`SELECT s.*, p.name as lead_name, p.role as lead_role FROM field_sorties s LEFT JOIN personnel p ON p.id=s.lead_personnel_id WHERE s.station_id=? ORDER BY s.departure_time DESC`, [stationId]);
+  }
+  return db.selectObjects(`SELECT s.*, p.name as lead_name, p.role as lead_role FROM field_sorties s LEFT JOIN personnel p ON p.id=s.lead_personnel_id ORDER BY s.departure_time DESC`);
+}
+
+export async function createSortie(opts: { stationId: string; leadPersonnelId: string; destination: string; expectedReturnTime: string; createdBy: string; deviceId: string }) {
+  const db = await getDb();
+  const { ulid } = await import('ulid');
+  const { encode } = await import('@msgpack/msgpack');
+  const id = ulid();
+  const ts = new Date().toISOString();
+  const outboxUlid = ulid();
+  const sortie = {
+    id,
+    station_id: opts.stationId,
+    lead_personnel_id: opts.leadPersonnelId,
+    destination: opts.destination,
+    departure_time: ts,
+    expected_return_time: opts.expectedReturnTime,
+    safety_status: 'ACTIVE'
+  };
+  const patchBytes = encode(sortie);
+  db.exec('BEGIN');
+  try {
+    db.exec({
+      sql: 'INSERT INTO field_sorties (id, station_id, lead_personnel_id, destination, departure_time, expected_return_time, safety_status) VALUES (?,?,?,?,?,?,?)',
+      bind: [id, opts.stationId, opts.leadPersonnelId, opts.destination, ts, opts.expectedReturnTime, 'ACTIVE']
+    });
+    db.exec({ sql: 'UPDATE personnel SET status=? WHERE id=?', bind: ['FIELD_SORTIE', opts.leadPersonnelId] });
+    db.exec({ sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)', bind: [ulid(), opts.createdBy, 'SORTIE_START', 'field_sorties', null, JSON.stringify(sortie), ts] });
+    db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, status) VALUES (?,?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'field_sorties', id, 'UPSERT', patchBytes, 0, ts, 'PENDING'] });
+    db.exec('COMMIT');
+    return { sortie, outboxUlid };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+export async function updateSortieStatus(opts: { sortieId: string; safetyStatus: string; actorId: string; deviceId: string; stationId?: string }) {
+  const db = await getDb();
+  const { ulid } = await import('ulid');
+  const { encode } = await import('@msgpack/msgpack');
+  const ts = new Date().toISOString();
+  const outboxUlid = ulid();
+  const patch: any = { id: opts.sortieId, safety_status: opts.safetyStatus, station_id: opts.stationId, updated_at: ts };
+  if (opts.safetyStatus === 'RETURNED') {
+    patch.actual_return_time = ts;
+  }
+  const patchBytes = encode(patch);
+  db.exec('BEGIN');
+  try {
+    if (opts.safetyStatus === 'RETURNED') {
+      const s = db.selectObjects('SELECT lead_personnel_id FROM field_sorties WHERE id=?', [opts.sortieId])[0];
+      db.exec({ sql: 'UPDATE field_sorties SET safety_status=?, actual_return_time=? WHERE id=?', bind: [opts.safetyStatus, ts, opts.sortieId] });
+      if (s?.lead_personnel_id) {
+        db.exec({ sql: 'UPDATE personnel SET status=? WHERE id=?', bind: ['ON_STATION', s.lead_personnel_id] });
+      }
+    } else {
+      db.exec({ sql: 'UPDATE field_sorties SET safety_status=? WHERE id=?', bind: [opts.safetyStatus, opts.sortieId] });
+    }
+    db.exec({ sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)', bind: [ulid(), opts.actorId, `SORTIE_${opts.safetyStatus}`, 'field_sorties', null, JSON.stringify(patch), ts] });
+    db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, status) VALUES (?,?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'field_sorties', opts.sortieId, 'UPSERT', patchBytes, 0, ts, 'PENDING'] });
+    db.exec('COMMIT');
+    return { success: true, outboxUlid };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+export async function listEmergencies(stationId?: string) {
+  const db = await getDb();
+  if (stationId) return db.selectObjects('SELECT * FROM emergencies WHERE station_id=? ORDER BY ts DESC', [stationId]);
+  return db.selectObjects('SELECT * FROM emergencies ORDER BY ts DESC');
+}
+
+export async function createEmergencySOS(opts: { stationId: string; type: string; reportedBy: string; locationCoord?: string | null; deviceId: string }) {
+  const db = await getDb();
+  const { ulid } = await import('ulid');
+  const { encode } = await import('@msgpack/msgpack');
+  const id = ulid();
+  const ts = new Date().toISOString();
+  const outboxUlid = ulid();
+  const emergency = {
+    id,
+    station_id: opts.stationId,
+    type: opts.type,
+    reported_by: opts.reportedBy,
+    status: 'ACTIVE',
+    ts,
+    location_coord: opts.locationCoord || null
+  };
+  const patchBytes = encode(emergency);
+  db.exec('BEGIN');
+  try {
+    db.exec({
+      sql: 'INSERT INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord) VALUES (?,?,?,?,?,?,?)',
+      bind: [id, opts.stationId, opts.type, opts.reportedBy, 'ACTIVE', ts, opts.locationCoord || null]
+    });
+    db.exec({ sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)', bind: [ulid(), opts.reportedBy, `EMERGENCY_SOS_${opts.type}`, 'emergencies', null, JSON.stringify(emergency), ts] });
+    db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, status) VALUES (?,?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'emergencies', id, 'UPSERT', patchBytes, 0, ts, 'PENDING'] });
+    db.exec('COMMIT');
+    return { emergency, outboxUlid };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+export async function resolveEmergency(opts: { emergencyId: string; actorId: string; deviceId: string; stationId?: string }) {
+  const db = await getDb();
+  const { ulid } = await import('ulid');
+  const { encode } = await import('@msgpack/msgpack');
+  const ts = new Date().toISOString();
+  const outboxUlid = ulid();
+  const patch = { id: opts.emergencyId, status: 'RESOLVED', station_id: opts.stationId, resolved_at: ts, resolved_by: opts.actorId };
+  const patchBytes = encode(patch);
+  db.exec('BEGIN');
+  try {
+    db.exec({ sql: 'UPDATE emergencies SET status=? WHERE id=?', bind: ['RESOLVED', opts.emergencyId] });
+    db.exec({ sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)', bind: [ulid(), opts.actorId, 'EMERGENCY_RESOLVE', 'emergencies', null, JSON.stringify(patch), ts] });
+    db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, status) VALUES (?,?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'emergencies', opts.emergencyId, 'UPSERT', patchBytes, 0, ts, 'PENDING'] });
+    db.exec('COMMIT');
+    return { success: true, outboxUlid };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+export async function applyDownstreamPersonnel(personnelId: string, patch: Record<string, any>) {
+  const db = await getDb();
+  db.exec('BEGIN');
+  try {
+    db.exec({
+      sql: 'INSERT INTO personnel (id, station_id, name, role, blood_group, emergency_contact, status) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status, name=coalesce(excluded.name, personnel.name), role=coalesce(excluded.role, personnel.role)',
+      bind: [personnelId, patch.station_id || 'ST-BHARATI', patch.name || 'Expeditioner', patch.role || 'Field Op', patch.blood_group || 'O+', patch.emergency_contact || '', patch.status || 'ON_STATION']
+    });
+    db.exec('COMMIT');
+    return { applied: true, personnelId };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+export async function applyDownstreamSortie(sortieId: string, patch: Record<string, any>) {
+  const db = await getDb();
+  db.exec('BEGIN');
+  try {
+    db.exec({
+      sql: 'INSERT INTO field_sorties (id, station_id, lead_personnel_id, destination, departure_time, expected_return_time, actual_return_time, safety_status) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET safety_status=excluded.safety_status, actual_return_time=excluded.actual_return_time',
+      bind: [sortieId, patch.station_id || 'ST-BHARATI', patch.lead_personnel_id || '', patch.destination || 'Field Work', patch.departure_time || new Date().toISOString(), patch.expected_return_time || '', patch.actual_return_time || null, patch.safety_status || 'ACTIVE']
+    });
+    db.exec('COMMIT');
+    return { applied: true, sortieId };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+export async function applyDownstreamEmergency(emergencyId: string, patch: Record<string, any>) {
+  const db = await getDb();
+  db.exec('BEGIN');
+  try {
+    db.exec({
+      sql: 'INSERT INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status',
+      bind: [emergencyId, patch.station_id || 'ST-BHARATI', patch.type || 'SOS_MEDICAL', patch.reported_by || 'UNKNOWN', patch.status || 'ACTIVE', patch.ts || new Date().toISOString(), patch.location_coord || null]
+    });
+    db.exec('COMMIT');
+    return { applied: true, emergencyId };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
 

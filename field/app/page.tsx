@@ -14,6 +14,14 @@ import {
   listAudit,
   isExpiringSoon,
   isExpired,
+  listPersonnel,
+  updatePersonnelStatus,
+  listSorties,
+  createSortie,
+  updateSortieStatus,
+  listEmergencies,
+  createEmergencySOS,
+  resolveEmergency,
 } from '../lib/db';
 import { SyncWorker } from '../lib/sync';
 import { Icons } from '../components/Icons';
@@ -22,6 +30,7 @@ import { InventoryTab } from '../components/tabs/InventoryTab';
 import { ScanTab } from '../components/tabs/ScanTab';
 import { IndentsTab } from '../components/tabs/IndentsTab';
 import { LocateTab } from '../components/tabs/LocateTab';
+import { PersonnelTab } from '../components/tabs/PersonnelTab';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 
 import { toHttpUrl } from '@shared/url.js';
@@ -38,7 +47,7 @@ function resolveHQ(): string {
 }
 const HQ_URL = resolveHQ();
 
-type Tab = 'today' | 'inventory' | 'scan' | 'indents' | 'locate';
+type Tab = 'today' | 'inventory' | 'scan' | 'indents' | 'locate' | 'personnel';
 
 
 
@@ -73,6 +82,9 @@ export default function FieldPage() {
   const [snn, setSnn] = useState<any>(null);
   const [bundles, setBundles] = useState<any[]>([]);
   const [localTrack, setLocalTrack] = useState<any[]>([]);
+  const [personnel, setPersonnel] = useState<any[]>([]);
+  const [sorties, setSorties] = useState<any[]>([]);
+  const [emergencies, setEmergencies] = useState<any[]>([]);
 
   // UI state
   const [tab, setTab] = useState<Tab>('today');
@@ -155,6 +167,9 @@ export default function FieldPage() {
       setTxns(await listTransactions(16));
       setAudit(await listAudit(20));
       setOutbox(await outboxCount());
+      setPersonnel(await listPersonnel(STATION_ID));
+      setSorties(await listSorties(STATION_ID));
+      setEmergencies(await listEmergencies(STATION_ID));
 
       const headers: Record<string, string> = authToken ? { Authorization: `Bearer ${authToken}` } : {};
       const r = await fetch(`${HQ_URL}/forecast/${STATION_ID}`, { headers });
@@ -253,7 +268,7 @@ export default function FieldPage() {
   // Tab deep link via hash
   useEffect(() => {
     const h = location.hash.replace('#', '') as Tab;
-    if (h && ['today', 'inventory', 'scan', 'indents', 'locate'].includes(h)) {
+    if (h && ['today', 'inventory', 'scan', 'indents', 'locate', 'personnel'].includes(h)) {
       setTab(h);
     }
   }, []);
@@ -261,6 +276,24 @@ export default function FieldPage() {
   useEffect(() => {
     location.hash = tab;
   }, [tab]);
+
+  // Peer-to-peer SOS alert listener (simulates local BLE/UHF beacon)
+  useEffect(() => {
+    let chan: BroadcastChannel | null = null;
+    try {
+      chan = new BroadcastChannel('polaris-sos');
+      chan.onmessage = (ev) => {
+        const data = ev.data;
+        if (data?.type) {
+          pushToast(`🚨 INCOMING SOS DISTRESS: ${data.type.replace('SOS_', '')}`);
+          refresh();
+        }
+      };
+    } catch {}
+    return () => {
+      chan?.close();
+    };
+  }, [pushToast, refresh]);
 
   async function sendTelemetry(payload: Record<string, any>) {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -355,6 +388,85 @@ export default function FieldPage() {
         deviceId: DEVICE_ID,
       });
       pushToast('Indent marked RECEIVED ✓ — inventory updated');
+      refresh();
+    } catch (e: any) {
+      pushToast(e.message);
+    }
+  }
+
+  async function handleUpdatePersonnelStatus(id: string, status: string) {
+    try {
+      await updatePersonnelStatus({ id, status, actorId: ACTOR_ID, deviceId: DEVICE_ID, stationId: STATION_ID });
+      pushToast(`Muster status: ${status.replace('_', ' ')}`);
+      refresh();
+    } catch (e: any) {
+      pushToast(e.message);
+    }
+  }
+
+  async function handleCreateSortie(leadPersonnelId: string, destination: string, expectedReturnTime: string) {
+    try {
+      await createSortie({
+        stationId: STATION_ID,
+        leadPersonnelId,
+        destination,
+        expectedReturnTime,
+        createdBy: ACTOR_ID,
+        deviceId: DEVICE_ID,
+      });
+      pushToast('Field sortie checkout logged');
+      refresh();
+    } catch (e: any) {
+      pushToast(e.message);
+    }
+  }
+
+  async function handleUpdateSortieStatus(sortieId: string, safetyStatus: string) {
+    try {
+      await updateSortieStatus({
+        sortieId,
+        safetyStatus,
+        actorId: ACTOR_ID,
+        deviceId: DEVICE_ID,
+        stationId: STATION_ID,
+      });
+      pushToast(`Sortie status: ${safetyStatus}`);
+      refresh();
+    } catch (e: any) {
+      pushToast(e.message);
+    }
+  }
+
+  async function handleTriggerSOS(type: string, locationCoord?: string) {
+    try {
+      const res = await createEmergencySOS({
+        stationId: STATION_ID,
+        type,
+        reportedBy: `${userRole} (${DEVICE_ID})`,
+        locationCoord,
+        deviceId: DEVICE_ID,
+      });
+      try {
+        const chan = new BroadcastChannel('polaris-sos');
+        chan.postMessage(res.emergency);
+        chan.close();
+      } catch {}
+      pushToast(`🚨 SOS DISTRESS TRANSMITTED: ${type.replace('SOS_', '')}`);
+      refresh();
+    } catch (e: any) {
+      pushToast(e.message);
+    }
+  }
+
+  async function handleResolveEmergency(emergencyId: string) {
+    try {
+      await resolveEmergency({
+        emergencyId,
+        actorId: ACTOR_ID,
+        deviceId: DEVICE_ID,
+        stationId: STATION_ID,
+      });
+      pushToast('Emergency marked resolved ✓');
       refresh();
     } catch (e: any) {
       pushToast(e.message);
@@ -573,6 +685,7 @@ export default function FieldPage() {
             {[
               { id: 'today', label: 'Today', icon: Icons.home },
               { id: 'inventory', label: 'Inventory', icon: Icons.box, badge: assets.length },
+              { id: 'personnel', label: 'Muster & SOS', icon: Icons.users, badge: emergencies.filter((e: any) => e.status === 'ACTIVE').length },
               { id: 'scan', label: 'QR Scan', icon: Icons.scan },
               { id: 'indents', label: 'Indents', icon: Icons.file, badge: openIndents },
               { id: 'locate', label: '3D X-Ray', icon: Icons.loc },
@@ -630,6 +743,22 @@ export default function FieldPage() {
 
         {/* TAB 5: LOCATE (3D CONTAINER X-RAY) */}
                 {tab === 'locate' && <LocateTab assets={assets} highlightCrate={highlightCrate} setHighlightCrate={setHighlightCrate} LocatorWrap={LocatorWrap} />}
+
+        {/* TAB 6: PERSONNEL & MUSTER BOARD */}
+        {tab === 'personnel' && (
+          <PersonnelTab
+            personnel={personnel}
+            sorties={sorties}
+            emergencies={emergencies}
+            currentStation={STATION_ID}
+            onUpdatePersonnelStatus={handleUpdatePersonnelStatus}
+            onCreateSortie={handleCreateSortie}
+            onUpdateSortieStatus={handleUpdateSortieStatus}
+            onTriggerSOS={handleTriggerSOS}
+            onResolveEmergency={handleResolveEmergency}
+            glove={glove}
+          />
+        )}
       </main>
 
       {/* Sync Drawer */}

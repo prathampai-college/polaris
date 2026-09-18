@@ -14,7 +14,7 @@ function _resolveHQ(): string {
 }
 const HQ = _resolveHQ();
 
-type Tab = 'overview' | 'forecast' | 'stations' | 'indents' | 'inventory' | 'audit' | 'locate';
+type Tab = 'overview' | 'forecast' | 'stations' | 'indents' | 'inventory' | 'audit' | 'locate' | 'personnel';
 
 const Icons = {
   grid: () => (
@@ -65,6 +65,14 @@ const Icons = {
       <path d="M3.27 6.96L12 12.01l8.73-5.05" />
     </svg>
   ),
+  users: () => (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  ),
 };
 
 // Phase 1.2: STATION_CRATES removed — scoping now via asset.station_id from GET /assets join (fallback to legacy map if station_id missing)
@@ -90,12 +98,19 @@ export default function HQPage() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [loginPin, setLoginPin] = useState('');
   const [procurement, setProcurement] = useState<any[]>([]);
+  const [emergencies, setEmergencies] = useState<any[]>([]);
+  const [personnel, setPersonnel] = useState<any[]>([]);
+  const [sorties, setSorties] = useState<any[]>([]);
   const [tab, setTab] = useState<Tab>('overview');
   const [indentFilter, setIndentFilter] = useState<string>('ALL');
   const [stationQ, setStationQ] = useState('');
   const [assetQ, setAssetQ] = useState('');
   const [onlyCurrentStation, setOnlyCurrentStation] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+
+  const activeEmergencies = useMemo(() => {
+    return emergencies.filter((e: any) => e.status === 'ACTIVE');
+  }, [emergencies]);
 
   // New Indent Modal in HQ
   const [showNewIndentModal, setShowNewIndentModal] = useState(false);
@@ -113,6 +128,22 @@ export default function HQPage() {
     setToast(m);
     setTimeout(() => setToast(null), 2500);
   }, []);
+
+  async function resolveEmergencyHQ(emergencyId: string) {
+    try {
+      const res = await fetch(`${HQ}/emergency/${emergencyId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...headers() },
+        body: JSON.stringify({ status: 'RESOLVED' }),
+      });
+      if (res.ok) {
+        pushToast('Emergency marked RESOLVED at NCPOR Central Command');
+        load();
+      }
+    } catch (e: any) {
+      pushToast(e.message);
+    }
+  }
 
   async function doLogin() {
     const cleanPin = loginPin.trim();
@@ -154,7 +185,7 @@ export default function HQPage() {
   const load = useCallback(async () => {
     try {
       const h = headers();
-      const [s, a, ind, au, fc, tl, tr, pr] = await Promise.all([
+      const [s, a, ind, au, fc, tl, tr, pr, em, per, sor] = await Promise.all([
         fetch(`${HQ}/stations/overview`, { headers: h }).then((r) => r.json()).catch(() => []),
         fetch(`${HQ}/assets`, { headers: h }).then((r) => r.json()).catch(() => []),
         fetch(`${HQ}/indents?station_id=${selectedStation}`, { headers: h }).then((r) => r.json()).catch(() => []),
@@ -163,6 +194,9 @@ export default function HQPage() {
         fetch(`${HQ}/telemetry/latest?station_id=${selectedStation}`, { headers: h }).then((r) => r.json()).catch(() => null),
         fetch(`${HQ}/telemetry/history?station_id=${selectedStation}&days=7`, { headers: h }).then((r) => r.json()).catch(() => []),
         fetch(`${HQ}/procurement/${selectedStation}`, { headers: h }).then((r) => r.json()).catch(() => []),
+        fetch(`${HQ}/emergencies`, { headers: h }).then((r) => r.json()).catch(() => []),
+        fetch(`${HQ}/personnel?station_id=${selectedStation}`, { headers: h }).then((r) => r.json()).catch(() => []),
+        fetch(`${HQ}/sorties?station_id=${selectedStation}`, { headers: h }).then((r) => r.json()).catch(() => []),
       ]);
 
       setStations(s || []);
@@ -173,6 +207,9 @@ export default function HQPage() {
       setTele(tl?.temp_outside ? tl : fc?.tele);
       if (tr && tr.length) setTrend(tr);
       if (pr && pr.length) setProcurement(pr);
+      setEmergencies(em || []);
+      setPersonnel(per || []);
+      setSorties(sor || []);
     } catch (e: any) {
       setMsg(e.message);
     }
@@ -236,7 +273,7 @@ export default function HQPage() {
   // Tab deep link via hash
   useEffect(() => {
     const h = location.hash.replace('#', '') as Tab;
-    if (h && ['overview', 'forecast', 'stations', 'indents', 'inventory', 'audit', 'locate'].includes(h)) {
+    if (h && ['overview', 'forecast', 'stations', 'indents', 'inventory', 'audit', 'locate', 'personnel'].includes(h)) {
       setTab(h);
     }
   }, []);
@@ -459,6 +496,29 @@ export default function HQPage() {
         </div>
       </header>
 
+      {/* Critical Active Emergency Alert Banner */}
+      {activeEmergencies.length > 0 && (
+        <div className="bg-red-600 border-b border-red-400 text-white px-4 py-3 flex items-center justify-between text-xs font-bold animate-pulse shadow-xl">
+          <div className="flex items-center gap-3">
+            <span className="text-xl">🚨</span>
+            <div>
+              <span className="uppercase tracking-wider font-black">
+                CRITICAL POLAR DISTRESS ACTIVE: {activeEmergencies[0].station_id} — {activeEmergencies[0].type?.replace('SOS_', '')}
+              </span>
+              <span className="text-white/80 font-mono ml-2">
+                ({activeEmergencies[0].location_coord || 'Grid Reference Unknown'}) • Reported by: {activeEmergencies[0].reported_by}
+              </span>
+            </div>
+          </div>
+          <button
+            onClick={() => setTab('personnel')}
+            className="px-4 py-1.5 bg-white text-red-700 rounded-xl text-xs font-black hover:bg-white/90 transition shadow-md"
+          >
+            Incident Command View →
+          </button>
+        </div>
+      )}
+
       {/* Main Grid Layout */}
       <div className="max-w-[1400px] mx-auto px-4 py-4 flex gap-4">
         {/* Left Sidebar Menu */}
@@ -467,6 +527,7 @@ export default function HQPage() {
             {[
               { id: 'overview', label: 'Fleet Overview', icon: Icons.grid, desc: '3 Polar Stations' },
               { id: 'forecast', label: 'Thermo AI Forecast', icon: Icons.thermo, desc: 'Physics + ML Model' },
+              { id: 'personnel', label: 'Personnel & Safety', icon: Icons.users, desc: `${personnel.length} crew · ${activeEmergencies.length} alert` },
               { id: 'stations', label: 'Station Assets', icon: Icons.map, desc: 'Containers & Crates' },
               { id: 'indents', label: 'Indent Workbench', icon: Icons.file, desc: `${indents.length} active indents` },
               { id: 'inventory', label: 'Fleet Inventory', icon: Icons.box, desc: `${assets.length} total SKUs` },
@@ -1048,6 +1109,197 @@ export default function HQPage() {
                 </div>
 
                 <LocatorWrap assets={assets} highlight={null} stationId={selectedStation} />
+              </div>
+            </div>
+          )}
+
+          {/* TAB 8: PERSONNEL ROSTER, SORTIES & INCIDENT COMMAND */}
+          {tab === 'personnel' && (
+            <div className="space-y-4">
+              {/* Active Distress Signals Section */}
+              <div className="card p-5 space-y-3 border-red-500/40 bg-gradient-to-br from-red-950/20 to-[#0A1124]">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="display font-bold text-base text-white flex items-center gap-2">
+                      <span>🚨 Active Distress Beacons & Incident Command</span>
+                      {activeEmergencies.length > 0 && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500 text-white font-bold animate-pulse">
+                          {activeEmergencies.length} ACTIVE
+                        </span>
+                      )}
+                    </h2>
+                    <p className="text-xs text-white/50">
+                      Real-time distress signals routed from air-gapped polar field tablets via DTN mesh & gateway
+                    </p>
+                  </div>
+                  <span className="text-xs font-mono text-teal-300">{stationNameMap[selectedStation] || selectedStation}</span>
+                </div>
+
+                <div className="space-y-2">
+                  {emergencies.map((em: any) => {
+                    const isResolved = em.status === 'RESOLVED';
+                    return (
+                      <div
+                        key={em.id}
+                        className={`p-3.5 rounded-xl border flex items-center justify-between flex-wrap gap-2 transition ${
+                          isResolved
+                            ? 'bg-black/30 border-white/10 opacity-70'
+                            : 'bg-red-950/40 border-red-500 shadow-lg shadow-red-900/20'
+                        }`}
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span
+                              className={`text-[10px] px-2.5 py-0.5 rounded-full font-black ${
+                                isResolved ? 'bg-white/10 text-white/70' : 'bg-red-600 text-white animate-pulse'
+                              }`}
+                            >
+                              {em.type?.replace('SOS_', '')}
+                            </span>
+                            <span className="font-mono text-xs font-bold text-white">{em.id}</span>
+                            <span className="text-xs text-teal-300 font-bold">{em.station_id}</span>
+                            <span className="text-[11px] text-white/40 font-mono">{em.ts?.slice(0, 19).replace('T', ' ')}</span>
+                          </div>
+                          <div className="text-xs text-white/70">
+                            Location: <b>{em.location_coord || 'Larsemann Hills / Schirmacher Oasis'}</b> • Reported by: <b>{em.reported_by}</b>
+                          </div>
+                        </div>
+
+                        <div>
+                          {!isResolved ? (
+                            <button
+                              onClick={() => resolveEmergencyHQ(em.id)}
+                              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition shadow-md"
+                            >
+                              Mark Resolved ✓
+                            </button>
+                          ) : (
+                            <span className="text-xs font-mono text-emerald-400 font-bold">RESOLVED ✓</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {emergencies.length === 0 && (
+                    <div className="text-center py-8 text-xs text-white/40">
+                      ✓ No active or past distress alerts recorded. All stations reporting nominal.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Grid: Station Muster Roster & Field Sorties */}
+              <div className="grid lg:grid-cols-2 gap-4">
+                {/* Station Personnel Muster */}
+                <div className="card p-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="font-bold text-base text-white">Station Crew & Muster Roll</h3>
+                      <p className="text-xs text-white/50">{personnel.length} winter expeditioners assigned</p>
+                    </div>
+                    <span className="text-xs font-mono text-teal-300">{stationNameMap[selectedStation] || selectedStation}</span>
+                  </div>
+
+                  <div className="space-y-2 max-h-[460px] overflow-y-auto scroll-thin pr-1">
+                    {personnel.map((p: any) => (
+                      <div
+                        key={p.id}
+                        className="bg-black/40 border border-white/10 rounded-xl p-3 flex items-center justify-between gap-3"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-sm text-white">{p.name}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/80 font-mono font-bold">
+                              {p.blood_group}
+                            </span>
+                          </div>
+                          <div className="text-xs text-white/50">{p.role}</div>
+                          <div className="text-[11px] text-white/40 font-mono mt-0.5">
+                            ID: {p.id} • Emergency: {p.emergency_contact || 'Base UHF'}
+                          </div>
+                        </div>
+
+                        <span
+                          className={`text-[10px] px-2.5 py-1 rounded-full font-bold border ${
+                            p.status === 'ON_STATION'
+                              ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                              : p.status === 'FIELD_SORTIE'
+                              ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                              : 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                          }`}
+                        >
+                          {p.status?.replace('_', ' ')}
+                        </span>
+                      </div>
+                    ))}
+                    {personnel.length === 0 && (
+                      <div className="text-center py-10 text-xs text-white/40">No personnel records found for this station.</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Field Sorties & Remote Operations */}
+                <div className="card p-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="font-bold text-base text-white">Outdoor Sorties & Traverses</h3>
+                      <p className="text-xs text-white/50">Field scientific sorties and PistenBully supply convoys</p>
+                    </div>
+                    <span className="text-xs font-mono text-teal-300">{sorties.length} logged</span>
+                  </div>
+
+                  <div className="space-y-2 max-h-[460px] overflow-y-auto scroll-thin pr-1">
+                    {sorties.map((s: any) => {
+                      const isActive = s.safety_status === 'ACTIVE';
+                      const isOverdue =
+                        isActive && s.expected_return_time && new Date(s.expected_return_time).getTime() < Date.now();
+                      return (
+                        <div
+                          key={s.id}
+                          className={`bg-black/40 border rounded-xl p-3.5 space-y-2 ${
+                            isOverdue ? 'border-red-500 bg-red-950/20' : 'border-white/10'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="font-bold text-sm text-white flex items-center gap-2">
+                                <span>{s.destination}</span>
+                                {isOverdue && (
+                                  <span className="text-[9px] px-1.5 py-0.2 rounded bg-red-500 text-white font-bold animate-pulse">
+                                    ⚠️ OVERDUE
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-xs text-white/60 mt-0.5">
+                                Team Lead: <b>{s.lead_name || s.lead_personnel_id}</b>
+                              </div>
+                            </div>
+
+                            <span
+                              className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                                s.safety_status === 'RETURNED'
+                                  ? 'bg-emerald-500/15 text-emerald-300'
+                                  : s.safety_status === 'EMERGENCY'
+                                  ? 'bg-red-500 text-white'
+                                  : 'bg-cyan-500/15 text-cyan-300'
+                              }`}
+                            >
+                              {s.safety_status}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-white/40 pt-1 border-t border-white/5">
+                            <div>Departed: {s.departure_time?.slice(11, 16) || '—'}</div>
+                            <div>Expected: {s.expected_return_time?.slice(11, 16) || '—'}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {sorties.length === 0 && (
+                      <div className="text-center py-10 text-xs text-white/40">No active or recorded sorties.</div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           )}
