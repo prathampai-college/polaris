@@ -106,6 +106,26 @@ SNN LIF event-gated `hq/app/snn_forecast.py:1` `predict_snn_total()` — numpy m
 
 Whiteout demo: `visibility 0.8m` → camera `[]`, LiDAR still tracks `err <0.8m` `scripts/tracking_verify.mjs:1`. GPS `Unavailable` UI but `LOCAL` grid shows.
 
+`POST /tracking/personnel` body `{personnel_id, x, y, theta?, conf?, station_id}` → upserts `personnel_positions` (same GPS-denied local frame).
+
+`GET /tracking/personnel?station_id=` → personnel positions joined with `name`.
+
+## Personnel, Sorties & Emergency (Triage)
+
+`GET /personnel?station_id=` / `POST /personnel` (upsert roster). `GET /sorties?station_id=` / `POST /sorties` (checkout sets lead `FIELD_SORTIE`) / `PATCH /sorties/{id}` (`RETURNED` restores `ON_STATION`).
+
+`POST /sorties/check-overdue` → `{marked_overdue[], auto_sos[]}`; also runs every 60 s via lifespan. `OVERDUE` + 30 min late auto-creates `SOS_WHITEOUT` linked to the sortie (`scripts/watchdog_verify.mjs`).
+
+`GET /emergencies` / `POST /emergency/sos` (`SOS_MEDICAL/FIRE/WHITEOUT/POWER/VEHICLE`; medical auto-reserves O₂). `PATCH /emergency/{id}` triage `ACTIVE → ACK → RESPONDING → RESOLVED` — regressions and unknown states `400`; every transition writes `decision_overrides`.
+
+`GET /overrides` → decision audit trail. `GET /timeline` → unified command feed.
+
+Escalation tiers on `POST /telemetry`: ≤20 d `FORECAST_AUTO` CRITICAL 500 L; ≤60 d `FORECAST_60D` MEDIUM two-month watch 250 L; acoustic >0.90 `ACOUSTIC_AI` 4 bearings.
+
+## Expedition Planning (Centralized Platform)
+
+`GET/POST /expeditions` (`program: ANTARCTIC|ARCTIC`), `PATCH /expeditions/{id}` (forward-only `PLANNED→…→COMPLETE`). `GET/POST /expeditions/{id}/legs` (Goa→Mumbai→CapeTown→station SEA legs + Arctic AIR; `vessel_imo` validated). `GET/POST /expeditions/{id}/manifests`, `PATCH …/manifests/{mid}` custody `GOA→MUMBAI→CAPETOWN→VESSEL→STATION→CRATE` (customs/biosecurity gate, regression `400`). `POST …/manifests/bulk` (NCPOR_ADMIN, ≤500 rows). `GET /expeditions/manifests/template` (generic AL-1403-style CSV, `scripts/template_manifest.csv`). `POST …/auto-pack` (temp-zone stowage into station containers). `GET …/readiness` (per-station staged % + fuel days + 60-day watch, all 3 stations). `GET /procurement/mutual-aid` (surplus→need transfers). Sync entities extended: `expeditions, voyage_legs, manifests` (`scripts/expedition_verify.mjs`).
+
 ## DTN (Delay-Tolerant Muling)
 
 `POST /dtn/ingest_bulk` body `{bundles:[{bundleId, src, dstStation, vectorClock, payload:{entity,entity_id,op,patch}}]}` → `{results:[{bundleId,status,cmp}]}`, `count` `hq/app/main.py:844`. The handler `hq/app/dtn.py:1` (`ingest_bundle()`) compares vector clocks for `assets` — `gt` answers `APPLIED_LOCAL_WINS`, `concurrent` breaks ties on wall-clock timestamps, and anything else merges with `merge_vc` into `UPDATE assets vector_clock`. Every bundle is deduplicated by `bundleId` and audited into `dtn_bundles`. Mule batches are not rate-limited.

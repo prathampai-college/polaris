@@ -311,12 +311,12 @@ The sync drawer (`field/app/page.tsx:585`) reports `sent`, `acked`, `deduped`, `
 | `GET` | `/procurement/{station}` | Database-driven needs (`need = target − qty`, floor 0) with costs; `[]` when no targets exist (`hq/app/main.py:541`). |
 | `GET` | `/vessels?station_id=` | Vessels with `imo, name, lat, lon, sog, eta, station_id, last_seen, source: live \| mock`, optionally filtered by station. `source` reflects the poller status (`hq/app/main.py:517`). |
 | `GET` | `/vessels/{imo}` | One vessel (`hq/app/main.py:533`). |
-| `POST` | `/telemetry` | `{ts, station_id, temp_outside, wind_speed, pressure, dg_load, acoustic_anomaly?}` returns `{ok: true}`. It also runs escalation (≤20 days of stock → auto `CRITICAL` indent of 500 L as `FORECAST_AUTO`; acoustic anomaly above 0.90 → 4 bearings as `ACOUSTIC_AI`, `hq/app/main.py:328`) and broadcasts to SSE (`hq/app/main.py:41`). |
+| `POST` | `/telemetry` | `{ts, station_id, temp_outside, wind_speed, pressure, dg_load, acoustic_anomaly?}` returns `{ok: true}`. Escalation tiers: ≤20 days → auto `CRITICAL` indent 500 L (`FORECAST_AUTO`); ≤60 days → `MEDIUM` two-month watch indent 250 L (`FORECAST_60D`); acoustic anomaly above 0.90 → 4 bearings as `ACOUSTIC_AI`, and broadcasts to SSE (`hq/app/main.py:41`). |
 | `GET` | `/telemetry/latest?station_id=` | Latest row, or `{}` (`hq/app/main.py:346`). |
 | `GET` | `/telemetry/history?station_id=&days=` | Per-day `{day, avg_temp, avg_load}`, newest first (`hq/app/main.py:351`). |
 | `GET` | `/telemetry/sources` | Poller health: source setting, interval, coordinates, IMD configuration, and last poll (`hq/app/main.py:354`). |
 | `GET` | `/telemetry/stream` | Server-sent events (`text/event-stream`, `event: telemetry`) over a bounded `asyncio.Queue` (100) with 30 s keepalives (`hq/app/main.py:363`). |
-| `POST` | `/sync/ingest` | `DeltaFrame {ulid(26), device_id, entity, entity_id, op, patch, base_version, ts, vector_clock?, local_coord?}` (`hq/app/main.py:718`). Rate-limited to 600/min, deduplicated, rejects negative stock with `CONFLICT_CRITICAL`, and merges with LWW plus vector clocks (`hq/app/dtn.py:1`). Accepted entities are `assets`, `indents`, `telemetry`, `stations`, `containers`, and `crates`. |
+| `POST` | `/sync/ingest` | `DeltaFrame {ulid(26), device_id, entity, entity_id, op, patch, base_version, ts, vector_clock?, local_coord?}` (`hq/app/main.py:718`). Rate-limited to 600/min, deduplicated, rejects negative stock with `CONFLICT_CRITICAL`, and merges with LWW plus vector clocks (`hq/app/dtn.py:1`). Accepted entities are `assets`, `indents`, `telemetry`, `stations`, `containers`, `crates`, `personnel`, `field_sorties`, `emergencies`, `expeditions`, `voyage_legs`, and `manifests`. |
 | `GET` | `/sync/state/{device_id}` | `{device_id, last_acked_ulid, last_server_version}` (`hq/app/main.py:683`). |
 | `POST` | `/dtn/ingest_bulk` | `{bundles: [{bundleId, src, dstStation, vectorClock, payload}]}` returns per-bundle `{bundleId, status}` (`hq/app/main.py:844`). Each bundle goes through `ingest_bundle()` in `hq/app/dtn.py:1` with LWW-plus-vector-clock merging. Mule batches are not rate-limited. |
 | `GET` | `/dtn/bundles?dst_station=&limit=` | Stored bundles with `bundle_id, src, dst_station, vc, custody, created_at, ttl` (`hq/app/main.py:844`). |
@@ -324,6 +324,19 @@ The sync drawer (`field/app/page.tsx:585`) reports `sent`, `acked`, `deduped`, `
 | `POST` | `/dtn/exchange` | Same as bulk ingest, but for peer exchange; also proxied through `sync-gateway/src/gateway.ts:57` to HQ (`hq/app/main.py:860`). |
 | `POST` | `/tracking/update` | `{asset_id, x, y, theta, conf, station_id}` upserts `asset_positions` and returns `{asset_id, x, y, conf}` (`hq/app/main.py:903`). Called by `runFusionCycle()` every 3 s (`field/lib/sensors/fusion.ts:1`); coordinates are meters in the local frame, not GPS. |
 | `GET` | `/tracking/positions?station_id=` | Positions joined with `sku`/`name` (`hq/app/main.py:917`). |
+| `POST` | `/tracking/personnel` | `{personnel_id, x, y, theta?, conf?, station_id}` upserts `personnel_positions` in the same GPS-denied local frame. |
+| `GET` | `/tracking/personnel?station_id=` | Personnel positions joined with `name`. |
+| `GET/POST` | `/personnel` | Crew roster; `POST` upserts `{id, station_id, name, role, blood_group, emergency_contact, status}`. |
+| `GET/POST` | `/sorties` | Field sortie checkout; `POST` sets lead `FIELD_SORTIE`. `PATCH /sorties/{id}` for `RETURNED/OVERDUE/EMERGENCY`. |
+| `POST` | `/sorties/check-overdue` | Watchdog: marks `OVERDUE`, auto-creates `SOS_WHITEOUT` after 30 min (also runs every 60 s via lifespan). |
+| `GET` | `/emergencies` | Distress list (`?station_id=`, `?active_only=true`). |
+| `POST` | `/emergency/sos` | One-tap SOS (`SOS_MEDICAL/FIRE/WHITEOUT/POWER/VEHICLE`); medical auto-reserves O₂ via indent. |
+| `PATCH` | `/emergency/{id}` | Triage machine `ACTIVE → ACK → RESPONDING → RESOLVED` (regressions rejected); every transition writes a `decision_overrides` audit row. |
+| `GET/POST/PATCH` | `/expeditions…` | Centralized planner: `GET/POST /expeditions` (ANTARCTIC/ARCTIC), `PATCH` forward-only status, `GET/POST /expeditions/{id}/legs` (Goa→Mumbai→CapeTown→station + Arctic air leg), `GET/POST /expeditions/{id}/manifests`, `PATCH …/manifests/{mid}` custody stages `GOA→…→CRATE` with customs/biosecurity gate, `POST …/manifests/bulk` (NCPOR_ADMIN, 500 rows), `POST …/auto-pack` (temp-zone stowage), `GET …/readiness` (per-station staged % + fuel days + 60-day watch). |
+| `GET` | `/expeditions/manifests/template` | Generic AL-1403-style manifest CSV template (`scripts/template_manifest.csv`). |
+| `GET` | `/procurement/mutual-aid` | Inter-station surplus→need transfer suggestions with voyage-leg linkage. |
+| `GET` | `/timeline?station_id=&limit=` | Unified command feed (audit + emergencies + sorties, newest first). |
+| `GET` | `/overrides?station_id=&limit=` | Decision override audit trail. |
 | `POST` | `/internal/broadcast_delta` | Gateway endpoint requiring `X-PSK` (`sync-gateway/src/gateway.ts:73`). |
 
 The full specification lives in `docs/API.md`. Every write appends to `audit_log`, and idempotency comes from ULIDs plus the `dedupe` table plus vector-clock merging.

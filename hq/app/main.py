@@ -932,10 +932,10 @@ def create_expedition(body: ExpeditionCreate):
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(q("INSERT INTO expeditions (id, program, name, season, status, created_by, created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status"), (eid, body.program, body.name, body.season, body.status, body.created_by, now))
-                    cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (eid[:8] + now[-6:], body.created_by, f"EXPEDITION_{body.status}", "expeditions", None, eid, now))
+                    cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (f"EXP-{uuid.uuid4().hex[:8]}", body.created_by, f"EXPEDITION_{body.status}", "expeditions", None, eid, now))
         else:
             conn.execute("INSERT INTO expeditions (id, program, name, season, status, created_by, created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status", (eid, body.program, body.name, body.season, body.status, body.created_by, now))
-            conn.execute("INSERT OR IGNORE INTO audit_log VALUES (?,?,?,?,?,?,?)", (eid[:8] + now[-6:], body.created_by, f"EXPEDITION_{body.status}", "expeditions", None, eid, now))
+            conn.execute("INSERT OR IGNORE INTO audit_log VALUES (?,?,?,?,?,?,?)", (f"EXP-{uuid.uuid4().hex[:8]}", body.created_by, f"EXPEDITION_{body.status}", "expeditions", None, eid, now))
             conn.commit()
     finally:
         if USE_PG:
@@ -1088,10 +1088,10 @@ def advance_manifest(expedition_id: str, manifest_id: str, patch: dict):
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(q(f"UPDATE manifests SET {updates} WHERE id=?"), tuple(params))
-                    cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (manifest_id[:8], patch.get("actor_id", "HQ"), f"MANIFEST_{stage}", "manifests", row["stage"], stage, utc_now()))
+                    cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (f"MAN-{uuid.uuid4().hex[:8]}", patch.get("actor_id", "HQ"), f"MANIFEST_{stage}", "manifests", row["stage"], stage, utc_now()))
         else:
             conn.execute(f"UPDATE manifests SET {updates} WHERE id=?", tuple(params))
-            conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (manifest_id[:8], patch.get("actor_id", "HQ"), f"MANIFEST_{stage}", "manifests", row["stage"], stage, utc_now()))
+            conn.execute("INSERT OR IGNORE INTO audit_log VALUES (?,?,?,?,?,?,?)", (f"MAN-{uuid.uuid4().hex[:8]}", patch.get("actor_id", "HQ"), f"MANIFEST_{stage}", "manifests", row["stage"], stage, utc_now()))
             conn.commit()
     finally:
         if USE_PG:

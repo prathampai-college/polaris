@@ -1,0 +1,4 @@
+owner_org,project_code,destination_station,sku,description,qty,unit,weight_kg,hazmat_class,temp_zone,customs_status,biosecurity_status,labelling_code
+NCPOR,ATMOS-26,ST-BHARATI,FUEL-DIESEL-001,Diesel winter grade,500,L,420,,AMBIENT,CLEARED,CLEARED,EXP-ANT-46-BHARATI-0001
+NCPOR,CRYO-26,ST-MAITRI,O2-CYL-47L-003,Oxygen cylinder 47L,6,cyl,480,,AMBIENT,CLEARED,CLEARED,EXP-ANT-46-MAITRI-0002
+NCPOR,GLACIO-26,ST-HIMADRI,,Ice core drill bits,4,pcs,12,,AMBIENT,PENDING,PENDING,EXP-ARC-26-HIMADRI-0003
