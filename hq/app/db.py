@@ -221,6 +221,66 @@ def _ensure_dtn_sqlite(conn):
     except Exception:
         pass
 
+DEFAULT_PERSONNEL = [
+    ("PER-BHA-01", "ST-BHARATI", "Dr. Rajesh Sharma", "Station Leader & Glaciologist", "O+", "+91-9876543210", "ON_STATION"),
+    ("PER-BHA-02", "ST-BHARATI", "Capt. Vikram Rao", "Logistics & Field Ops Lead", "A+", "+91-9876543211", "ON_STATION"),
+    ("PER-BHA-03", "ST-BHARATI", "Dr. Ananya Sen", "Medical Officer", "B+", "+91-9876543212", "ON_STATION"),
+    ("PER-BHA-04", "ST-BHARATI", "Sunil Gaikwad", "HVAC & Power Tech", "AB+", "+91-9876543213", "ON_STATION"),
+    ("PER-BHA-05", "ST-BHARATI", "Priya Nambiar", "Atmospheric Physicist", "O-", "+91-9876543214", "ON_STATION"),
+    ("PER-MAI-01", "ST-MAITRI", "Dr. Devendra Rathore", "Station Leader", "A+", "+91-9876543215", "ON_STATION"),
+    ("PER-MAI-02", "ST-MAITRI", "Dr. Neha Verma", "Medical Officer & Medic", "O+", "+91-9876543216", "ON_STATION"),
+    ("PER-MAI-03", "ST-MAITRI", "Harpreet Singh", "Heavy Vehicle Tech", "B+", "+91-9876543217", "ON_STATION"),
+    ("PER-HIM-01", "ST-HIMADRI", "Dr. Arvind Joshi", "Arctic Mission Leader", "A-", "+91-9876543218", "ON_STATION"),
+    ("PER-HIM-02", "ST-HIMADRI", "Meera Pillai", "Marine Biologist", "O+", "+91-9876543219", "ON_STATION")
+]
+
+def _ensure_personnel_sqlite(conn):
+    try:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS personnel (
+            id TEXT PRIMARY KEY,
+            station_id TEXT REFERENCES stations(id),
+            name TEXT,
+            role TEXT,
+            blood_group TEXT,
+            emergency_contact TEXT,
+            status TEXT CHECK(status IN ('ON_STATION','FIELD_SORTIE','IN_TRANSIT','EVACUATED')) DEFAULT 'ON_STATION'
+        );
+        CREATE TABLE IF NOT EXISTS field_sorties (
+            id TEXT PRIMARY KEY,
+            station_id TEXT REFERENCES stations(id),
+            lead_personnel_id TEXT REFERENCES personnel(id),
+            destination TEXT,
+            departure_time TEXT,
+            expected_return_time TEXT,
+            actual_return_time TEXT,
+            safety_status TEXT CHECK(safety_status IN ('PLANNED','ACTIVE','RETURNED','OVERDUE','EMERGENCY')) DEFAULT 'PLANNED'
+        );
+        CREATE TABLE IF NOT EXISTS emergencies (
+            id TEXT PRIMARY KEY,
+            station_id TEXT REFERENCES stations(id),
+            type TEXT CHECK(type IN ('SOS_MEDICAL','SOS_FIRE','SOS_WHITEOUT','SOS_POWER','SOS_VEHICLE')),
+            reported_by TEXT,
+            status TEXT CHECK(status IN ('ACTIVE','RESOLVED')) DEFAULT 'ACTIVE',
+            ts TEXT,
+            location_coord TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_personnel_station ON personnel(station_id);
+        CREATE INDEX IF NOT EXISTS idx_sorties_station ON field_sorties(station_id);
+        CREATE INDEX IF NOT EXISTS idx_emergencies_station ON emergencies(station_id, status);
+        """)
+        conn.commit()
+    except Exception:
+        pass
+    try:
+        cur = conn.execute("SELECT COUNT(*) FROM personnel")
+        if cur.fetchone()[0] == 0:
+            for p in DEFAULT_PERSONNEL:
+                conn.execute("INSERT OR IGNORE INTO personnel VALUES (?,?,?,?,?,?,?)", p)
+            conn.commit()
+    except Exception:
+        pass
+
 def init_db():
     if USE_PG:
         import psycopg
@@ -309,6 +369,7 @@ def init_db():
             _ensure_physics_params_sqlite(conn)
             _ensure_vessels_sqlite(conn)
             _ensure_dtn_sqlite(conn)
+        _ensure_personnel_sqlite(conn)
         print(f"[hq] SQLite init ok {HQ_DB_PATH} (fallback, no Docker)")
 
 def seed_procurement_targets(cur):

@@ -166,6 +166,37 @@ CREATE TABLE IF NOT EXISTS snn_state (
   total_saved_mw REAL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS personnel (
+  id TEXT PRIMARY KEY,
+  station_id TEXT REFERENCES stations(id),
+  name TEXT,
+  role TEXT,
+  blood_group TEXT,
+  emergency_contact TEXT,
+  status TEXT CHECK(status IN ('ON_STATION','FIELD_SORTIE','IN_TRANSIT','EVACUATED')) DEFAULT 'ON_STATION'
+);
+
+CREATE TABLE IF NOT EXISTS field_sorties (
+  id TEXT PRIMARY KEY,
+  station_id TEXT REFERENCES stations(id),
+  lead_personnel_id TEXT REFERENCES personnel(id),
+  destination TEXT,
+  departure_time TEXT,
+  expected_return_time TEXT,
+  actual_return_time TEXT,
+  safety_status TEXT CHECK(safety_status IN ('PLANNED','ACTIVE','RETURNED','OVERDUE','EMERGENCY')) DEFAULT 'PLANNED'
+);
+
+CREATE TABLE IF NOT EXISTS emergencies (
+  id TEXT PRIMARY KEY,
+  station_id TEXT REFERENCES stations(id),
+  type TEXT CHECK(type IN ('SOS_MEDICAL','SOS_FIRE','SOS_WHITEOUT','SOS_POWER','SOS_VEHICLE')),
+  reported_by TEXT,
+  status TEXT CHECK(status IN ('ACTIVE','RESOLVED')) DEFAULT 'ACTIVE',
+  ts TEXT,
+  location_coord TEXT
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_assets_crate ON assets(crate_id);
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status, created_at);
@@ -173,3 +204,7 @@ CREATE INDEX IF NOT EXISTS idx_transactions_asset ON transactions(asset_id);
 CREATE INDEX IF NOT EXISTS idx_vessels_station ON vessels(station_id);
 CREATE INDEX IF NOT EXISTS idx_dtn_bundles_dst ON dtn_bundles(dst_station, created_at);
 CREATE INDEX IF NOT EXISTS idx_asset_positions_station ON asset_positions(station_id);
+CREATE INDEX IF NOT EXISTS idx_personnel_station ON personnel(station_id);
+CREATE INDEX IF NOT EXISTS idx_sorties_station ON field_sorties(station_id);
+CREATE INDEX IF NOT EXISTS idx_emergencies_station ON emergencies(station_id, status);
+

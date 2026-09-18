@@ -1,5 +1,8 @@
 # API — POLARIS HQ (FastAPI :8000) — Production, Extreme-Edge
 
+> **Problem Statement (exact):** "Develop a centralized digital platform for expedition
+> planning, cargo tracking, inventory management, personnel movement and emergency response."
+
 Base: `http://localhost:8000` (or `hq:8000` in Docker). All JSON. CORS via `ALLOWED_ORIGINS` env (default `*` in dev, restrict in prod). See `hq/app/main.py:156` for `health`.
 
 ## Health

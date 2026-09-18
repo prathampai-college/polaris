@@ -135,23 +135,31 @@ async def _post_telemetry_internal(station_id: str, payload: dict):
                 self.ts = ts
         t_obj = _T(payload)
         conn = get_conn()
-        if USE_PG:
-            import psycopg
-            # reuse get_conn PG path
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(q("INSERT INTO telemetry VALUES (?,?,?,?,?,?)"), (ts, station_id, payload["temp_outside"], payload["wind_speed"], payload["pressure"], payload["dg_load"]))
-                    try:
-                        check_and_escalate(station_id, t_obj)
-                    except Exception:
-                        pass
-        else:
-            conn.execute("INSERT INTO telemetry VALUES (?,?,?,?,?,?)", (ts, station_id, payload["temp_outside"], payload["wind_speed"], payload["pressure"], payload["dg_load"]))
-            conn.commit()
-            try:
-                check_and_escalate(station_id, t_obj)
-            except Exception:
-                pass
+        try:
+            if USE_PG:
+                import psycopg
+                # reuse get_conn PG path
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(q("INSERT INTO telemetry VALUES (?,?,?,?,?,?)"), (ts, station_id, payload["temp_outside"], payload["wind_speed"], payload["pressure"], payload["dg_load"]))
+                        try:
+                            check_and_escalate(station_id, t_obj)
+                        except Exception:
+                            pass
+            else:
+                conn.execute("INSERT INTO telemetry VALUES (?,?,?,?,?,?)", (ts, station_id, payload["temp_outside"], payload["wind_speed"], payload["pressure"], payload["dg_load"]))
+                conn.commit()
+                try:
+                    check_and_escalate(station_id, t_obj)
+                except Exception:
+                    pass
+        finally:
+            if USE_PG:
+                try:
+                    from .db import release_conn as _release_poller
+                    _release_poller(conn)
+                except Exception:
+                    pass
         # broadcast SSE
         try:
             await _broadcast_telemetry({"ts": ts, "station_id": station_id, **payload})

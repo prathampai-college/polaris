@@ -264,19 +264,27 @@ def create_indent(body: IndentCreate):
     conn=get_conn()
     now = utc_now()
     try:
-        from ulid import ULID
-        iid=str(ULID())
-    except Exception:
-        iid=str(uuid.uuid4())[:8]+"-"+body.asset_id
-    if USE_PG:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(q("INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, body.station_id, body.asset_id, body.qty_requested, body.urgency, body.status, body.created_by, now, None))
-                cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (iid, body.created_by, "INDENT_CREATE_HQ", "indents", None, str(body.model_dump()), now))
-    else:
-        conn.execute("INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?)", (iid, body.station_id, body.asset_id, body.qty_requested, body.urgency, body.status, body.created_by, now, None))
-        conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (iid, body.created_by, "INDENT_CREATE_HQ", "indents", None, str(body.model_dump()), now))
-        conn.commit()
+        try:
+            from ulid import ULID
+            iid=str(ULID())
+        except Exception:
+            iid=str(uuid.uuid4())[:8]+"-"+body.asset_id
+        if USE_PG:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(q("INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, body.station_id, body.asset_id, body.qty_requested, body.urgency, body.status, body.created_by, now, None))
+                    cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (iid, body.created_by, "INDENT_CREATE_HQ", "indents", None, str(body.model_dump()), now))
+        else:
+            conn.execute("INSERT OR IGNORE INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?)", (iid, body.station_id, body.asset_id, body.qty_requested, body.urgency, body.status, body.created_by, now, None))
+            conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (iid, body.created_by, "INDENT_CREATE_HQ", "indents", None, str(body.model_dump()), now))
+            conn.commit()
+    finally:
+        if USE_PG:
+            try:
+                from .db import release_conn as _release
+                _release(conn)
+            except Exception:
+                pass
     notify_gateway(body.station_id, "indents", iid, "UPSERT", {
         "id": iid,
         "station_id": body.station_id,
@@ -298,36 +306,44 @@ class IndentPatch(BaseModel):
 async def patch_indent(indent_id: str, body: IndentPatch, user: dict = Depends(require_role("STATION_LEAD"))):
     conn=get_conn()
     now = utc_now()
-    row=_fetch_one("SELECT id, station_id, asset_id, status, vessel_imo FROM indents WHERE id=?", (indent_id,))
-    if not row: raise HTTPException(404, "indent not found")
-    cur_status=row["status"]
-    station_id=row.get("station_id") or "ST-BHARATI"
-    allowed = ALLOWED.get(cur_status, [])
-    # allow DRAFT->RECEIVED for offline field demo (tolerant), otherwise enforce state machine
-    is_offline_shortcut = (cur_status == "DRAFT" and body.status == "RECEIVED")
-    if body.status not in allowed and not is_offline_shortcut:
-        raise HTTPException(400, f"invalid transition {cur_status}->{body.status}")
-    # Phase 4: validate vessel_imo if provided
-    if body.vessel_imo is not None:
-        v = _fetch_one("SELECT imo FROM vessels WHERE imo=?", (body.vessel_imo,))
-        if not v:
-            raise HTTPException(404, f"vessel {body.vessel_imo} not found")
-    if USE_PG:
-        with conn:
-            with conn.cursor() as cur:
-                if body.vessel_imo is not None:
-                    cur.execute(q("UPDATE indents SET status=?, vessel_imo=? WHERE id=?"), (body.status, body.vessel_imo, indent_id))
-                else:
-                    cur.execute(q("UPDATE indents SET status=? WHERE id=?"), (body.status, indent_id))
-                cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (indent_id+body.status, body.actor_id, f"INDENT_{body.status}", "indents", str({"status":cur_status}), str({"status":body.status, "vessel_imo": body.vessel_imo}), now))
-    else:
-        # relaxed for M2 demo: allow any forward in SQLite fallback
+    try:
+        row=_fetch_one("SELECT id, station_id, asset_id, status, vessel_imo FROM indents WHERE id=?", (indent_id,))
+        if not row: raise HTTPException(404, "indent not found")
+        cur_status=row["status"]
+        station_id=row.get("station_id") or "ST-BHARATI"
+        allowed = ALLOWED.get(cur_status, [])
+        # allow DRAFT->RECEIVED for offline field demo (tolerant), otherwise enforce state machine
+        is_offline_shortcut = (cur_status == "DRAFT" and body.status == "RECEIVED")
+        if body.status not in allowed and not is_offline_shortcut:
+            raise HTTPException(400, f"invalid transition {cur_status}->{body.status}")
+        # Phase 4: validate vessel_imo if provided
         if body.vessel_imo is not None:
-            conn.execute("UPDATE indents SET status=?, vessel_imo=? WHERE id=?", (body.status, body.vessel_imo, indent_id))
+            v = _fetch_one("SELECT imo FROM vessels WHERE imo=?", (body.vessel_imo,))
+            if not v:
+                raise HTTPException(404, f"vessel {body.vessel_imo} not found")
+        if USE_PG:
+            with conn:
+                with conn.cursor() as cur:
+                    if body.vessel_imo is not None:
+                        cur.execute(q("UPDATE indents SET status=?, vessel_imo=? WHERE id=?"), (body.status, body.vessel_imo, indent_id))
+                    else:
+                        cur.execute(q("UPDATE indents SET status=? WHERE id=?"), (body.status, indent_id))
+                    cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (indent_id+body.status, body.actor_id, f"INDENT_{body.status}", "indents", str({"status":cur_status}), str({"status":body.status, "vessel_imo": body.vessel_imo}), now))
         else:
-            conn.execute("UPDATE indents SET status=? WHERE id=?", (body.status, indent_id))
-        conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (indent_id+body.status, body.actor_id, f"INDENT_{body.status}", "indents", str({"status":cur_status}), str({"status":body.status, "vessel_imo": body.vessel_imo}), now))
-        conn.commit()
+            # relaxed for M2 demo: allow any forward in SQLite fallback
+            if body.vessel_imo is not None:
+                conn.execute("UPDATE indents SET status=?, vessel_imo=? WHERE id=?", (body.status, body.vessel_imo, indent_id))
+            else:
+                conn.execute("UPDATE indents SET status=? WHERE id=?", (body.status, indent_id))
+            conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (indent_id+body.status, body.actor_id, f"INDENT_{body.status}", "indents", str({"status":cur_status}), str({"status":body.status, "vessel_imo": body.vessel_imo}), now))
+            conn.commit()
+    finally:
+        if USE_PG:
+            try:
+                from .db import release_conn as _release2
+                _release2(conn)
+            except Exception:
+                pass
     notify_gateway(station_id, "indents", indent_id, "STATUS_CHANGE", {
         "id": indent_id,
         "status": body.status,
@@ -339,7 +355,6 @@ async def patch_indent(indent_id: str, body: IndentPatch, user: dict = Depends(r
 
 @app.get("/stations/overview")
 def stations_overview():
-    conn=get_conn()
     stations=_fetch_all("SELECT id, name, winter_crew_count FROM stations")
     for s in stations:
         sid = s["id"]
@@ -374,17 +389,25 @@ class TelemetryIn(BaseModel):
 @app.post("/telemetry")
 async def post_telemetry(t: TelemetryIn):
     conn=get_conn()
-    if USE_PG:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(q("INSERT INTO telemetry VALUES (?,?,?,?,?,?)"), (t.ts, t.station_id, t.temp_outside, t.wind_speed, t.pressure, t.dg_load))
-                try: check_and_escalate(t.station_id, t)
-                except Exception: pass
-    else:
-        conn.execute("INSERT INTO telemetry VALUES (?,?,?,?,?,?)", (t.ts, t.station_id, t.temp_outside, t.wind_speed, t.pressure, t.dg_load))
-        conn.commit()
-        try: check_and_escalate(t.station_id, t)
-        except: pass
+    try:
+        if USE_PG:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(q("INSERT INTO telemetry VALUES (?,?,?,?,?,?)"), (t.ts, t.station_id, t.temp_outside, t.wind_speed, t.pressure, t.dg_load))
+                    try: check_and_escalate(t.station_id, t)
+                    except Exception: pass
+        else:
+            conn.execute("INSERT INTO telemetry VALUES (?,?,?,?,?,?)", (t.ts, t.station_id, t.temp_outside, t.wind_speed, t.pressure, t.dg_load))
+            conn.commit()
+            try: check_and_escalate(t.station_id, t)
+            except: pass
+    finally:
+        if USE_PG:
+            try:
+                from .db import release_conn as _release3
+                _release3(conn)
+            except Exception:
+                pass
     await _broadcast_telemetry(t.model_dump())
     return {"ok": True}
 
@@ -488,26 +511,34 @@ def _auto_indent(conn, station_id: str, asset_id: str, qty_needed: float, creato
 
 def check_and_escalate(station_id: str, tele):
     conn=get_conn()
-    # BUGFIX: scope diesel qty to station (was global LIMIT 1 → wrong station days_to_stockout)
-    row=_fetch_one("SELECT a.id, a.qty FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku='FUEL-DIESEL-001' LIMIT 1", (station_id,))
-    if not row:
-        row=_fetch_one("SELECT id, qty FROM assets WHERE sku='FUEL-DIESEL-001' LIMIT 1")
-    if not row: return
-    asset_id, qty=row["id"], row["qty"]
-    cr=_fetch_one("SELECT winter_crew_count FROM stations WHERE id=?", (station_id,))
-    crew=cr["winter_crew_count"] if cr else 24
-    phys,res,total,used=predict_total(tele.temp_outside, tele.wind_speed, tele.pressure, crew, tele.dg_load, station_id)
-    days=qty/total if total>0 else 999
-    now=utc_now()
-    if days <= 20:
-        _auto_indent(conn, station_id, asset_id, 500, "FORECAST_AUTO", "INDENT_AUTO_CRITICAL", f"forecast {days:.1f}d", "-auto", now)
-    # Phase 4: Acoustic Prognostics Escalation
-    if getattr(tele, 'acoustic_anomaly', 0.0) > 0.90:
-        row = _fetch_one("SELECT a.id FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku='SPARE-BRG-6205-007' LIMIT 1", (station_id,))
+    try:
+        # BUGFIX: scope diesel qty to station (was global LIMIT 1 → wrong station days_to_stockout)
+        row=_fetch_one("SELECT a.id, a.qty FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku='FUEL-DIESEL-001' LIMIT 1", (station_id,))
         if not row:
-            row = _fetch_one("SELECT id FROM assets WHERE sku='SPARE-BRG-6205-007' LIMIT 1")
-        if row:
-            _auto_indent(conn, station_id, row["id"], 4, "ACOUSTIC_AI", "INDENT_ACOUSTIC_CRITICAL", "bearing whine > 90%", "-ac", now)
+            row=_fetch_one("SELECT id, qty FROM assets WHERE sku='FUEL-DIESEL-001' LIMIT 1")
+        if not row: return
+        asset_id, qty=row["id"], row["qty"]
+        cr=_fetch_one("SELECT winter_crew_count FROM stations WHERE id=?", (station_id,))
+        crew=cr["winter_crew_count"] if cr else 24
+        phys,res,total,used=predict_total(tele.temp_outside, tele.wind_speed, tele.pressure, crew, tele.dg_load, station_id)
+        days=qty/total if total>0 else 999
+        now=utc_now()
+        if days <= 20:
+            _auto_indent(conn, station_id, asset_id, 500, "FORECAST_AUTO", "INDENT_AUTO_CRITICAL", f"forecast {days:.1f}d", "-auto", now)
+        # Phase 4: Acoustic Prognostics Escalation
+        if getattr(tele, 'acoustic_anomaly', 0.0) > 0.90:
+            row = _fetch_one("SELECT a.id FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku='SPARE-BRG-6205-007' LIMIT 1", (station_id,))
+            if not row:
+                row = _fetch_one("SELECT id FROM assets WHERE sku='SPARE-BRG-6205-007' LIMIT 1")
+            if row:
+                _auto_indent(conn, station_id, row["id"], 4, "ACOUSTIC_AI", "INDENT_ACOUSTIC_CRITICAL", "bearing whine > 90%", "-ac", now)
+    finally:
+        if USE_PG:
+            try:
+                from .db import release_conn as _release_ce
+                _release_ce(conn)
+            except Exception:
+                pass
 
 
 @app.get("/forecast/{station_id}")
@@ -619,6 +650,160 @@ def get_vessel(imo: str):
         row["source"] = "mock"
     return row
 
+# --- Pillar 4 & 5: Personnel Roster, Field Sorties & Emergency SOS ---
+
+class PersonnelUpsert(BaseModel):
+    id: str
+    station_id: str
+    name: str
+    role: str
+    blood_group: str = "O+"
+    emergency_contact: str = ""
+    status: str = "ON_STATION"
+
+@app.get("/personnel")
+def list_personnel(station_id: str = None):
+    if station_id:
+        return _fetch_all("SELECT * FROM personnel WHERE station_id=? ORDER BY name", (station_id,))
+    return _fetch_all("SELECT * FROM personnel ORDER BY station_id, name")
+
+@app.post("/personnel")
+def upsert_personnel(body: PersonnelUpsert):
+    conn = get_conn()
+    if USE_PG:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(q("INSERT INTO personnel (id, station_id, name, role, blood_group, emergency_contact, status) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET station_id=EXCLUDED.station_id, name=EXCLUDED.name, role=EXCLUDED.role, blood_group=EXCLUDED.blood_group, emergency_contact=EXCLUDED.emergency_contact, status=EXCLUDED.status"), (body.id, body.station_id, body.name, body.role, body.blood_group, body.emergency_contact, body.status))
+    else:
+        conn.execute("INSERT INTO personnel (id, station_id, name, role, blood_group, emergency_contact, status) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET station_id=excluded.station_id, name=excluded.name, role=excluded.role, blood_group=excluded.blood_group, emergency_contact=excluded.emergency_contact, status=excluded.status", (body.id, body.station_id, body.name, body.role, body.blood_group, body.emergency_contact, body.status))
+        conn.commit()
+    notify_gateway(body.station_id, "personnel", body.id, "UPSERT", getattr(body, "model_dump", body.dict)())
+    return {"status": "ok", "id": body.id}
+
+class SortieCreate(BaseModel):
+    id: str | None = None
+    station_id: str
+    lead_personnel_id: str
+    destination: str
+    departure_time: str | None = None
+    expected_return_time: str
+    safety_status: str = "ACTIVE"
+
+@app.get("/sorties")
+def list_sorties(station_id: str = None):
+    if station_id:
+        return _fetch_all("SELECT s.*, p.name as lead_name, p.role as lead_role FROM field_sorties s LEFT JOIN personnel p ON p.id=s.lead_personnel_id WHERE s.station_id=? ORDER BY s.departure_time DESC", (station_id,))
+    return _fetch_all("SELECT s.*, p.name as lead_name, p.role as lead_role FROM field_sorties s LEFT JOIN personnel p ON p.id=s.lead_personnel_id ORDER BY s.departure_time DESC")
+
+@app.post("/sorties")
+def create_sortie(body: SortieCreate):
+    conn = get_conn()
+    now = utc_now()
+    sortie_id = body.id or f"SORTIE-{uuid.uuid4().hex[:8]}"
+    dep_time = body.departure_time or now
+    if USE_PG:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(q("INSERT INTO field_sorties (id, station_id, lead_personnel_id, destination, departure_time, expected_return_time, safety_status) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET safety_status=EXCLUDED.safety_status"), (sortie_id, body.station_id, body.lead_personnel_id, body.destination, dep_time, body.expected_return_time, body.safety_status))
+                cur.execute(q("UPDATE personnel SET status='FIELD_SORTIE' WHERE id=?"), (body.lead_personnel_id,))
+    else:
+        conn.execute("INSERT INTO field_sorties (id, station_id, lead_personnel_id, destination, departure_time, expected_return_time, safety_status) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET safety_status=excluded.safety_status", (sortie_id, body.station_id, body.lead_personnel_id, body.destination, dep_time, body.expected_return_time, body.safety_status))
+        conn.execute("UPDATE personnel SET status='FIELD_SORTIE' WHERE id=?", (body.lead_personnel_id,))
+        conn.commit()
+    notify_gateway(body.station_id, "field_sorties", sortie_id, "UPSERT", {"id": sortie_id, "station_id": body.station_id, "lead_personnel_id": body.lead_personnel_id, "destination": body.destination, "departure_time": dep_time, "expected_return_time": body.expected_return_time, "safety_status": body.safety_status})
+    return {"status": "ok", "id": sortie_id}
+
+@app.patch("/sorties/{sortie_id}")
+def update_sortie(sortie_id: str, patch: dict):
+    conn = get_conn()
+    now = utc_now()
+    status = patch.get("safety_status")
+    actual_return = now if status == "RETURNED" else patch.get("actual_return_time")
+    if USE_PG:
+        with conn:
+            with conn.cursor() as cur:
+                if actual_return:
+                    cur.execute(q("UPDATE field_sorties SET safety_status=?, actual_return_time=? WHERE id=?"), (status, actual_return, sortie_id))
+                else:
+                    cur.execute(q("UPDATE field_sorties SET safety_status=? WHERE id=?"), (status, sortie_id))
+                if status == "RETURNED":
+                    cur.execute(q("SELECT lead_personnel_id FROM field_sorties WHERE id=?"), (sortie_id,))
+                    r = cur.fetchone()
+                    if r and r[0]:
+                        cur.execute(q("UPDATE personnel SET status='ON_STATION' WHERE id=?"), (r[0],))
+    else:
+        if actual_return:
+            conn.execute("UPDATE field_sorties SET safety_status=?, actual_return_time=? WHERE id=?", (status, actual_return, sortie_id))
+        else:
+            conn.execute("UPDATE field_sorties SET safety_status=? WHERE id=?", (status, sortie_id))
+        if status == "RETURNED":
+            cur = conn.execute("SELECT lead_personnel_id FROM field_sorties WHERE id=?", (sortie_id,))
+            r = cur.fetchone()
+            if r and r[0]:
+                conn.execute("UPDATE personnel SET status='ON_STATION' WHERE id=?", (r[0],))
+        conn.commit()
+    row = _fetch_one("SELECT * FROM field_sorties WHERE id=?", (sortie_id,))
+    if row:
+        notify_gateway(row.get("station_id", "ST-BHARATI"), "field_sorties", sortie_id, "STATUS_CHANGE", row)
+    return {"status": "ok", "id": sortie_id}
+
+class EmergencyCreate(BaseModel):
+    id: str | None = None
+    station_id: str
+    type: str = "SOS_MEDICAL"
+    reported_by: str = "HQ_COMMAND"
+    status: str = "ACTIVE"
+    location_coord: str | None = None
+
+@app.get("/emergencies")
+def list_emergencies(station_id: str = None, active_only: bool = False):
+    sql = "SELECT * FROM emergencies"
+    params = []
+    conditions = []
+    if station_id:
+        conditions.append("station_id=?")
+        params.append(station_id)
+    if active_only:
+        conditions.append("status='ACTIVE'")
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
+    sql += " ORDER BY ts DESC"
+    return _fetch_all(sql, tuple(params))
+
+@app.post("/emergency/sos")
+def trigger_sos(body: EmergencyCreate):
+    conn = get_conn()
+    now = utc_now()
+    em_id = body.id or f"SOS-{uuid.uuid4().hex[:8]}"
+    if USE_PG:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(q("INSERT INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status"), (em_id, body.station_id, body.type, body.reported_by, body.status, now, body.location_coord))
+                cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (str(uuid.uuid4())[:8], body.reported_by, f"EMERGENCY_SOS_{body.type}", "emergencies", None, em_id, now))
+    else:
+        conn.execute("INSERT INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=excluded.status", (em_id, body.station_id, body.type, body.reported_by, body.status, now, body.location_coord))
+        conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (str(uuid.uuid4())[:8], body.reported_by, f"EMERGENCY_SOS_{body.type}", "emergencies", None, em_id, now))
+        conn.commit()
+    data = {"id": em_id, "station_id": body.station_id, "type": body.type, "reported_by": body.reported_by, "status": body.status, "ts": now, "location_coord": body.location_coord}
+    notify_gateway(body.station_id, "emergencies", em_id, "STATUS_CHANGE", data)
+    return {"status": "ok", "emergency": data}
+
+@app.patch("/emergency/{emergency_id}")
+def update_emergency(emergency_id: str, patch: dict):
+    conn = get_conn()
+    status = patch.get("status", "RESOLVED")
+    if USE_PG:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(q("UPDATE emergencies SET status=? WHERE id=?"), (status, emergency_id))
+    else:
+        conn.execute("UPDATE emergencies SET status=? WHERE id=?", (status, emergency_id))
+        conn.commit()
+    row = _fetch_one("SELECT * FROM emergencies WHERE id=?", (emergency_id,))
+    if row:
+        notify_gateway(row.get("station_id", "ST-BHARATI"), "emergencies", emergency_id, "STATUS_CHANGE", row)
+    return {"status": "ok", "id": emergency_id}
+
 @app.get("/procurement/targets")
 def list_procurement_targets():
     """List all procurement targets (DB-driven, Phase 1.1)."""
@@ -636,13 +821,21 @@ async def upsert_procurement_target(sku: str, body: ProcurementTargetUpsert, use
     if body.target_qty < 0 or body.cost_per_unit < 0:
         raise HTTPException(400, "target_qty and cost_per_unit must be >=0")
     conn = get_conn()
-    if USE_PG:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(q("INSERT INTO procurement_targets (sku, target_qty, cost_per_unit, unit, eta) VALUES (?,?,?,?,?) ON CONFLICT (sku) DO UPDATE SET target_qty=EXCLUDED.target_qty, cost_per_unit=EXCLUDED.cost_per_unit, unit=EXCLUDED.unit, eta=EXCLUDED.eta"), (sku, body.target_qty, body.cost_per_unit, body.unit, body.eta))
-    else:
-        conn.execute("INSERT INTO procurement_targets (sku, target_qty, cost_per_unit, unit, eta) VALUES (?,?,?,?,?) ON CONFLICT(sku) DO UPDATE SET target_qty=excluded.target_qty, cost_per_unit=excluded.cost_per_unit, unit=excluded.unit, eta=excluded.eta", (sku, body.target_qty, body.cost_per_unit, body.unit, body.eta))
-        conn.commit()
+    try:
+        if USE_PG:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(q("INSERT INTO procurement_targets (sku, target_qty, cost_per_unit, unit, eta) VALUES (?,?,?,?,?) ON CONFLICT (sku) DO UPDATE SET target_qty=EXCLUDED.target_qty, cost_per_unit=EXCLUDED.cost_per_unit, unit=EXCLUDED.unit, eta=EXCLUDED.eta"), (sku, body.target_qty, body.cost_per_unit, body.unit, body.eta))
+        else:
+            conn.execute("INSERT INTO procurement_targets (sku, target_qty, cost_per_unit, unit, eta) VALUES (?,?,?,?,?) ON CONFLICT(sku) DO UPDATE SET target_qty=excluded.target_qty, cost_per_unit=excluded.cost_per_unit, unit=excluded.unit, eta=excluded.eta", (sku, body.target_qty, body.cost_per_unit, body.unit, body.eta))
+            conn.commit()
+    finally:
+        if USE_PG:
+            try:
+                from .db import release_conn as _release4
+                _release4(conn)
+            except Exception:
+                pass
     return {"sku": sku, "target_qty": body.target_qty, "cost_per_unit": body.cost_per_unit, "unit": body.unit, "eta": body.eta}
 
 @app.get("/procurement/{station_id}")
@@ -701,66 +894,74 @@ async def bulk_upsert_assets(body: BulkAssetRequest, user: dict = Depends(requir
     updated = 0
     conn = get_conn()
     now = utc_now()
-    if USE_PG:
-        with conn:
-            with conn.cursor() as cur:
-                for r in body.rows:
-                    if r.category not in allowed_cat:
-                        raise HTTPException(400, f"invalid category {r.category} for {r.sku}")
-                    if r.criticality not in allowed_crit:
-                        raise HTTPException(400, f"invalid criticality {r.criticality} for {r.sku}")
-                    if r.qty < 0:
-                        raise HTTPException(400, f"qty must be >=0 for {r.sku}")
-                    cur.execute(q("SELECT id FROM assets WHERE sku=?"), (r.sku,))
-                    exists = cur.fetchone()
-                    barcode = r.barcode or r.sku
-                    aid = r.id or r.sku
-                    if exists:
-                        cur.execute(q("UPDATE assets SET name=?, category=?, qty=?, unit=?, expiry_date=?, criticality=?, crate_id=?, barcode=?, version=version+1, updated_at=? WHERE sku=?"), (r.name, r.category, r.qty, r.unit, r.expiry_date, r.criticality, r.crate_id, barcode, now, r.sku))
-                        updated += 1
-                    else:
-                        cur.execute(q("INSERT INTO assets (id, sku, name, category, qty, unit, expiry_date, criticality, crate_id, barcode, version, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)"), (aid, r.sku, r.name, r.category, r.qty, r.unit, r.expiry_date, r.criticality, r.crate_id, barcode, now))
-                        inserted += 1
-                    # notify field tablets via gateway
-                    try:
-                        cr = _fetch_one("SELECT container_id FROM crates WHERE id=?", (r.crate_id,))
-                        station_id = None
-                        if cr and cr.get("container_id"):
-                            c = _fetch_one("SELECT station_id FROM containers WHERE id=?", (cr["container_id"],))
-                            station_id = c.get("station_id") if c else None
+    try:
+        if USE_PG:
+            with conn:
+                with conn.cursor() as cur:
+                    for r in body.rows:
+                        if r.category not in allowed_cat:
+                            raise HTTPException(400, f"invalid category {r.category} for {r.sku}")
+                        if r.criticality not in allowed_crit:
+                            raise HTTPException(400, f"invalid criticality {r.criticality} for {r.sku}")
+                        if r.qty < 0:
+                            raise HTTPException(400, f"qty must be >=0 for {r.sku}")
+                        cur.execute(q("SELECT id FROM assets WHERE sku=?"), (r.sku,))
+                        exists = cur.fetchone()
+                        barcode = r.barcode or r.sku
+                        aid = r.id or r.sku
+                        if exists:
+                            cur.execute(q("UPDATE assets SET name=?, category=?, qty=?, unit=?, expiry_date=?, criticality=?, crate_id=?, barcode=?, version=version+1, updated_at=? WHERE sku=?"), (r.name, r.category, r.qty, r.unit, r.expiry_date, r.criticality, r.crate_id, barcode, now, r.sku))
+                            updated += 1
+                        else:
+                            cur.execute(q("INSERT INTO assets (id, sku, name, category, qty, unit, expiry_date, criticality, crate_id, barcode, version, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)"), (aid, r.sku, r.name, r.category, r.qty, r.unit, r.expiry_date, r.criticality, r.crate_id, barcode, now))
+                            inserted += 1
+                        # notify field tablets via gateway
+                        try:
+                            cr = _fetch_one("SELECT container_id FROM crates WHERE id=?", (r.crate_id,))
+                            station_id = None
+                            if cr and cr.get("container_id"):
+                                c = _fetch_one("SELECT station_id FROM containers WHERE id=?", (cr["container_id"],))
+                                station_id = c.get("station_id") if c else None
+                            if station_id:
+                                notify_gateway(station_id, "assets", aid, "UPSERT", {"id": aid, "sku": r.sku, "qty": r.qty, "crate_id": r.crate_id})
+                        except Exception:
+                            pass
+        else:
+            # SQLite
+            for r in body.rows:
+                if r.category not in allowed_cat:
+                    raise HTTPException(400, f"invalid category {r.category} for {r.sku}")
+                if r.criticality not in allowed_crit:
+                    raise HTTPException(400, f"invalid criticality {r.criticality} for {r.sku}")
+                if r.qty < 0:
+                    raise HTTPException(400, f"qty must be >=0 for {r.sku}")
+                cur = conn.execute("SELECT id FROM assets WHERE sku=?", (r.sku,))
+                exists = cur.fetchone()
+                barcode = r.barcode or r.sku
+                aid = r.id or r.sku
+                if exists:
+                    conn.execute("UPDATE assets SET name=?, category=?, qty=?, unit=?, expiry_date=?, criticality=?, crate_id=?, barcode=?, version=version+1, updated_at=? WHERE sku=?", (r.name, r.category, r.qty, r.unit, r.expiry_date, r.criticality, r.crate_id, barcode, now, r.sku))
+                    updated += 1
+                else:
+                    conn.execute("INSERT INTO assets (id, sku, name, category, qty, unit, expiry_date, criticality, crate_id, barcode, version, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)", (aid, r.sku, r.name, r.category, r.qty, r.unit, r.expiry_date, r.criticality, r.crate_id, barcode, now))
+                    inserted += 1
+                try:
+                    cr = conn.execute("SELECT container_id FROM crates WHERE id=?", (r.crate_id,)).fetchone()
+                    if cr and cr["container_id"]:
+                        c = conn.execute("SELECT station_id FROM containers WHERE id=?", (cr["container_id"],)).fetchone()
+                        station_id = c["station_id"] if c else None
                         if station_id:
                             notify_gateway(station_id, "assets", aid, "UPSERT", {"id": aid, "sku": r.sku, "qty": r.qty, "crate_id": r.crate_id})
-                    except Exception:
-                        pass
-    else:
-        # SQLite
-        for r in body.rows:
-            if r.category not in allowed_cat:
-                raise HTTPException(400, f"invalid category {r.category} for {r.sku}")
-            if r.criticality not in allowed_crit:
-                raise HTTPException(400, f"invalid criticality {r.criticality} for {r.sku}")
-            if r.qty < 0:
-                raise HTTPException(400, f"qty must be >=0 for {r.sku}")
-            cur = conn.execute("SELECT id FROM assets WHERE sku=?", (r.sku,))
-            exists = cur.fetchone()
-            barcode = r.barcode or r.sku
-            aid = r.id or r.sku
-            if exists:
-                conn.execute("UPDATE assets SET name=?, category=?, qty=?, unit=?, expiry_date=?, criticality=?, crate_id=?, barcode=?, version=version+1, updated_at=? WHERE sku=?", (r.name, r.category, r.qty, r.unit, r.expiry_date, r.criticality, r.crate_id, barcode, now, r.sku))
-                updated += 1
-            else:
-                conn.execute("INSERT INTO assets (id, sku, name, category, qty, unit, expiry_date, criticality, crate_id, barcode, version, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)", (aid, r.sku, r.name, r.category, r.qty, r.unit, r.expiry_date, r.criticality, r.crate_id, barcode, now))
-                inserted += 1
+                except Exception:
+                    pass
+            conn.commit()
+    finally:
+        if USE_PG:
             try:
-                cr = conn.execute("SELECT container_id FROM crates WHERE id=?", (r.crate_id,)).fetchone()
-                if cr and cr["container_id"]:
-                    c = conn.execute("SELECT station_id FROM containers WHERE id=?", (cr["container_id"],)).fetchone()
-                    station_id = c["station_id"] if c else None
-                    if station_id:
-                        notify_gateway(station_id, "assets", aid, "UPSERT", {"id": aid, "sku": r.sku, "qty": r.qty, "crate_id": r.crate_id})
+                from .db import release_conn as _release5
+                _release5(conn)
             except Exception:
                 pass
-        conn.commit()
     return {"inserted": inserted, "updated": updated}
 
 @app.get("/sync/state/{device_id}")
@@ -784,12 +985,11 @@ def ingest(frame: DeltaFrame, request: Request):
         raise HTTPException(413, "patch too large >2KB")
     if len(frame.ulid) != 26:
         raise HTTPException(400, "ulid must be 26 chars")
-    if frame.entity not in ["assets", "indents", "telemetry", "stations", "containers", "crates"]:
+    if frame.entity not in ["assets", "indents", "telemetry", "stations", "containers", "crates", "personnel", "field_sorties", "emergencies"]:
         raise HTTPException(400, f"unsupported entity {frame.entity}")
     # keep in sync with shared/src/schemas.ts deltaFrameSchema op enum + outbox CHECK
     if frame.op not in ["UPSERT", "DELETE", "CONSUME", "IN", "OUT", "ADJUST"]:
         raise HTTPException(400, f"unsupported op {frame.op}")
-    conn=get_conn()
     ulid=frame.ulid
     now = utc_now()
     if USE_PG:
@@ -824,6 +1024,33 @@ def ingest(frame: DeltaFrame, request: Request):
                     cur.execute(q("INSERT INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,?) ON CONFLICT (device_id) DO UPDATE SET last_acked_ulid=EXCLUDED.last_acked_ulid"), (frame.device_id, ulid, ver))
                     c.commit()
                     return {"status":"APPLIED", "server_version": ver}
+                if frame.entity=="personnel" and frame.op=="UPSERT":
+                    p=frame.patch
+                    cur.execute(q("INSERT INTO personnel (id, station_id, name, role, blood_group, emergency_contact, status) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, name=COALESCE(EXCLUDED.name, personnel.name)"), (frame.entity_id, p.get("station_id","ST-BHARATI"), p.get("name","Expeditioner"), p.get("role","Field Op"), p.get("blood_group","O+"), p.get("emergency_contact",""), p.get("status","ON_STATION")))
+                    cur.execute(q("INSERT INTO dedupe (ulid, processed_at) VALUES (?,?)"), (ulid, now))
+                    cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (ulid, frame.device_id, f"SYNC_PERSONNEL_{p.get('status','UPDATE')}", "personnel", None, str(p), now))
+                    cur.execute(q("INSERT INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,0) ON CONFLICT (device_id) DO UPDATE SET last_acked_ulid=EXCLUDED.last_acked_ulid"), (frame.device_id, ulid))
+                    c.commit()
+                    notify_gateway(p.get("station_id","ST-BHARATI"), "personnel", frame.entity_id, "STATUS_CHANGE", p)
+                    return {"status":"APPLIED", "server_version": 0}
+                if frame.entity=="field_sorties" and frame.op=="UPSERT":
+                    p=frame.patch
+                    cur.execute(q("INSERT INTO field_sorties (id, station_id, lead_personnel_id, destination, departure_time, expected_return_time, actual_return_time, safety_status) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET safety_status=EXCLUDED.safety_status, actual_return_time=EXCLUDED.actual_return_time"), (frame.entity_id, p.get("station_id","ST-BHARATI"), p.get("lead_personnel_id",""), p.get("destination","Field"), p.get("departure_time", now), p.get("expected_return_time",""), p.get("actual_return_time"), p.get("safety_status","ACTIVE")))
+                    cur.execute(q("INSERT INTO dedupe (ulid, processed_at) VALUES (?,?)"), (ulid, now))
+                    cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (ulid, frame.device_id, f"SYNC_SORTIE_{p.get('safety_status','ACTIVE')}", "field_sorties", None, str(p), now))
+                    cur.execute(q("INSERT INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,0) ON CONFLICT (device_id) DO UPDATE SET last_acked_ulid=EXCLUDED.last_acked_ulid"), (frame.device_id, ulid))
+                    c.commit()
+                    notify_gateway(p.get("station_id","ST-BHARATI"), "field_sorties", frame.entity_id, "STATUS_CHANGE", p)
+                    return {"status":"APPLIED", "server_version": 0}
+                if frame.entity=="emergencies" and frame.op=="UPSERT":
+                    p=frame.patch
+                    cur.execute(q("INSERT INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status"), (frame.entity_id, p.get("station_id","ST-BHARATI"), p.get("type","SOS_MEDICAL"), p.get("reported_by", frame.device_id), p.get("status","ACTIVE"), p.get("ts", now), p.get("location_coord")))
+                    cur.execute(q("INSERT INTO dedupe (ulid, processed_at) VALUES (?,?)"), (ulid, now))
+                    cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (ulid, frame.device_id, f"SYNC_EMERGENCY_{p.get('type','SOS')}", "emergencies", None, str(p), now))
+                    cur.execute(q("INSERT INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,0) ON CONFLICT (device_id) DO UPDATE SET last_acked_ulid=EXCLUDED.last_acked_ulid"), (frame.device_id, ulid))
+                    c.commit()
+                    notify_gateway(p.get("station_id","ST-BHARATI"), "emergencies", frame.entity_id, "STATUS_CHANGE", p)
+                    return {"status":"APPLIED", "server_version": 0}
                 cur.execute(q("SELECT qty, version, criticality FROM assets WHERE id=? FOR UPDATE"), (frame.entity_id,))
                 row=cur.fetchone()
                 if not row:
@@ -882,6 +1109,7 @@ def ingest(frame: DeltaFrame, request: Request):
                 c.commit()
                 return {"status":"APPLIED", "server_version": frame.patch.get("version", version+1) if frame.entity=="assets" else version}
     else:
+        conn=get_conn()
         conn.execute("BEGIN IMMEDIATE")
         try:
             cur=conn.execute("SELECT 1 FROM dedupe WHERE ulid=?", (ulid,))
@@ -910,6 +1138,36 @@ def ingest(frame: DeltaFrame, request: Request):
                 conn.execute("INSERT OR IGNORE INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,?)", (frame.device_id, ulid, 0))
                 conn.execute("UPDATE sync_state SET last_acked_ulid=? WHERE device_id=?", (ulid, frame.device_id))
                 conn.execute("COMMIT")
+                return {"status":"APPLIED", "server_version": 0}
+            if frame.entity=="personnel" and frame.op=="UPSERT":
+                p=frame.patch
+                conn.execute("INSERT INTO personnel (id, station_id, name, role, blood_group, emergency_contact, status) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=excluded.status, name=coalesce(excluded.name, personnel.name)", (frame.entity_id, p.get("station_id","ST-BHARATI"), p.get("name","Expeditioner"), p.get("role","Field Op"), p.get("blood_group","O+"), p.get("emergency_contact",""), p.get("status","ON_STATION")))
+                conn.execute("INSERT INTO dedupe (ulid, processed_at) VALUES (?,?)", (ulid, now))
+                conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (ulid, frame.device_id, f"SYNC_PERSONNEL_{p.get('status','UPDATE')}", "personnel", None, str(p), now))
+                conn.execute("INSERT OR IGNORE INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,?)", (frame.device_id, ulid, 0))
+                conn.execute("UPDATE sync_state SET last_acked_ulid=? WHERE device_id=?", (ulid, frame.device_id))
+                conn.execute("COMMIT")
+                notify_gateway(p.get("station_id","ST-BHARATI"), "personnel", frame.entity_id, "STATUS_CHANGE", p)
+                return {"status":"APPLIED", "server_version": 0}
+            if frame.entity=="field_sorties" and frame.op=="UPSERT":
+                p=frame.patch
+                conn.execute("INSERT INTO field_sorties (id, station_id, lead_personnel_id, destination, departure_time, expected_return_time, actual_return_time, safety_status) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET safety_status=excluded.safety_status, actual_return_time=excluded.actual_return_time", (frame.entity_id, p.get("station_id","ST-BHARATI"), p.get("lead_personnel_id",""), p.get("destination","Field"), p.get("departure_time", now), p.get("expected_return_time",""), p.get("actual_return_time"), p.get("safety_status","ACTIVE")))
+                conn.execute("INSERT INTO dedupe (ulid, processed_at) VALUES (?,?)", (ulid, now))
+                conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (ulid, frame.device_id, f"SYNC_SORTIE_{p.get('safety_status','ACTIVE')}", "field_sorties", None, str(p), now))
+                conn.execute("INSERT OR IGNORE INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,?)", (frame.device_id, ulid, 0))
+                conn.execute("UPDATE sync_state SET last_acked_ulid=? WHERE device_id=?", (ulid, frame.device_id))
+                conn.execute("COMMIT")
+                notify_gateway(p.get("station_id","ST-BHARATI"), "field_sorties", frame.entity_id, "STATUS_CHANGE", p)
+                return {"status":"APPLIED", "server_version": 0}
+            if frame.entity=="emergencies" and frame.op=="UPSERT":
+                p=frame.patch
+                conn.execute("INSERT INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=excluded.status", (frame.entity_id, p.get("station_id","ST-BHARATI"), p.get("type","SOS_MEDICAL"), p.get("reported_by", frame.device_id), p.get("status","ACTIVE"), p.get("ts", now), p.get("location_coord")))
+                conn.execute("INSERT INTO dedupe (ulid, processed_at) VALUES (?,?)", (ulid, now))
+                conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (ulid, frame.device_id, f"SYNC_EMERGENCY_{p.get('type','SOS')}", "emergencies", None, str(p), now))
+                conn.execute("INSERT OR IGNORE INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,?)", (frame.device_id, ulid, 0))
+                conn.execute("UPDATE sync_state SET last_acked_ulid=? WHERE device_id=?", (ulid, frame.device_id))
+                conn.execute("COMMIT")
+                notify_gateway(p.get("station_id","ST-BHARATI"), "emergencies", frame.entity_id, "STATUS_CHANGE", p)
                 return {"status":"APPLIED", "server_version": 0}
             cur=conn.execute("SELECT qty, version, criticality FROM assets WHERE id=?", (frame.entity_id,))
             row=cur.fetchone()
@@ -988,7 +1246,6 @@ class BulkIn(BaseModel):
 @app.post("/dtn/ingest_bulk")
 def dtn_ingest_bulk(body: BulkIn):
     results = []
-    conn = get_conn()
     if USE_PG:
         import psycopg
         with psycopg.connect(os.getenv("DATABASE_URL"), autocommit=False) as c:
@@ -1010,6 +1267,7 @@ def dtn_ingest_bulk(body: BulkIn):
                     results.append(r)
                 c.commit()
     else:
+        conn = get_conn()
         conn.execute("BEGIN IMMEDIATE")
         try:
             from .dtn import ingest_bundle
@@ -1051,7 +1309,6 @@ async def dtn_exchange(request: Request):
     body = await request.json()
     bundles = body.get("bundles") or body.get("bundle") or []
     if isinstance(bundles, dict): bundles = [bundles]
-    conn = get_conn()
     results = []
     if USE_PG:
         import psycopg
@@ -1072,6 +1329,7 @@ async def dtn_exchange(request: Request):
                     results.append(ingest_bundle(nb, cur))
                 c.commit()
     else:
+        conn = get_conn()
         conn.execute("BEGIN")
         try:
             from .dtn import ingest_bundle
@@ -1102,13 +1360,13 @@ def tracking_update(body: Dict[str, Any]):
     x = body.get("x", 0); y = body.get("y", 0); theta = body.get("theta", 0); conf = body.get("conf", 0.75)
     station_id = body.get("station_id") or body.get("stationId") or "ST-BHARATI"
     now = utc_now()
-    conn = get_conn()
     if USE_PG:
         import psycopg
         with psycopg.connect(os.getenv("DATABASE_URL"), autocommit=True) as c:
             with c.cursor() as cur:
                 cur.execute("INSERT INTO asset_positions (asset_id, x, y, theta, conf, last_sensor_ts, station_id) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (asset_id) DO UPDATE SET x=EXCLUDED.x, y=EXCLUDED.y, theta=EXCLUDED.theta, conf=EXCLUDED.conf, last_sensor_ts=EXCLUDED.last_sensor_ts, station_id=EXCLUDED.station_id", (asset_id, x, y, theta, conf, now, station_id))
     else:
+        conn = get_conn()
         conn.execute("INSERT INTO asset_positions (asset_id, x, y, theta, conf, last_sensor_ts, station_id) VALUES (?,?,?,?,?,?,?) ON CONFLICT(asset_id) DO UPDATE SET x=excluded.x, y=excluded.y, theta=excluded.theta, conf=excluded.conf, last_sensor_ts=excluded.last_sensor_ts, station_id=excluded.station_id", (asset_id, x, y, theta, conf, now, station_id))
         conn.commit()
     return {"asset_id": asset_id, "x": x, "y": y, "conf": conf}
