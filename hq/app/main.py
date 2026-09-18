@@ -102,6 +102,18 @@ async def lifespan(app: FastAPI):
         start_vessel_poller()
     except Exception as e:
         logger.warning(f"[vessel_poller] start failed: {e}")
+    # Sortie overdue watchdog: every 60s mark OVERDUE + auto-SOS after 30min
+    try:
+        async def _watchdog_loop():
+            while True:
+                try:
+                    await asyncio.sleep(60)
+                    check_overdue()
+                except Exception as e:
+                    logger.debug(f"[watchdog] {e}")
+        asyncio.get_running_loop().create_task(_watchdog_loop())
+    except RuntimeError:
+        pass
     yield
 
 app = FastAPI(title="POLARIS HQ — NCPOR Command", version="0.1.0", docs_url="/docs", redoc_url="/redoc", lifespan=lifespan)
@@ -525,6 +537,9 @@ def check_and_escalate(station_id: str, tele):
         now=utc_now()
         if days <= 20:
             _auto_indent(conn, station_id, asset_id, 500, "FORECAST_AUTO", "INDENT_AUTO_CRITICAL", f"forecast {days:.1f}d", "-auto", now)
+        elif days <= 60:
+            # Two-month rule: slow-building shortage flagged weeks out, not just at critical
+            _auto_indent(conn, station_id, asset_id, 250, "FORECAST_60D", "INDENT_AUTO_WATCH", f"two-month watch {days:.1f}d", "-60d", now)
         # Phase 4: Acoustic Prognostics Escalation
         if getattr(tele, 'acoustic_anomaly', 0.0) > 0.90:
             row = _fetch_one("SELECT a.id FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku='SPARE-BRG-6205-007' LIMIT 1", (station_id,))
@@ -786,23 +801,537 @@ def trigger_sos(body: EmergencyCreate):
         conn.commit()
     data = {"id": em_id, "station_id": body.station_id, "type": body.type, "reported_by": body.reported_by, "status": body.status, "ts": now, "location_coord": body.location_coord}
     notify_gateway(body.station_id, "emergencies", em_id, "STATUS_CHANGE", data)
+    # SOS auto-reserve: medical distress locks O2 + trauma kit via urgent indent (soft reserve)
+    try:
+        if body.type == "SOS_MEDICAL":
+            o2 = _fetch_one("SELECT a.id FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku LIKE 'O2-%' LIMIT 1", (body.station_id,))
+            if o2:
+                _auto_indent(get_conn(), body.station_id, o2["id"], 2, "SOS_RESERVE", "INDENT_SOS_RESERVE", f"sos {em_id} medical reserve", "-sos", now)
+    except Exception:
+        pass
     return {"status": "ok", "emergency": data}
 
 @app.patch("/emergency/{emergency_id}")
 def update_emergency(emergency_id: str, patch: dict):
+    EM_TRIAGE = ["ACTIVE", "ACK", "RESPONDING", "RESOLVED"]
     conn = get_conn()
     status = patch.get("status", "RESOLVED")
+    if status not in EM_TRIAGE:
+        raise HTTPException(400, f"invalid emergency status {status}")
+    row0 = _fetch_one("SELECT status FROM emergencies WHERE id=?", (emergency_id,))
+    if row0:
+        try:
+            if EM_TRIAGE.index(status) < EM_TRIAGE.index(row0["status"]):
+                raise HTTPException(400, f"illegal triage regression {row0['status']}->{status}")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+    assignee = patch.get("assignee")
     if USE_PG:
         with conn:
             with conn.cursor() as cur:
-                cur.execute(q("UPDATE emergencies SET status=? WHERE id=?"), (status, emergency_id))
+                if assignee is not None:
+                    cur.execute(q("UPDATE emergencies SET status=?, assignee=? WHERE id=?"), (status, assignee, emergency_id))
+                else:
+                    cur.execute(q("UPDATE emergencies SET status=? WHERE id=?"), (status, emergency_id))
     else:
-        conn.execute("UPDATE emergencies SET status=? WHERE id=?", (status, emergency_id))
+        if assignee is not None:
+            conn.execute("UPDATE emergencies SET status=?, assignee=? WHERE id=?", (status, assignee, emergency_id))
+        else:
+            conn.execute("UPDATE emergencies SET status=? WHERE id=?", (status, emergency_id))
         conn.commit()
+    # decision audit: resolving/acking a CRITICAL distress is a logged decision
+    try:
+        actor = patch.get("actor_id", "HQ_COMMAND")
+        now = utc_now()
+        c2 = get_conn()
+        oid = f"OVR-{uuid.uuid4().hex[:8]}"
+        st = _fetch_one("SELECT station_id FROM emergencies WHERE id=?", (emergency_id,))
+        sid = (st or {}).get("station_id", "ST-BHARATI")
+        if USE_PG:
+            with c2:
+                with c2.cursor() as cur2:
+                    cur2.execute(q("INSERT INTO decision_overrides (id, ref_type, ref_id, station_id, actor_id, stated_risk, action, ts) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (oid, "EMERGENCY", emergency_id, sid, actor, patch.get("stated_risk", f"triage->{status}"), f"TRIAGE_{status}", now))
+        else:
+            c2.execute("INSERT OR IGNORE INTO decision_overrides VALUES (?,?,?,?,?,?,?,?)", (oid, "EMERGENCY", emergency_id, sid, actor, patch.get("stated_risk", f"triage->{status}"), f"TRIAGE_{status}", now))
+            c2.commit()
+    except Exception:
+        pass
+    finally:
+        if USE_PG:
+            try:
+                from .db import release_conn as _rc
+                _rc(c2)
+            except Exception:
+                pass
     row = _fetch_one("SELECT * FROM emergencies WHERE id=?", (emergency_id,))
     if row:
         notify_gateway(row.get("station_id", "ST-BHARATI"), "emergencies", emergency_id, "STATUS_CHANGE", row)
     return {"status": "ok", "id": emergency_id}
+
+# --- Expedition planning: centralized platform (ANTARCTIC + ARCTIC programs) ---
+EXPEDITION_STATUS = ["PLANNED", "STUFFING", "IN_TRANSIT", "DELIVERED", "WINTER_OVER", "COMPLETE"]
+MANIFEST_STAGES = ["GOA", "MUMBAI", "CAPETOWN", "VESSEL", "STATION", "CRATE"]
+
+class ExpeditionCreate(BaseModel):
+    id: str | None = None
+    program: str = "ANTARCTIC"
+    name: str = "Unnamed expedition"
+    season: str = "46-ISEA-2026"
+    status: str = "PLANNED"
+    created_by: str = "NCPOR-AO"
+
+class LegCreate(BaseModel):
+    id: str | None = None
+    seq: int = 0
+    from_point: str = "GOA"
+    to_point: str = "MAITRI"
+    mode: str = "SEA"
+    vessel_imo: str | None = None
+    eta_depart: str | None = None
+    eta_arrive: str | None = None
+    status: str = "PLANNED"
+
+class ManifestCreate(BaseModel):
+    id: str | None = None
+    owner_org: str = "NCPOR"
+    project_code: str = "GENERAL"
+    destination_station: str = "ST-BHARATI"
+    sku: str | None = None
+    description: str = ""
+    qty: float = 1
+    unit: str = "pcs"
+    weight_kg: float | None = None
+    hazmat_class: str | None = None
+    temp_zone: str = "AMBIENT"
+    customs_status: str = "PENDING"
+    biosecurity_status: str = "PENDING"
+    labelling_code: str | None = None
+    container_id: str | None = None
+    crate_id: str | None = None
+    stage: str = "GOA"
+
+@app.get("/expeditions")
+def list_expeditions(program: str | None = None):
+    if program:
+        return _fetch_all("SELECT * FROM expeditions WHERE program=? ORDER BY season DESC", (program,))
+    return _fetch_all("SELECT * FROM expeditions ORDER BY program, season DESC")
+
+@app.post("/expeditions")
+def create_expedition(body: ExpeditionCreate):
+    if body.program not in ("ANTARCTIC", "ARCTIC"):
+        raise HTTPException(400, "program must be ANTARCTIC|ARCTIC")
+    if body.status not in EXPEDITION_STATUS:
+        raise HTTPException(400, "invalid expedition status")
+    eid = body.id or f"EXP-{uuid.uuid4().hex[:8]}"
+    now = utc_now()
+    conn = get_conn()
+    try:
+        if USE_PG:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(q("INSERT INTO expeditions (id, program, name, season, status, created_by, created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status"), (eid, body.program, body.name, body.season, body.status, body.created_by, now))
+                    cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (eid[:8] + now[-6:], body.created_by, f"EXPEDITION_{body.status}", "expeditions", None, eid, now))
+        else:
+            conn.execute("INSERT INTO expeditions (id, program, name, season, status, created_by, created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status", (eid, body.program, body.name, body.season, body.status, body.created_by, now))
+            conn.execute("INSERT OR IGNORE INTO audit_log VALUES (?,?,?,?,?,?,?)", (eid[:8] + now[-6:], body.created_by, f"EXPEDITION_{body.status}", "expeditions", None, eid, now))
+            conn.commit()
+    finally:
+        if USE_PG:
+            try:
+                from .db import release_conn as _re
+                _re(conn)
+            except Exception:
+                pass
+    return {"status": "ok", "id": eid}
+
+@app.patch("/expeditions/{expedition_id}")
+def patch_expedition(expedition_id: str, patch: dict):
+    status = patch.get("status")
+    if status and status not in EXPEDITION_STATUS:
+        raise HTTPException(400, "invalid expedition status")
+    row0 = _fetch_one("SELECT status, program FROM expeditions WHERE id=?", (expedition_id,))
+    if not row0:
+        raise HTTPException(404, "expedition not found")
+    if status:
+        try:
+            if EXPEDITION_STATUS.index(status) < EXPEDITION_STATUS.index(row0["status"]):
+                raise HTTPException(400, f"illegal expedition regression {row0['status']}->{status}")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+    conn = get_conn()
+    try:
+        if USE_PG:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(q("UPDATE expeditions SET status=? WHERE id=?"), (status, expedition_id))
+        else:
+            conn.execute("UPDATE expeditions SET status=? WHERE id=?", (status, expedition_id))
+            conn.commit()
+    finally:
+        if USE_PG:
+            try:
+                from .db import release_conn as _re2
+                _re2(conn)
+            except Exception:
+                pass
+    return {"status": "ok", "id": expedition_id}
+
+@app.get("/expeditions/{expedition_id}/legs")
+def list_legs(expedition_id: str):
+    return _fetch_all("SELECT * FROM voyage_legs WHERE expedition_id=? ORDER BY seq", (expedition_id,))
+
+@app.post("/expeditions/{expedition_id}/legs")
+def add_leg(expedition_id: str, body: LegCreate):
+    if body.mode not in ("SEA", "AIR", "TRAVERSE"):
+        raise HTTPException(400, "mode must be SEA|AIR|TRAVERSE")
+    ex = _fetch_one("SELECT program FROM expeditions WHERE id=?", (expedition_id,))
+    if not ex:
+        raise HTTPException(404, "expedition not found")
+    if ex["program"] == "ARCTIC" and body.mode == "SEA" and body.vessel_imo:
+        pass  # arctic sea legs allowed but vessel optional
+    if body.vessel_imo:
+        v = _fetch_one("SELECT imo FROM vessels WHERE imo=?", (body.vessel_imo,))
+        if not v:
+            raise HTTPException(404, f"vessel {body.vessel_imo} not found")
+    lid = body.id or f"LEG-{uuid.uuid4().hex[:8]}"
+    conn = get_conn()
+    try:
+        if USE_PG:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(q("INSERT INTO voyage_legs (id, expedition_id, seq, from_point, to_point, mode, vessel_imo, eta_depart, eta_arrive, status) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status"), (lid, expedition_id, body.seq, body.from_point, body.to_point, body.mode, body.vessel_imo, body.eta_depart, body.eta_arrive, body.status))
+        else:
+            conn.execute("INSERT INTO voyage_legs VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status", (lid, expedition_id, body.seq, body.from_point, body.to_point, body.mode, body.vessel_imo, body.eta_depart, body.eta_arrive, body.status))
+            conn.commit()
+    finally:
+        if USE_PG:
+            try:
+                from .db import release_conn as _re3
+                _re3(conn)
+            except Exception:
+                pass
+    return {"status": "ok", "id": lid}
+
+@app.get("/expeditions/{expedition_id}/manifests")
+def list_manifests(expedition_id: str, destination_station: str | None = None):
+    if destination_station:
+        return _fetch_all("SELECT * FROM manifests WHERE expedition_id=? AND destination_station=? ORDER BY labelling_code", (expedition_id, destination_station))
+    return _fetch_all("SELECT * FROM manifests WHERE expedition_id=? ORDER BY destination_station, labelling_code", (expedition_id,))
+
+@app.post("/expeditions/{expedition_id}/manifests")
+def add_manifest(expedition_id: str, body: ManifestCreate):
+    ex = _fetch_one("SELECT id FROM expeditions WHERE id=?", (expedition_id,))
+    if not ex:
+        raise HTTPException(404, "expedition not found")
+    if body.destination_station not in ("ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"):
+        raise HTTPException(400, "unknown destination_station")
+    if body.stage not in MANIFEST_STAGES:
+        raise HTTPException(400, "invalid stage")
+    if body.temp_zone not in ("AMBIENT", "COLD", "HAZMAT"):
+        raise HTTPException(400, "invalid temp_zone")
+    mid = body.id or f"MAN-{uuid.uuid4().hex[:8]}"
+    label = body.labelling_code or f"{expedition_id}-{body.destination_station.split('-')[1]}-{uuid.uuid4().hex[:6].upper()}"
+    conn = get_conn()
+    try:
+        if USE_PG:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(q("INSERT INTO manifests (id, expedition_id, owner_org, project_code, destination_station, sku, description, qty, unit, weight_kg, hazmat_class, temp_zone, customs_status, biosecurity_status, labelling_code, container_id, crate_id, stage) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET stage=EXCLUDED.stage"), (mid, expedition_id, body.owner_org, body.project_code, body.destination_station, body.sku, body.description, body.qty, body.unit, body.weight_kg, body.hazmat_class, body.temp_zone, body.customs_status, body.biosecurity_status, label, body.container_id, body.crate_id, body.stage))
+        else:
+            conn.execute("INSERT INTO manifests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET stage=excluded.stage", (mid, expedition_id, body.owner_org, body.project_code, body.destination_station, body.sku, body.description, body.qty, body.unit, body.weight_kg, body.hazmat_class, body.temp_zone, body.customs_status, body.biosecurity_status, label, body.container_id, body.crate_id, body.stage, None))
+            conn.commit()
+    finally:
+        if USE_PG:
+            try:
+                from .db import release_conn as _re4
+                _re4(conn)
+            except Exception:
+                pass
+    return {"status": "ok", "id": mid, "labelling_code": label}
+
+@app.patch("/expeditions/{expedition_id}/manifests/{manifest_id}")
+def advance_manifest(expedition_id: str, manifest_id: str, patch: dict):
+    stage = patch.get("stage")
+    if stage not in MANIFEST_STAGES:
+        raise HTTPException(400, "invalid stage")
+    row = _fetch_one("SELECT stage, customs_status, biosecurity_status, temp_zone, container_id FROM manifests WHERE id=? AND expedition_id=?", (manifest_id, expedition_id))
+    if not row:
+        raise HTTPException(404, "manifest not found")
+    if MANIFEST_STAGES.index(stage) < MANIFEST_STAGES.index(row["stage"]):
+        raise HTTPException(400, f"illegal stage regression {row['stage']}->{stage}")
+    eff_customs = patch.get("customs_status") or row["customs_status"]
+    eff_bio = patch.get("biosecurity_status") or row["biosecurity_status"]
+    if stage in ("MUMBAI", "CAPETOWN", "VESSEL") and eff_customs == "PENDING" and eff_bio == "PENDING":
+        raise HTTPException(400, "customs+biosecurity PENDING: clear at least one before onward shipment")
+    conn = get_conn()
+    try:
+        updates = "stage=?"
+        params: list = [stage]
+        if patch.get("container_id") is not None:
+            updates += ", container_id=?"
+            params.append(patch["container_id"])
+        if patch.get("crate_id") is not None:
+            updates += ", crate_id=?"
+            params.append(patch["crate_id"])
+        if patch.get("customs_status") in ("PENDING", "CLEARED", "EXEMPT"):
+            updates += ", customs_status=?"
+            params.append(patch["customs_status"])
+        if patch.get("biosecurity_status") in ("PENDING", "CLEARED", "EXEMPT"):
+            updates += ", biosecurity_status=?"
+            params.append(patch["biosecurity_status"])
+        params += [manifest_id]
+        if USE_PG:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(q(f"UPDATE manifests SET {updates} WHERE id=?"), tuple(params))
+                    cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (manifest_id[:8], patch.get("actor_id", "HQ"), f"MANIFEST_{stage}", "manifests", row["stage"], stage, utc_now()))
+        else:
+            conn.execute(f"UPDATE manifests SET {updates} WHERE id=?", tuple(params))
+            conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (manifest_id[:8], patch.get("actor_id", "HQ"), f"MANIFEST_{stage}", "manifests", row["stage"], stage, utc_now()))
+            conn.commit()
+    finally:
+        if USE_PG:
+            try:
+                from .db import release_conn as _re5
+                _re5(conn)
+            except Exception:
+                pass
+    return {"status": "ok", "id": manifest_id, "stage": stage}
+
+@app.post("/expeditions/{expedition_id}/manifests/bulk")
+async def bulk_manifests(expedition_id: str, body: dict, user: dict = Depends(require_role("NCPOR_ADMIN"))):
+    rows = body.get("rows", [])
+    if not rows or len(rows) > 500:
+        raise HTTPException(400, "rows must be 1..500")
+    ex = _fetch_one("SELECT id FROM expeditions WHERE id=?", (expedition_id,))
+    if not ex:
+        raise HTTPException(404, "expedition not found")
+    inserted = 0
+    for r in rows:
+        try:
+            mc = ManifestCreate(**{**r})
+            res = add_manifest(expedition_id, mc)
+            if res.get("status") == "ok":
+                inserted += 1
+        except Exception:
+            continue
+    return {"inserted": inserted, "total": len(rows)}
+
+@app.post("/expeditions/{expedition_id}/auto-pack")
+def auto_pack(expedition_id: str):
+    rows = _fetch_all("SELECT * FROM manifests WHERE expedition_id=? AND (container_id IS NULL OR container_id='')", (expedition_id,))
+    conts = _fetch_all("SELECT c.id, c.station_id, c.type FROM containers c ORDER BY c.id")
+    placements: list = []
+    warnings: list = []
+    pool: dict = {}
+    for c in conts:
+        pool.setdefault(c["station_id"], []).append(c)
+    for m in rows:
+        dest = m["destination_station"]
+        want = "ColdStore" if m["temp_zone"] == "COLD" else ("Hazmat" if (m["temp_zone"] == "HAZMAT" or m["hazmat_class"]) else "ISO_20ft")
+        cands = [c for c in pool.get(dest, []) if c["type"] == want] or [c for c in pool.get(dest, [])]
+        if not cands:
+            warnings.append(f"{m['labelling_code']}: no {want} container at {dest}")
+            continue
+        chosen = cands[0]
+        if m["temp_zone"] == "COLD" and chosen["type"] != "ColdStore":
+            warnings.append(f"{m['labelling_code']}: cold item without ColdStore at {dest}")
+        conn = get_conn()
+        try:
+            if USE_PG:
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(q("UPDATE manifests SET container_id=? WHERE id=?"), (chosen["id"], m["id"]))
+            else:
+                conn.execute("UPDATE manifests SET container_id=? WHERE id=?", (chosen["id"], m["id"]))
+                conn.commit()
+        finally:
+            if USE_PG:
+                try:
+                    from .db import release_conn as _re6
+                    _re6(conn)
+                except Exception:
+                    pass
+        placements.append({"manifest_id": m["id"], "labelling_code": m["labelling_code"], "container_id": chosen["id"]})
+    return {"placements": placements, "warnings": warnings, "count": len(placements)}
+
+@app.get("/expeditions/{expedition_id}/readiness")
+def expedition_readiness(expedition_id: str):
+    ex = _fetch_one("SELECT * FROM expeditions WHERE id=?", (expedition_id,))
+    if not ex:
+        raise HTTPException(404, "expedition not found")
+    out: dict = {"expedition_id": expedition_id, "stations": {}}
+    for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
+        total = _fetch_one("SELECT COUNT(*) c FROM manifests WHERE expedition_id=? AND destination_station=?", (expedition_id, sid))
+        staged = _fetch_one("SELECT COUNT(*) c FROM manifests WHERE expedition_id=? AND destination_station=? AND stage IN ('STATION','CRATE')", (expedition_id, sid))
+        t = (total or {}).get("c", 0)
+        s = (staged or {}).get("c", 0)
+        diesel = _fetch_one("SELECT a.qty FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku='FUEL-DIESEL-001' LIMIT 1", (sid,))
+        tele = _fetch_one("SELECT temp_outside, wind_speed, pressure, dg_load FROM telemetry WHERE station_id=? ORDER BY ts DESC LIMIT 1", (sid,))
+        crew = (_fetch_one("SELECT winter_crew_count FROM stations WHERE id=?", (sid,)) or {}).get("winter_crew_count", 24)
+        days = None
+        warn60 = False
+        if diesel and tele:
+            try:
+                _p, _r, tot, _u = predict_total(tele["temp_outside"], tele["wind_speed"], tele["pressure"], crew, tele["dg_load"], sid)
+                days = round(diesel["qty"] / tot, 1) if tot > 0 else 999
+                warn60 = days is not None and days <= 60
+            except Exception:
+                pass
+        out["stations"][sid] = {"manifest_total": t, "staged": s, "staged_pct": round(100 * s / t, 1) if t else 100.0, "fuel_days": days, "two_month_warning": warn60}
+    return out
+
+@app.get("/procurement/mutual-aid")
+def mutual_aid(station_id: str | None = None):
+    targets = _fetch_all("SELECT sku, target_qty FROM procurement_targets")
+    suggestions: list = []
+    sids = [station_id] if station_id else ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]
+    for t in targets:
+        qtys: dict = {}
+        for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
+            r = _fetch_one("SELECT SUM(a.qty) q FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku=?", (sid, t["sku"]))
+            qtys[sid] = (r or {}).get("q") or 0
+        for sid in sids:
+            need = max(0, (t["target_qty"] or 0) - qtys.get(sid, 0))
+            if need <= 0:
+                continue
+            for other in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
+                if other == sid:
+                    continue
+                surplus = max(0, qtys.get(other, 0) - (t["target_qty"] or 0))
+                if surplus <= 0:
+                    continue
+                legs = _fetch_all("SELECT v.id, v.from_point, v.to_point, v.vessel_imo FROM voyage_legs v JOIN expeditions e ON e.id=v.expedition_id WHERE ((v.from_point LIKE ? OR v.to_point LIKE ?) AND (v.from_point LIKE ? OR v.to_point LIKE ?)) LIMIT 1", (f"%{other.split('-')[1]}%", f"%{other.split('-')[1]}%", f"%{sid.split('-')[1]}%", f"%{sid.split('-')[1]}%"))
+                suggestions.append({"sku": t["sku"], "to_station": sid, "from_station": other, "need": need, "surplus": surplus, "transfer_qty": min(need, surplus), "via_leg": legs[0] if legs else None})
+    return suggestions
+
+@app.get("/timeline")
+def command_timeline(station_id: str | None = None, limit: int = 50):
+    limit = max(1, min(int(limit or 50), 200))
+    items: list = []
+    aq = "SELECT id, actor_id, action, entity, ts FROM audit_log ORDER BY ts DESC LIMIT ?"
+    for r in _fetch_all(aq, (limit,)):
+        items.append({"kind": "audit", "ts": r.get("ts"), "title": r.get("action"), "ref": r.get("entity"), "actor": r.get("actor_id")})
+    eq = "SELECT id, station_id, type, status, ts FROM emergencies ORDER BY ts DESC LIMIT ?"
+    for r in _fetch_all(eq, (limit,)):
+        if station_id and r.get("station_id") != station_id:
+            continue
+        items.append({"kind": "emergency", "ts": r.get("ts"), "title": f"{r.get('type')} {r.get('status')}", "ref": r.get("id"), "station_id": r.get("station_id")})
+    sq = "SELECT id, station_id, destination, safety_status, departure_time FROM field_sorties ORDER BY departure_time DESC LIMIT ?"
+    for r in _fetch_all(sq, (limit,)):
+        if station_id and r.get("station_id") != station_id:
+            continue
+        items.append({"kind": "sortie", "ts": r.get("departure_time"), "title": f"Sortie {r.get('destination')} {r.get('safety_status')}", "ref": r.get("id"), "station_id": r.get("station_id")})
+    items.sort(key=lambda x: str(x.get("ts") or ""), reverse=True)
+    return items[:limit]
+
+@app.get("/overrides")
+def list_overrides(station_id: str | None = None, limit: int = 50):
+    limit = max(1, min(int(limit or 50), 200))
+    if station_id:
+        return _fetch_all("SELECT * FROM decision_overrides WHERE station_id=? ORDER BY ts DESC LIMIT ?", (station_id, limit))
+    return _fetch_all("SELECT * FROM decision_overrides ORDER BY ts DESC LIMIT ?", (limit,))
+
+@app.post("/sorties/check-overdue")
+def check_overdue():
+    now = utc_now()
+    rows = _fetch_all("SELECT id, station_id, lead_personnel_id, destination, expected_return_time FROM field_sorties WHERE safety_status='ACTIVE'")
+    marked: list = []
+    auto_sos: list = []
+    for r in rows:
+        try:
+            import datetime as _dt
+            exp = _dt.datetime.fromisoformat(str(r["expected_return_time"]).replace("Z", "+00:00"))
+            cur = _dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=_dt.timezone.utc)
+            if cur.tzinfo is None:
+                cur = cur.replace(tzinfo=_dt.timezone.utc)
+            late_min = (cur - exp).total_seconds() / 60
+        except Exception:
+            continue
+        if late_min <= 0:
+            continue
+        conn = get_conn()
+        try:
+            if USE_PG:
+                with conn:
+                    with conn.cursor() as cur2:
+                        cur2.execute(q("UPDATE field_sorties SET safety_status='OVERDUE' WHERE id=? AND safety_status='ACTIVE'"), (r["id"],))
+                        cur2.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (r["id"][:8], "AUTO-WATCHDOG", "SORTIE_OVERDUE", "field_sorties", "ACTIVE", "OVERDUE", now))
+            else:
+                conn.execute("UPDATE field_sorties SET safety_status='OVERDUE' WHERE id=? AND safety_status='ACTIVE'", (r["id"],))
+                conn.execute("INSERT OR IGNORE INTO audit_log VALUES (?,?,?,?,?,?,?)", (r["id"][:8], "AUTO-WATCHDOG", "SORTIE_OVERDUE", "field_sorties", "ACTIVE", "OVERDUE", now))
+                conn.commit()
+            marked.append(r["id"])
+        finally:
+            if USE_PG:
+                try:
+                    from .db import release_conn as _rc2
+                    _rc2(conn)
+                except Exception:
+                    pass
+        if late_min >= 30:
+            em_id = f"SOS-{r['id'][-8:]}"
+            ex = _fetch_one("SELECT id FROM emergencies WHERE id=?", (em_id,))
+            if not ex:
+                c3 = get_conn()
+                try:
+                    if USE_PG:
+                        with c3:
+                            with c3.cursor() as cur3:
+                                cur3.execute(q("INSERT INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord, sortie_id) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (em_id, r["station_id"], "SOS_WHITEOUT", "AUTO-WATCHDOG", "ACTIVE", now, r["destination"], r["id"]))
+                    else:
+                        c3.execute("INSERT OR IGNORE INTO emergencies VALUES (?,?,?,?,?,?,?, ?, ?)", (em_id, r["station_id"], "SOS_WHITEOUT", "AUTO-WATCHDOG", "ACTIVE", now, r["destination"], None, r["id"]))
+                        c3.commit()
+                    auto_sos.append(em_id)
+                    notify_gateway(r["station_id"], "emergencies", em_id, "STATUS_CHANGE", {"id": em_id, "type": "SOS_WHITEOUT", "sortie_id": r["id"]})
+                finally:
+                    if USE_PG:
+                        try:
+                            from .db import release_conn as _rc3
+                            _rc3(c3)
+                        except Exception:
+                            pass
+    return {"marked_overdue": marked, "auto_sos": auto_sos, "checked_at": now}
+
+@app.post("/tracking/personnel")
+def update_personnel_position(body: dict):
+    pid = body.get("personnel_id")
+    if not pid:
+        raise HTTPException(400, "personnel_id required")
+    p = _fetch_one("SELECT id, station_id FROM personnel WHERE id=?", (pid,))
+    if not p:
+        raise HTTPException(404, "personnel not found")
+    sid = body.get("station_id") or p["station_id"]
+    now = utc_now()
+    conn = get_conn()
+    try:
+        if USE_PG:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(q("INSERT INTO personnel_positions (personnel_id, x, y, theta, conf, last_sensor_ts, station_id) VALUES (?,?,?,?,?,?,?) ON CONFLICT (personnel_id) DO UPDATE SET x=EXCLUDED.x, y=EXCLUDED.y, theta=EXCLUDED.theta, conf=EXCLUDED.conf, last_sensor_ts=EXCLUDED.last_sensor_ts"), (pid, body.get("x", 0), body.get("y", 0), body.get("theta", 0), body.get("conf", 0.5), now, sid))
+        else:
+            conn.execute("INSERT INTO personnel_positions VALUES (?,?,?,?,?,?,?) ON CONFLICT(personnel_id) DO UPDATE SET x=excluded.x, y=excluded.y, theta=excluded.theta, conf=excluded.conf, last_sensor_ts=excluded.last_sensor_ts", (pid, body.get("x", 0), body.get("y", 0), body.get("theta", 0), body.get("conf", 0.5), now, sid))
+            conn.commit()
+    finally:
+        if USE_PG:
+            try:
+                from .db import release_conn as _rc4
+                _rc4(conn)
+            except Exception:
+                pass
+    return {"personnel_id": pid, "x": body.get("x", 0), "y": body.get("y", 0)}
+
+@app.get("/tracking/personnel")
+def list_personnel_positions(station_id: str | None = None):
+    if station_id:
+        return _fetch_all("SELECT pp.*, p.name FROM personnel_positions pp LEFT JOIN personnel p ON p.id=pp.personnel_id WHERE pp.station_id=?", (station_id,))
+    return _fetch_all("SELECT pp.*, p.name FROM personnel_positions pp LEFT JOIN personnel p ON p.id=pp.personnel_id")
 
 @app.get("/procurement/targets")
 def list_procurement_targets():
@@ -865,6 +1394,14 @@ def assets_bulk_template():
     header = "sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode"
     example = "FUEL-DIESEL-001,Diesel (Winter Grade),FUEL_DIESEL,4200,L,,CRITICAL,C1-K1,FUEL-DIESEL-001"
     return PlainTextResponse(content=f"{header}\n{example}\n", media_type="text/csv", headers={"Content-Disposition": "attachment; filename=template_inventory.csv"})
+
+@app.get("/expeditions/manifests/template")
+def manifest_bulk_template():
+    """Generic AL-1403-style manifest template (owner/project/destination/weight/hazmat/customs)."""
+    from fastapi.responses import PlainTextResponse
+    header = "owner_org,project_code,destination_station,sku,description,qty,unit,weight_kg,hazmat_class,temp_zone,customs_status,biosecurity_status,labelling_code"
+    example = "NCPOR,ATMOS-26,ST-BHARATI,FUEL-DIESEL-001,Diesel winter grade,500,L,420,,AMBIENT,CLEARED,CLEARED,EXP-ANT-46-BHARATI-0001"
+    return PlainTextResponse(content=f"{header}\n{example}\n", media_type="text/csv", headers={"Content-Disposition": "attachment; filename=template_manifest.csv"})
 
 class BulkAssetRow(BaseModel):
     sku: str
@@ -985,7 +1522,7 @@ def ingest(frame: DeltaFrame, request: Request):
         raise HTTPException(413, "patch too large >2KB")
     if len(frame.ulid) != 26:
         raise HTTPException(400, "ulid must be 26 chars")
-    if frame.entity not in ["assets", "indents", "telemetry", "stations", "containers", "crates", "personnel", "field_sorties", "emergencies"]:
+    if frame.entity not in ["assets", "indents", "telemetry", "stations", "containers", "crates", "personnel", "field_sorties", "emergencies", "expeditions", "voyage_legs", "manifests"]:
         raise HTTPException(400, f"unsupported entity {frame.entity}")
     # keep in sync with shared/src/schemas.ts deltaFrameSchema op enum + outbox CHECK
     if frame.op not in ["UPSERT", "DELETE", "CONSUME", "IN", "OUT", "ADJUST"]:
@@ -1050,6 +1587,20 @@ def ingest(frame: DeltaFrame, request: Request):
                     cur.execute(q("INSERT INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,0) ON CONFLICT (device_id) DO UPDATE SET last_acked_ulid=EXCLUDED.last_acked_ulid"), (frame.device_id, ulid))
                     c.commit()
                     notify_gateway(p.get("station_id","ST-BHARATI"), "emergencies", frame.entity_id, "STATUS_CHANGE", p)
+                    return {"status":"APPLIED", "server_version": 0}
+                if frame.entity in ("expeditions", "voyage_legs", "manifests") and frame.op=="UPSERT":
+                    p=frame.patch
+                    tbl = {"expeditions": "expeditions", "voyage_legs": "voyage_legs", "manifests": "manifests"}[frame.entity]
+                    cols = {"expeditions": "(id, program, name, season, status)", "voyage_legs": "(id, expedition_id, seq, from_point, to_point, mode, vessel_imo, status)", "manifests": "(id, expedition_id, destination_station, description, qty, unit, stage)"}[frame.entity]
+                    vals = {"expeditions": (frame.entity_id, p.get("program","ANTARCTIC"), p.get("name","Expedition"), p.get("season","46-ISEA-2026"), p.get("status","PLANNED")), "voyage_legs": (frame.entity_id, p.get("expedition_id","EXP-ANT-46"), p.get("seq",0), p.get("from_point","GOA"), p.get("to_point","MAITRI"), p.get("mode","SEA"), p.get("vessel_imo"), p.get("status","PLANNED")), "manifests": (frame.entity_id, p.get("expedition_id","EXP-ANT-46"), p.get("destination_station","ST-BHARATI"), p.get("description",""), p.get("qty",1), p.get("unit","pcs"), p.get("stage","GOA"))}[frame.entity]
+                    try:
+                        cur.execute(q(f"INSERT INTO {tbl} {cols} VALUES ({','.join(['?']*len(vals))}) ON CONFLICT (id) DO NOTHING"), vals)
+                    except Exception:
+                        pass
+                    cur.execute(q("INSERT INTO dedupe (ulid, processed_at) VALUES (?,?)"), (ulid, now))
+                    cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (ulid, frame.device_id, f"SYNC_{frame.entity.upper()}", tbl, None, str(p), now))
+                    cur.execute(q("INSERT INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,0) ON CONFLICT (device_id) DO UPDATE SET last_acked_ulid=EXCLUDED.last_acked_ulid"), (frame.device_id, ulid))
+                    c.commit()
                     return {"status":"APPLIED", "server_version": 0}
                 cur.execute(q("SELECT qty, version, criticality FROM assets WHERE id=? FOR UPDATE"), (frame.entity_id,))
                 row=cur.fetchone()
@@ -1168,6 +1719,22 @@ def ingest(frame: DeltaFrame, request: Request):
                 conn.execute("UPDATE sync_state SET last_acked_ulid=? WHERE device_id=?", (ulid, frame.device_id))
                 conn.execute("COMMIT")
                 notify_gateway(p.get("station_id","ST-BHARATI"), "emergencies", frame.entity_id, "STATUS_CHANGE", p)
+                return {"status":"APPLIED", "server_version": 0}
+            if frame.entity in ("expeditions", "voyage_legs", "manifests") and frame.op=="UPSERT":
+                p=frame.patch
+                try:
+                    if frame.entity == "expeditions":
+                        conn.execute("INSERT INTO expeditions (id, program, name, season, status) VALUES (?,?,?,?,?) ON CONFLICT(id) DO NOTHING", (frame.entity_id, p.get("program","ANTARCTIC"), p.get("name","Expedition"), p.get("season","46-ISEA-2026"), p.get("status","PLANNED")))
+                    elif frame.entity == "voyage_legs":
+                        conn.execute("INSERT INTO voyage_legs (id, expedition_id, seq, from_point, to_point, mode, vessel_imo, status) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING", (frame.entity_id, p.get("expedition_id","EXP-ANT-46"), p.get("seq",0), p.get("from_point","GOA"), p.get("to_point","MAITRI"), p.get("mode","SEA"), p.get("vessel_imo"), p.get("status","PLANNED")))
+                    else:
+                        conn.execute("INSERT INTO manifests (id, expedition_id, destination_station, description, qty, unit, stage) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING", (frame.entity_id, p.get("expedition_id","EXP-ANT-46"), p.get("destination_station","ST-BHARATI"), p.get("description",""), p.get("qty",1), p.get("unit","pcs"), p.get("stage","GOA")))
+                except Exception:
+                    pass
+                conn.execute("INSERT INTO dedupe (ulid, processed_at) VALUES (?,?)", (ulid, now))
+                conn.execute("INSERT OR IGNORE INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,?)", (frame.device_id, ulid, 0))
+                conn.execute("UPDATE sync_state SET last_acked_ulid=? WHERE device_id=?", (ulid, frame.device_id))
+                conn.execute("COMMIT")
                 return {"status":"APPLIED", "server_version": 0}
             cur=conn.execute("SELECT qty, version, criticality FROM assets WHERE id=?", (frame.entity_id,))
             row=cur.fetchone()

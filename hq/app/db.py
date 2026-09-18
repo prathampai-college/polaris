@@ -67,6 +67,8 @@ def _ensure_sqlite_schema(conn):
             _ensure_physics_params_sqlite(conn)
             _ensure_vessels_sqlite(conn)
             _ensure_dtn_sqlite(conn)
+            _ensure_personnel_sqlite(conn)
+            _ensure_expedition_sqlite(conn)
     except Exception:
         try:
             seed_sqlite(conn)
@@ -234,6 +236,106 @@ DEFAULT_PERSONNEL = [
     ("PER-HIM-02", "ST-HIMADRI", "Meera Pillai", "Marine Biologist", "O+", "+91-9876543219", "ON_STATION")
 ]
 
+DEFAULT_EXPEDITIONS = [
+    ("EXP-ANT-46", "ANTARCTIC", "46th Indian Scientific Expedition to Antarctica", "46-ISEA-2026", "STUFFING", "NCPOR-AO", None),
+    ("EXP-ARC-26", "ARCTIC", "Himadri Arctic Summer Program", "HIM-2026", "PLANNED", "NCPOR-AO", None),
+]
+
+DEFAULT_LEGS = [
+    ("LEG-ANT-01", "EXP-ANT-46", 1, "GOA", "MUMBAI", "SEA", None, None, None, "PLANNED"),
+    ("LEG-ANT-02", "EXP-ANT-46", 2, "MUMBAI", "CAPETOWN", "SEA", None, None, None, "PLANNED"),
+    ("LEG-ANT-03", "EXP-ANT-46", 3, "CAPETOWN", "MAITRI", "SEA", None, None, None, "PLANNED"),
+    ("LEG-ANT-04", "EXP-ANT-46", 4, "MAITRI", "BHARATI", "TRAVERSE", None, None, None, "PLANNED"),
+    ("LEG-ARC-01", "EXP-ARC-26", 1, "GOA", "HIMADRI", "AIR", None, None, None, "PLANNED"),
+]
+
+def _ensure_expedition_sqlite(conn):
+    try:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS expeditions (
+            id TEXT PRIMARY KEY, program TEXT CHECK(program IN ('ANTARCTIC','ARCTIC')) DEFAULT 'ANTARCTIC',
+            name TEXT, season TEXT,
+            status TEXT CHECK(status IN ('PLANNED','STUFFING','IN_TRANSIT','DELIVERED','WINTER_OVER','COMPLETE')) DEFAULT 'PLANNED',
+            created_by TEXT, created_at TEXT, vector_clock TEXT);
+        CREATE TABLE IF NOT EXISTS voyage_legs (
+            id TEXT PRIMARY KEY, expedition_id TEXT REFERENCES expeditions(id), seq INTEGER DEFAULT 0,
+            from_point TEXT, to_point TEXT, mode TEXT CHECK(mode IN ('SEA','AIR','TRAVERSE')) DEFAULT 'SEA',
+            vessel_imo TEXT, eta_depart TEXT, eta_arrive TEXT,
+            status TEXT CHECK(status IN ('PLANNED','DEPARTED','ARRIVED','DELAYED')) DEFAULT 'PLANNED');
+        CREATE TABLE IF NOT EXISTS manifests (
+            id TEXT PRIMARY KEY, expedition_id TEXT REFERENCES expeditions(id),
+            owner_org TEXT, project_code TEXT, destination_station TEXT,
+            sku TEXT, description TEXT, qty REAL, unit TEXT, weight_kg REAL, hazmat_class TEXT,
+            temp_zone TEXT CHECK(temp_zone IN ('AMBIENT','COLD','HAZMAT')) DEFAULT 'AMBIENT',
+            customs_status TEXT CHECK(customs_status IN ('PENDING','CLEARED','EXEMPT')) DEFAULT 'PENDING',
+            biosecurity_status TEXT CHECK(biosecurity_status IN ('PENDING','CLEARED','EXEMPT')) DEFAULT 'PENDING',
+            labelling_code TEXT UNIQUE, container_id TEXT, crate_id TEXT,
+            stage TEXT CHECK(stage IN ('GOA','MUMBAI','CAPETOWN','VESSEL','STATION','CRATE')) DEFAULT 'GOA',
+            vector_clock TEXT);
+        CREATE TABLE IF NOT EXISTS decision_overrides (
+            id TEXT PRIMARY KEY, ref_type TEXT, ref_id TEXT, station_id TEXT,
+            actor_id TEXT, stated_risk TEXT, action TEXT, ts TEXT);
+        CREATE TABLE IF NOT EXISTS personnel_positions (
+            personnel_id TEXT PRIMARY KEY, x REAL, y REAL, theta REAL, conf REAL,
+            last_sensor_ts TEXT, station_id TEXT);
+        CREATE INDEX IF NOT EXISTS idx_expeditions_program ON expeditions(program, status);
+        CREATE INDEX IF NOT EXISTS idx_legs_expedition ON voyage_legs(expedition_id, seq);
+        CREATE INDEX IF NOT EXISTS idx_manifests_expedition ON manifests(expedition_id, destination_station, stage);
+        CREATE INDEX IF NOT EXISTS idx_overrides_station ON decision_overrides(station_id, ts);
+        CREATE INDEX IF NOT EXISTS idx_personnel_positions_station ON personnel_positions(station_id);
+        """)
+        conn.commit()
+    except Exception:
+        pass
+    # triage migration: rebuild emergencies if old CHECK without ACK
+    try:
+        row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='emergencies'").fetchone()
+        sql = (row[0] if row else "") or ""
+        if "ACK" not in sql:
+            conn.executescript("""
+            ALTER TABLE emergencies RENAME TO emergencies_old;
+            CREATE TABLE emergencies (
+                id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id),
+                type TEXT CHECK(type IN ('SOS_MEDICAL','SOS_FIRE','SOS_WHITEOUT','SOS_POWER','SOS_VEHICLE')),
+                reported_by TEXT,
+                status TEXT CHECK(status IN ('ACTIVE','ACK','RESPONDING','RESOLVED')) DEFAULT 'ACTIVE',
+                ts TEXT, location_coord TEXT, assignee TEXT, sortie_id TEXT REFERENCES field_sorties(id));
+            INSERT OR IGNORE INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord)
+                SELECT id, station_id, type, reported_by, status, ts, location_coord FROM emergencies_old;
+            DROP TABLE emergencies_old;
+            CREATE INDEX IF NOT EXISTS idx_emergencies_station ON emergencies(station_id, status);
+            """)
+            conn.commit()
+    except Exception:
+        pass
+    # assignee/sortie_id columns on pre-migration DBs
+    for col in ["assignee", "sortie_id"]:
+        try:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(emergencies)").fetchall()]
+            if col not in cols:
+                conn.execute(f"ALTER TABLE emergencies ADD COLUMN {col} TEXT")
+                conn.commit()
+        except Exception:
+            pass
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(field_sorties)").fetchall()]
+        if "expedition_id" not in cols:
+            conn.execute("ALTER TABLE field_sorties ADD COLUMN expedition_id TEXT")
+            conn.commit()
+    except Exception:
+        pass
+    # seed expeditions + legs idempotently
+    try:
+        cur = conn.execute("SELECT COUNT(*) FROM expeditions")
+        if cur.fetchone()[0] == 0:
+            for r in DEFAULT_EXPEDITIONS:
+                conn.execute("INSERT OR IGNORE INTO expeditions VALUES (?,?,?,?,?,?,?,?)", (*r, None))
+            for r in DEFAULT_LEGS:
+                conn.execute("INSERT OR IGNORE INTO voyage_legs VALUES (?,?,?,?,?,?,?,?,?,?)", r)
+            conn.commit()
+    except Exception:
+        pass
+
 def _ensure_personnel_sqlite(conn):
     try:
         conn.executescript("""
@@ -331,6 +433,14 @@ def init_db():
                         "CREATE TABLE IF NOT EXISTS dtn_bundles (bundle_id TEXT PRIMARY KEY, src TEXT, dst_station TEXT, payload BYTEA, vc TEXT, custody INTEGER DEFAULT 1, created_at TEXT, ttl INTEGER DEFAULT 86400)",
                         "CREATE TABLE IF NOT EXISTS asset_positions (asset_id TEXT PRIMARY KEY, x DOUBLE PRECISION, y DOUBLE PRECISION, theta DOUBLE PRECISION, conf DOUBLE PRECISION, last_sensor_ts TEXT, station_id TEXT REFERENCES stations(id))",
                         "CREATE TABLE IF NOT EXISTS snn_state (device_id TEXT PRIMARY KEY, last_features TEXT, spike_count INTEGER DEFAULT 0, last_infer_ts TEXT, total_saved_mw DOUBLE PRECISION DEFAULT 0)",
+                        "CREATE TABLE IF NOT EXISTS personnel (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), name TEXT, role TEXT, blood_group TEXT, emergency_contact TEXT, status TEXT DEFAULT 'ON_STATION')",
+                        "CREATE TABLE IF NOT EXISTS field_sorties (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), lead_personnel_id TEXT, destination TEXT, departure_time TEXT, expected_return_time TEXT, actual_return_time TEXT, safety_status TEXT DEFAULT 'PLANNED', expedition_id TEXT)",
+                        "CREATE TABLE IF NOT EXISTS emergencies (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), type TEXT, reported_by TEXT, status TEXT DEFAULT 'ACTIVE', ts TEXT, location_coord TEXT, assignee TEXT, sortie_id TEXT)",
+                        "CREATE TABLE IF NOT EXISTS expeditions (id TEXT PRIMARY KEY, program TEXT DEFAULT 'ANTARCTIC', name TEXT, season TEXT, status TEXT DEFAULT 'PLANNED', created_by TEXT, created_at TEXT, vector_clock TEXT)",
+                        "CREATE TABLE IF NOT EXISTS voyage_legs (id TEXT PRIMARY KEY, expedition_id TEXT REFERENCES expeditions(id), seq INTEGER DEFAULT 0, from_point TEXT, to_point TEXT, mode TEXT DEFAULT 'SEA', vessel_imo TEXT, eta_depart TEXT, eta_arrive TEXT, status TEXT DEFAULT 'PLANNED')",
+                        "CREATE TABLE IF NOT EXISTS manifests (id TEXT PRIMARY KEY, expedition_id TEXT REFERENCES expeditions(id), owner_org TEXT, project_code TEXT, destination_station TEXT, sku TEXT, description TEXT, qty DOUBLE PRECISION, unit TEXT, weight_kg DOUBLE PRECISION, hazmat_class TEXT, temp_zone TEXT DEFAULT 'AMBIENT', customs_status TEXT DEFAULT 'PENDING', biosecurity_status TEXT DEFAULT 'PENDING', labelling_code TEXT UNIQUE, container_id TEXT, crate_id TEXT, stage TEXT DEFAULT 'GOA', vector_clock TEXT)",
+                        "CREATE TABLE IF NOT EXISTS decision_overrides (id TEXT PRIMARY KEY, ref_type TEXT, ref_id TEXT, station_id TEXT, actor_id TEXT, stated_risk TEXT, action TEXT, ts TEXT)",
+                        "CREATE TABLE IF NOT EXISTS personnel_positions (personnel_id TEXT PRIMARY KEY, x DOUBLE PRECISION, y DOUBLE PRECISION, theta DOUBLE PRECISION, conf DOUBLE PRECISION, last_sensor_ts TEXT, station_id TEXT)",
                     ]:
                         try: cur.execute(ddl)
                         except Exception: pass
@@ -340,9 +450,24 @@ def init_db():
                         "ALTER TABLE outbox ADD COLUMN IF NOT EXISTS vector_clock TEXT",
                         "ALTER TABLE outbox ADD COLUMN IF NOT EXISTS local_coord TEXT",
                         "ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS vector_clock TEXT",
+                        "ALTER TABLE emergencies ADD COLUMN IF NOT EXISTS assignee TEXT",
+                        "ALTER TABLE emergencies ADD COLUMN IF NOT EXISTS sortie_id TEXT",
+                        "ALTER TABLE field_sorties ADD COLUMN IF NOT EXISTS expedition_id TEXT",
                     ]:
                         try: cur.execute(alter)
                         except Exception: pass
+                    # seed expeditions on PG when empty
+                    try:
+                        cur.execute("SELECT COUNT(*) FROM expeditions")
+                        if cur.fetchone()[0] == 0:
+                            for r in DEFAULT_EXPEDITIONS:
+                                try: cur.execute("INSERT INTO expeditions VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING", (*r, None))
+                                except Exception: pass
+                            for r in DEFAULT_LEGS:
+                                try: cur.execute("INSERT INTO voyage_legs VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING", r)
+                                except Exception: pass
+                    except Exception:
+                        pass
         print(f"[hq] Postgres init ok {DATABASE_URL.split('@')[-1]}")
     else:
         # Drop any cached handle first: it may point at an unlinked inode if
@@ -370,6 +495,7 @@ def init_db():
             _ensure_vessels_sqlite(conn)
             _ensure_dtn_sqlite(conn)
         _ensure_personnel_sqlite(conn)
+        _ensure_expedition_sqlite(conn)
         print(f"[hq] SQLite init ok {HQ_DB_PATH} (fallback, no Docker)")
 
 def seed_procurement_targets(cur):
@@ -406,6 +532,8 @@ def seed_sqlite(conn):
             conn.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
         for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
             conn.execute("INSERT OR IGNORE INTO physics_params VALUES (?,?,?,?,?,?)", (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
+        _ensure_personnel_sqlite(conn)
+        _ensure_expedition_sqlite(conn)
         conn.commit()
         return
     # ensure procurement even without seed
