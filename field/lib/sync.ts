@@ -100,6 +100,12 @@ export class SyncWorker {
           } else if (frame.entity === 'emergencies') {
             const { applyDownstreamEmergency } = await import('./db');
             await applyDownstreamEmergency(String(frame.entity_id), frame.patch as Record<string, unknown>);
+          } else if (frame.entity === 'expeditions') {
+            const { applyDownstreamExpedition } = await import('./db');
+            await applyDownstreamExpedition(String(frame.entity_id), frame.patch as Record<string, unknown>);
+          } else if (frame.entity === 'manifests' || frame.entity === 'voyage_legs') {
+            const { applyDownstreamManifest } = await import('./db');
+            if (frame.entity === 'manifests') await applyDownstreamManifest(String(frame.entity_id), frame.patch as Record<string, unknown>);
           }
           this.onDownstreamDelta?.(frame);
           return;

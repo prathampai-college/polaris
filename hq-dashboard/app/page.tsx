@@ -14,7 +14,7 @@ function _resolveHQ(): string {
 }
 const HQ = _resolveHQ();
 
-type Tab = 'overview' | 'forecast' | 'stations' | 'indents' | 'inventory' | 'audit' | 'locate' | 'personnel';
+type Tab = 'overview' | 'forecast' | 'stations' | 'indents' | 'inventory' | 'audit' | 'locate' | 'personnel' | 'expeditions' | 'command';
 
 const Icons = {
   grid: () => (
@@ -101,6 +101,11 @@ export default function HQPage() {
   const [emergencies, setEmergencies] = useState<any[]>([]);
   const [personnel, setPersonnel] = useState<any[]>([]);
   const [sorties, setSorties] = useState<any[]>([]);
+  const [expeditions, setExpeditions] = useState<any[]>([]);
+  const [readiness, setReadiness] = useState<any>(null);
+  const [mutualAid, setMutualAid] = useState<any[]>([]);
+  const [timeline, setTimeline] = useState<any[]>([]);
+  const [overrides, setOverrides] = useState<any[]>([]);
   const [tab, setTab] = useState<Tab>('overview');
   const [indentFilter, setIndentFilter] = useState<string>('ALL');
   const [stationQ, setStationQ] = useState('');
@@ -109,7 +114,7 @@ export default function HQPage() {
   const [toast, setToast] = useState<string | null>(null);
 
   const activeEmergencies = useMemo(() => {
-    return emergencies.filter((e: any) => e.status === 'ACTIVE');
+    return emergencies.filter((e: any) => e.status !== 'RESOLVED');
   }, [emergencies]);
 
   // New Indent Modal in HQ
@@ -129,20 +134,26 @@ export default function HQPage() {
     setTimeout(() => setToast(null), 2500);
   }, []);
 
-  async function resolveEmergencyHQ(emergencyId: string) {
+  async function triageEmergencyHQ(emergencyId: string, status: string) {
     try {
       const res = await fetch(`${HQ}/emergency/${emergencyId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', ...headers() },
-        body: JSON.stringify({ status: 'RESOLVED' }),
+        body: JSON.stringify({ status, actor_id: 'HQ_COMMAND' }),
       });
       if (res.ok) {
-        pushToast('Emergency marked RESOLVED at NCPOR Central Command');
+        pushToast(`Emergency → ${status}`);
         load();
+      } else {
+        pushToast(`Triage rejected: ${(await res.text()).slice(0, 80)}`);
       }
     } catch (e: any) {
       pushToast(e.message);
     }
+  }
+
+  async function resolveEmergencyHQ(emergencyId: string) {
+    return triageEmergencyHQ(emergencyId, 'RESOLVED');
   }
 
   async function doLogin() {
@@ -198,6 +209,12 @@ export default function HQPage() {
         fetch(`${HQ}/personnel?station_id=${selectedStation}`, { headers: h }).then((r) => r.json()).catch(() => []),
         fetch(`${HQ}/sorties?station_id=${selectedStation}`, { headers: h }).then((r) => r.json()).catch(() => []),
       ]);
+      const [exps, aid, tl2, ovr] = await Promise.all([
+        fetch(`${HQ}/expeditions`, { headers: h }).then((r) => r.json()).catch(() => []),
+        fetch(`${HQ}/procurement/mutual-aid`, { headers: h }).then((r) => r.json()).catch(() => []),
+        fetch(`${HQ}/timeline?limit=30`, { headers: h }).then((r) => r.json()).catch(() => []),
+        fetch(`${HQ}/overrides?limit=20`, { headers: h }).then((r) => r.json()).catch(() => []),
+      ]);
 
       setStations(s || []);
       setAssets(a || []);
@@ -210,6 +227,13 @@ export default function HQPage() {
       setEmergencies(em || []);
       setPersonnel(per || []);
       setSorties(sor || []);
+      setExpeditions(exps || []);
+      setMutualAid(aid || []);
+      setTimeline(tl2 || []);
+      setOverrides(ovr || []);
+      if (Array.isArray(exps) && exps.length) {
+        fetch(`${HQ}/expeditions/${exps[0].id}/readiness`, { headers: h }).then((r) => r.json()).then(setReadiness).catch(() => {});
+      }
     } catch (e: any) {
       setMsg(e.message);
     }
@@ -273,7 +297,7 @@ export default function HQPage() {
   // Tab deep link via hash
   useEffect(() => {
     const h = location.hash.replace('#', '') as Tab;
-    if (h && ['overview', 'forecast', 'stations', 'indents', 'inventory', 'audit', 'locate', 'personnel'].includes(h)) {
+    if (h && ['overview', 'forecast', 'stations', 'indents', 'inventory', 'audit', 'locate', 'personnel', 'expeditions', 'command'].includes(h)) {
       setTab(h);
     }
   }, []);
@@ -526,6 +550,8 @@ export default function HQPage() {
           <div className="card p-2 space-y-1">
             {[
               { id: 'overview', label: 'Fleet Overview', icon: Icons.grid, desc: '3 Polar Stations' },
+              { id: 'command', label: 'Command Timeline', icon: Icons.log, desc: `${timeline.length} events` },
+              { id: 'expeditions', label: 'Expedition Planner', icon: Icons.file, desc: `${expeditions.length} expeditions` },
               { id: 'forecast', label: 'Thermo AI Forecast', icon: Icons.thermo, desc: 'Physics + ML Model' },
               { id: 'personnel', label: 'Personnel & Safety', icon: Icons.users, desc: `${personnel.length} crew · ${activeEmergencies.length} alert` },
               { id: 'stations', label: 'Station Assets', icon: Icons.map, desc: 'Containers & Crates' },
@@ -1165,14 +1191,32 @@ export default function HQPage() {
                           </div>
                         </div>
 
-                        <div>
+                        <div className="flex gap-2">
                           {!isResolved ? (
-                            <button
-                              onClick={() => resolveEmergencyHQ(em.id)}
-                              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition shadow-md"
-                            >
-                              Mark Resolved ✓
-                            </button>
+                            <>
+                              {em.status === 'ACTIVE' && (
+                                <button
+                                  onClick={() => triageEmergencyHQ(em.id, 'ACK')}
+                                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition shadow-md"
+                                >
+                                  ACK
+                                </button>
+                              )}
+                              {(em.status === 'ACTIVE' || em.status === 'ACK') && (
+                                <button
+                                  onClick={() => triageEmergencyHQ(em.id, 'RESPONDING')}
+                                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition shadow-md"
+                                >
+                                  Responding →
+                                </button>
+                              )}
+                              <button
+                                onClick={() => resolveEmergencyHQ(em.id)}
+                                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition shadow-md"
+                              >
+                                Resolved ✓
+                              </button>
+                            </>
                           ) : (
                             <span className="text-xs font-mono text-emerald-400 font-bold">RESOLVED ✓</span>
                           )}
@@ -1300,6 +1344,82 @@ export default function HQPage() {
                     )}
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {tab === 'expeditions' && (
+            <div className="space-y-4">
+              <div className="card p-5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="font-bold text-base text-white">Expedition Planner — ISEA Antarctic + Himadri Arctic</h2>
+                    <p className="text-xs text-white/50">{expeditions.length} expeditions · custody stages GOA→MUMBAI→CAPETOWN→VESSEL→STATION→CRATE</p>
+                  </div>
+                </div>
+                <div className="grid md:grid-cols-2 gap-3">
+                  {expeditions.map((e: any) => (
+                    <div key={e.id} className="bg-black/40 border border-white/10 rounded-xl p-4 space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${e.program === 'ARCTIC' ? 'bg-cyan-500/15 text-cyan-300' : 'bg-teal-500/15 text-teal-300'}`}>{e.program}</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-white/70 font-mono">{e.status}</span>
+                      </div>
+                      <div className="font-bold text-sm text-white">{e.name}</div>
+                      <div className="text-[11px] text-white/50 font-mono">{e.season} • {e.id}</div>
+                    </div>
+                  ))}
+                  {expeditions.length === 0 && <div className="text-xs text-white/40">No expeditions yet.</div>}
+                </div>
+              </div>
+              {readiness && (
+                <div className="card p-5 space-y-3">
+                  <h3 className="font-bold text-base text-white">Station readiness — {readiness.expedition_id}</h3>
+                  <div className="grid md:grid-cols-3 gap-3">
+                    {Object.entries(readiness.stations || {}).map(([sid, r]: any) => (
+                      <div key={sid} className="bg-black/40 border border-white/10 rounded-xl p-4 space-y-1">
+                        <div className="font-bold text-sm text-white">{sid}</div>
+                        <div className="text-xs text-white/60 font-mono">{r.staged}/{r.manifest_total} staged ({r.staged_pct}%)</div>
+                        <div className="text-xs text-white/60 font-mono">Fuel: {r.fuel_days ?? '—'} days {r.two_month_warning ? '⚠️ 60-day watch' : ''}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="card p-5 space-y-3">
+                <h3 className="font-bold text-base text-white">Mutual aid suggestions</h3>
+                {mutualAid.length === 0 && <div className="text-xs text-white/40">No inter-station transfers needed — all stations above target.</div>}
+                {mutualAid.slice(0, 8).map((m: any, i: number) => (
+                  <div key={i} className="bg-black/40 border border-white/10 rounded-xl p-3 text-xs text-white/70 font-mono">
+                    {m.sku}: {m.from_station} (surplus {m.surplus}) → {m.to_station} (need {m.need}) — transfer {m.transfer_qty}{m.via_leg ? ` via ${m.via_leg.from_point}→${m.via_leg.to_point}` : ' (no leg on record)'}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {tab === 'command' && (
+            <div className="space-y-4">
+              <div className="card p-5 space-y-3">
+                <h2 className="font-bold text-base text-white">Command timeline — all stations</h2>
+                <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
+                  {timeline.map((t: any, i: number) => (
+                    <div key={i} className="bg-black/40 border border-white/10 rounded-xl px-3 py-2 flex items-center gap-3 text-xs">
+                      <span className={`px-2 py-0.5 rounded-full font-bold ${t.kind === 'emergency' ? 'bg-red-500/20 text-red-300' : t.kind === 'sortie' ? 'bg-cyan-500/15 text-cyan-300' : 'bg-white/10 text-white/60'}`}>{t.kind}</span>
+                      <span className="text-white/80 flex-1 truncate">{t.title}</span>
+                      <span className="font-mono text-white/40">{String(t.ts || '').slice(0, 19).replace('T', ' ')}</span>
+                    </div>
+                  ))}
+                  {timeline.length === 0 && <div className="text-xs text-white/40">No events yet.</div>}
+                </div>
+              </div>
+              <div className="card p-5 space-y-3">
+                <h3 className="font-bold text-base text-white">Decision overrides — who overrode what risk</h3>
+                {overrides.length === 0 && <div className="text-xs text-white/40">No overrides recorded.</div>}
+                {overrides.map((o: any) => (
+                  <div key={o.id} className="bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-xs text-white/70 font-mono">
+                    {o.ts?.slice(0, 19).replace('T', ' ')} • {o.actor_id} • {o.ref_type} {o.ref_id} • {o.action} • risk: {o.stated_risk}
+                  </div>
+                ))}
               </div>
             </div>
           )}
