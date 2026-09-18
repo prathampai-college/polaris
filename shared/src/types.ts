@@ -33,7 +33,7 @@ export interface SyncState { device_id: string; last_acked_ulid: string | null; 
 export type PersonnelStatus = 'ON_STATION' | 'FIELD_SORTIE' | 'IN_TRANSIT' | 'EVACUATED';
 export type SortieSafetyStatus = 'PLANNED' | 'ACTIVE' | 'RETURNED' | 'OVERDUE' | 'EMERGENCY';
 export type EmergencyType = 'SOS_MEDICAL' | 'SOS_FIRE' | 'SOS_WHITEOUT' | 'SOS_POWER' | 'SOS_VEHICLE';
-export type EmergencyStatus = 'ACTIVE' | 'RESOLVED';
+export type EmergencyStatus = 'ACTIVE' | 'ACK' | 'RESPONDING' | 'RESOLVED';
 
 export interface Personnel {
   id: string;
@@ -64,6 +64,70 @@ export interface Emergency {
   status: EmergencyStatus;
   ts: string;
   location_coord?: string | null;
+  assignee?: string | null;
+  sortie_id?: string | null;
+}
+
+export type ExpeditionProgram = 'ANTARCTIC' | 'ARCTIC';
+export type ExpeditionStatus = 'PLANNED' | 'STUFFING' | 'IN_TRANSIT' | 'DELIVERED' | 'WINTER_OVER' | 'COMPLETE';
+export type LegMode = 'SEA' | 'AIR' | 'TRAVERSE';
+export type LegStatus = 'PLANNED' | 'DEPARTED' | 'ARRIVED' | 'DELAYED';
+export type ManifestStage = 'GOA' | 'MUMBAI' | 'CAPETOWN' | 'VESSEL' | 'STATION' | 'CRATE';
+export type TempZone = 'AMBIENT' | 'COLD' | 'HAZMAT';
+
+export interface Expedition {
+  id: string;
+  program: ExpeditionProgram;
+  name: string;
+  season: string;
+  status: ExpeditionStatus;
+  created_by?: string;
+  created_at?: string;
+}
+
+export interface VoyageLeg {
+  id: string;
+  expedition_id: string;
+  seq: number;
+  from_point: string;
+  to_point: string;
+  mode: LegMode;
+  vessel_imo?: string | null;
+  eta_depart?: string | null;
+  eta_arrive?: string | null;
+  status: LegStatus;
+}
+
+export interface ManifestRow {
+  id: string;
+  expedition_id: string;
+  owner_org: string;
+  project_code: string;
+  destination_station: string;
+  sku?: string | null;
+  description: string;
+  qty: number;
+  unit: string;
+  weight_kg?: number | null;
+  hazmat_class?: string | null;
+  temp_zone: TempZone;
+  customs_status: string;
+  biosecurity_status: string;
+  labelling_code: string;
+  container_id?: string | null;
+  crate_id?: string | null;
+  stage: ManifestStage;
+}
+
+export interface DecisionOverride {
+  id: string;
+  ref_type: 'EMERGENCY' | 'INDENT' | 'SORTIE';
+  ref_id: string;
+  station_id: string;
+  actor_id: string;
+  stated_risk?: string | null;
+  action: string;
+  ts: string;
 }
 
 export type VectorClock = Record<string, number>;
@@ -94,7 +158,7 @@ export interface DownstreamDeltaFrame {
   type: 'DOWNSTREAM_DELTA';
   ulid: string;
   station_id: string;
-  entity: 'indents' | 'assets' | 'telemetry' | 'vessels' | 'personnel' | 'field_sorties' | 'emergencies';
+  entity: 'indents' | 'assets' | 'telemetry' | 'vessels' | 'personnel' | 'field_sorties' | 'emergencies' | 'expeditions' | 'voyage_legs' | 'manifests';
   entity_id: string;
   op: 'UPSERT' | 'STATUS_CHANGE' | 'DELETE';
   patch: Record<string, unknown>;

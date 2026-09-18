@@ -192,9 +192,79 @@ CREATE TABLE IF NOT EXISTS emergencies (
   station_id TEXT REFERENCES stations(id),
   type TEXT CHECK(type IN ('SOS_MEDICAL','SOS_FIRE','SOS_WHITEOUT','SOS_POWER','SOS_VEHICLE')),
   reported_by TEXT,
-  status TEXT CHECK(status IN ('ACTIVE','RESOLVED')) DEFAULT 'ACTIVE',
+  status TEXT CHECK(status IN ('ACTIVE','ACK','RESPONDING','RESOLVED')) DEFAULT 'ACTIVE',
   ts TEXT,
-  location_coord TEXT
+  location_coord TEXT,
+  assignee TEXT,
+  sortie_id TEXT REFERENCES field_sorties(id)
+);
+
+-- Expedition planning (ISEA Antarctic + Himadri Arctic programs)
+CREATE TABLE IF NOT EXISTS expeditions (
+  id TEXT PRIMARY KEY,
+  program TEXT CHECK(program IN ('ANTARCTIC','ARCTIC')) DEFAULT 'ANTARCTIC',
+  name TEXT,
+  season TEXT,
+  status TEXT CHECK(status IN ('PLANNED','STUFFING','IN_TRANSIT','DELIVERED','WINTER_OVER','COMPLETE')) DEFAULT 'PLANNED',
+  created_by TEXT,
+  created_at TEXT,
+  vector_clock TEXT
+);
+
+CREATE TABLE IF NOT EXISTS voyage_legs (
+  id TEXT PRIMARY KEY,
+  expedition_id TEXT REFERENCES expeditions(id),
+  seq INTEGER DEFAULT 0,
+  from_point TEXT,
+  to_point TEXT,
+  mode TEXT CHECK(mode IN ('SEA','AIR','TRAVERSE')) DEFAULT 'SEA',
+  vessel_imo TEXT REFERENCES vessels(imo),
+  eta_depart TEXT,
+  eta_arrive TEXT,
+  status TEXT CHECK(status IN ('PLANNED','DEPARTED','ARRIVED','DELAYED')) DEFAULT 'PLANNED'
+);
+
+CREATE TABLE IF NOT EXISTS manifests (
+  id TEXT PRIMARY KEY,
+  expedition_id TEXT REFERENCES expeditions(id),
+  owner_org TEXT,
+  project_code TEXT,
+  destination_station TEXT REFERENCES stations(id),
+  sku TEXT,
+  description TEXT,
+  qty REAL,
+  unit TEXT,
+  weight_kg REAL,
+  hazmat_class TEXT,
+  temp_zone TEXT CHECK(temp_zone IN ('AMBIENT','COLD','HAZMAT')) DEFAULT 'AMBIENT',
+  customs_status TEXT CHECK(customs_status IN ('PENDING','CLEARED','EXEMPT')) DEFAULT 'PENDING',
+  biosecurity_status TEXT CHECK(biosecurity_status IN ('PENDING','CLEARED','EXEMPT')) DEFAULT 'PENDING',
+  labelling_code TEXT UNIQUE,
+  container_id TEXT REFERENCES containers(id),
+  crate_id TEXT REFERENCES crates(id),
+  stage TEXT CHECK(stage IN ('GOA','MUMBAI','CAPETOWN','VESSEL','STATION','CRATE')) DEFAULT 'GOA',
+  vector_clock TEXT
+);
+
+CREATE TABLE IF NOT EXISTS decision_overrides (
+  id TEXT PRIMARY KEY,
+  ref_type TEXT CHECK(ref_type IN ('EMERGENCY','INDENT','SORTIE')) DEFAULT 'EMERGENCY',
+  ref_id TEXT,
+  station_id TEXT REFERENCES stations(id),
+  actor_id TEXT,
+  stated_risk TEXT,
+  action TEXT,
+  ts TEXT
+);
+
+CREATE TABLE IF NOT EXISTS personnel_positions (
+  personnel_id TEXT PRIMARY KEY REFERENCES personnel(id),
+  x REAL,
+  y REAL,
+  theta REAL,
+  conf REAL,
+  last_sensor_ts TEXT,
+  station_id TEXT REFERENCES stations(id)
 );
 
 -- Indexes
@@ -207,4 +277,9 @@ CREATE INDEX IF NOT EXISTS idx_asset_positions_station ON asset_positions(statio
 CREATE INDEX IF NOT EXISTS idx_personnel_station ON personnel(station_id);
 CREATE INDEX IF NOT EXISTS idx_sorties_station ON field_sorties(station_id);
 CREATE INDEX IF NOT EXISTS idx_emergencies_station ON emergencies(station_id, status);
+CREATE INDEX IF NOT EXISTS idx_expeditions_program ON expeditions(program, status);
+CREATE INDEX IF NOT EXISTS idx_legs_expedition ON voyage_legs(expedition_id, seq);
+CREATE INDEX IF NOT EXISTS idx_manifests_expedition ON manifests(expedition_id, destination_station, stage);
+CREATE INDEX IF NOT EXISTS idx_overrides_station ON decision_overrides(station_id, ts);
+CREATE INDEX IF NOT EXISTS idx_personnel_positions_station ON personnel_positions(station_id);
 
