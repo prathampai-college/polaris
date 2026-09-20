@@ -184,7 +184,9 @@ CREATE TABLE IF NOT EXISTS field_sorties (
   departure_time TEXT,
   expected_return_time TEXT,
   actual_return_time TEXT,
-  safety_status TEXT CHECK(safety_status IN ('PLANNED','ACTIVE','RETURNED','OVERDUE','EMERGENCY')) DEFAULT 'PLANNED'
+  safety_status TEXT CHECK(safety_status IN ('PLANNED','ACTIVE','RETURNED','OVERDUE','EMERGENCY')) DEFAULT 'PLANNED',
+  expedition_id TEXT REFERENCES expeditions(id),
+  buddy_personnel_id TEXT REFERENCES personnel(id)
 );
 
 CREATE TABLE IF NOT EXISTS emergencies (
@@ -267,6 +269,30 @@ CREATE TABLE IF NOT EXISTS personnel_positions (
   station_id TEXT REFERENCES stations(id)
 );
 
+CREATE TABLE IF NOT EXISTS triage_sla (
+  from_status TEXT,
+  to_status TEXT,
+  due_minutes INTEGER NOT NULL,
+  PRIMARY KEY (from_status, to_status)
+);
+
+CREATE TABLE IF NOT EXISTS freight_rates (
+  mode TEXT PRIMARY KEY CHECK(mode IN ('SEA','AIR','TRAVERSE')),
+  cost_per_kg REAL NOT NULL,
+  base_cost REAL NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS lots (
+  id TEXT PRIMARY KEY,
+  asset_sku TEXT NOT NULL REFERENCES assets(sku),
+  lot_code TEXT UNIQUE NOT NULL,
+  qty REAL NOT NULL,
+  expiry_date TEXT,
+  crate_id TEXT REFERENCES crates(id),
+  received_ts TEXT,
+  vector_clock TEXT
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_assets_crate ON assets(crate_id);
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status, created_at);
@@ -282,4 +308,6 @@ CREATE INDEX IF NOT EXISTS idx_legs_expedition ON voyage_legs(expedition_id, seq
 CREATE INDEX IF NOT EXISTS idx_manifests_expedition ON manifests(expedition_id, destination_station, stage);
 CREATE INDEX IF NOT EXISTS idx_overrides_station ON decision_overrides(station_id, ts);
 CREATE INDEX IF NOT EXISTS idx_personnel_positions_station ON personnel_positions(station_id);
+CREATE INDEX IF NOT EXISTS idx_lots_sku ON lots(asset_sku, expiry_date);
+CREATE INDEX IF NOT EXISTS idx_sorties_buddy ON field_sorties(buddy_personnel_id);
 

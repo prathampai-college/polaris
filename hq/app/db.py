@@ -317,10 +317,52 @@ def _ensure_expedition_sqlite(conn):
                 conn.commit()
         except Exception:
             pass
+    for col, ddl in [
+        ("expedition_id", "ALTER TABLE field_sorties ADD COLUMN expedition_id TEXT"),
+        ("buddy_personnel_id", "ALTER TABLE field_sorties ADD COLUMN buddy_personnel_id TEXT"),
+        ("program", "ALTER TABLE personnel ADD COLUMN program TEXT DEFAULT 'BOTH'"),
+    ]:
+        try:
+            cols = [r[1] for r in conn.execute(f"PRAGMA table_info({col == 'program' and 'personnel' or 'field_sorties'})").fetchall()]
+            if col not in cols:
+                conn.execute(ddl)
+                conn.commit()
+        except Exception:
+            pass
+    # triage_sla + freight_rates + lots
     try:
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(field_sorties)").fetchall()]
-        if "expedition_id" not in cols:
-            conn.execute("ALTER TABLE field_sorties ADD COLUMN expedition_id TEXT")
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS triage_sla (from_status TEXT, to_status TEXT, due_minutes INTEGER NOT NULL, PRIMARY KEY (from_status, to_status));
+        CREATE TABLE IF NOT EXISTS freight_rates (mode TEXT PRIMARY KEY, cost_per_kg REAL NOT NULL, base_cost REAL NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS lots (id TEXT PRIMARY KEY, asset_sku TEXT NOT NULL, lot_code TEXT UNIQUE NOT NULL, qty REAL NOT NULL, expiry_date TEXT, crate_id TEXT, received_ts TEXT, vector_clock TEXT);
+        CREATE INDEX IF NOT EXISTS idx_lots_sku ON lots(asset_sku, expiry_date);
+        CREATE INDEX IF NOT EXISTS idx_sorties_buddy ON field_sorties(buddy_personnel_id);
+        """)
+        conn.commit()
+    except Exception:
+        pass
+    try:
+        cur = conn.execute("SELECT COUNT(*) FROM triage_sla")
+        if cur.fetchone()[0] == 0:
+            for r in [("ACTIVE","ACK",15),("ACK","RESPONDING",30),("RESPONDING","RESOLVED",240)]:
+                conn.execute("INSERT OR IGNORE INTO triage_sla VALUES (?,?,?)", r)
+            conn.commit()
+    except Exception:
+        pass
+    try:
+        cur = conn.execute("SELECT COUNT(*) FROM freight_rates")
+        if cur.fetchone()[0] == 0:
+            for r in [("SEA", 2.5, 5000), ("AIR", 18.0, 12000), ("TRAVERSE", 1.2, 2000)]:
+                conn.execute("INSERT OR IGNORE INTO freight_rates VALUES (?,?,?)", r)
+            conn.commit()
+    except Exception:
+        pass
+    try:
+        cur = conn.execute("SELECT COUNT(*) FROM lots")
+        if cur.fetchone()[0] == 0:
+            for a in conn.execute("SELECT sku, qty, expiry_date, crate_id FROM assets").fetchall():
+                sku, qty, exp, crate = a[0], a[1], a[2], a[3]
+                conn.execute("INSERT OR IGNORE INTO lots VALUES (?,?,?,?,?,?,?,?)", (f"LOT-{sku}-0", sku, f"{sku}-L0", qty, exp, crate, conn.execute("SELECT datetime('now')").fetchone()[0], None))
             conn.commit()
     except Exception:
         pass
@@ -346,7 +388,8 @@ def _ensure_personnel_sqlite(conn):
             role TEXT,
             blood_group TEXT,
             emergency_contact TEXT,
-            status TEXT CHECK(status IN ('ON_STATION','FIELD_SORTIE','IN_TRANSIT','EVACUATED')) DEFAULT 'ON_STATION'
+            status TEXT CHECK(status IN ('ON_STATION','FIELD_SORTIE','IN_TRANSIT','EVACUATED')) DEFAULT 'ON_STATION',
+            program TEXT DEFAULT 'BOTH'
         );
         CREATE TABLE IF NOT EXISTS field_sorties (
             id TEXT PRIMARY KEY,
@@ -356,16 +399,21 @@ def _ensure_personnel_sqlite(conn):
             departure_time TEXT,
             expected_return_time TEXT,
             actual_return_time TEXT,
-            safety_status TEXT CHECK(safety_status IN ('PLANNED','ACTIVE','RETURNED','OVERDUE','EMERGENCY')) DEFAULT 'PLANNED'
+            safety_status TEXT CHECK(safety_status IN ('PLANNED','ACTIVE','RETURNED','OVERDUE','EMERGENCY')) DEFAULT 'PLANNED',
+            expedition_id TEXT,
+            buddy_personnel_id TEXT REFERENCES personnel(id)
         );
         CREATE TABLE IF NOT EXISTS emergencies (
             id TEXT PRIMARY KEY,
             station_id TEXT REFERENCES stations(id),
             type TEXT CHECK(type IN ('SOS_MEDICAL','SOS_FIRE','SOS_WHITEOUT','SOS_POWER','SOS_VEHICLE')),
             reported_by TEXT,
-            status TEXT CHECK(status IN ('ACTIVE','RESOLVED')) DEFAULT 'ACTIVE',
+            status TEXT CHECK(status IN ('ACTIVE','ACK','RESPONDING','RESOLVED')) DEFAULT 'ACTIVE',
             ts TEXT,
-            location_coord TEXT
+            location_coord TEXT,
+            assignee TEXT,
+            sortie_id TEXT,
+            status_entered_ts TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_personnel_station ON personnel(station_id);
         CREATE INDEX IF NOT EXISTS idx_sorties_station ON field_sorties(station_id);
