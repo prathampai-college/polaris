@@ -198,7 +198,8 @@ CREATE TABLE IF NOT EXISTS emergencies (
   ts TEXT,
   location_coord TEXT,
   assignee TEXT,
-  sortie_id TEXT REFERENCES field_sorties(id)
+  sortie_id TEXT REFERENCES field_sorties(id),
+  status_entered_ts TEXT
 );
 
 -- Expedition planning (ISEA Antarctic + Himadri Arctic programs)

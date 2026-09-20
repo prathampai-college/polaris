@@ -308,8 +308,7 @@ def _ensure_expedition_sqlite(conn):
             conn.commit()
     except Exception:
         pass
-    # assignee/sortie_id columns on pre-migration DBs
-    for col in ["assignee", "sortie_id"]:
+    for col in ["assignee", "sortie_id", "status_entered_ts"]:
         try:
             cols = [r[1] for r in conn.execute("PRAGMA table_info(emergencies)").fetchall()]
             if col not in cols:

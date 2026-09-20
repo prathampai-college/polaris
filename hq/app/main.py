@@ -102,13 +102,14 @@ async def lifespan(app: FastAPI):
         start_vessel_poller()
     except Exception as e:
         logger.warning(f"[vessel_poller] start failed: {e}")
-    # Sortie overdue watchdog: every 60s mark OVERDUE + auto-SOS after 30min
+    # Watchdog: sortie overdue + triage SLA breach audit every 60s
     try:
         async def _watchdog_loop():
             while True:
                 try:
                     await asyncio.sleep(60)
                     check_overdue()
+                    check_triage_sla()
                 except Exception as e:
                     logger.debug(f"[watchdog] {e}")
         asyncio.get_running_loop().create_task(_watchdog_loop())
@@ -826,18 +827,50 @@ class EmergencyCreate(BaseModel):
 
 @app.get("/emergencies")
 def list_emergencies(station_id: str = None, active_only: bool = False):
-    sql = "SELECT * FROM emergencies"
-    params = []
-    conditions = []
+    sql = "SELECT e.*, s.due_minutes as sla_due_minutes FROM emergencies e LEFT JOIN triage_sla s ON s.from_status=e.status WHERE 1=1"
+    params: list = []
+    conditions: list = []
+    # note: we rebuild without alias for simple _fetch_all pagination, then enrich
+    base_sql = "SELECT * FROM emergencies"
+    bp: list = []
+    bc: list = []
     if station_id:
-        conditions.append("station_id=?")
-        params.append(station_id)
+        bc.append("station_id=?")
+        bp.append(station_id)
     if active_only:
-        conditions.append("status='ACTIVE'")
-    if conditions:
-        sql += " WHERE " + " AND ".join(conditions)
-    sql += " ORDER BY ts DESC"
-    return _fetch_all(sql, tuple(params))
+        bc.append("status='ACTIVE'")
+    if bc:
+        base_sql += " WHERE " + " AND ".join(bc)
+    base_sql += " ORDER BY ts DESC"
+    rows = _fetch_all(base_sql, tuple(bp))
+    # enrich SLA due
+    try:
+        import datetime as _dt
+        now_dt = _dt.datetime.fromisoformat(utc_now().replace("Z", "+00:00"))
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=_dt.timezone.utc)
+        sla_map = {f"{r['from_status']}->{r['to_status']}": r["due_minutes"] for r in _fetch_all("SELECT from_status, to_status, due_minutes FROM triage_sla")}
+        nxt = {"ACTIVE": "ACK", "ACK": "RESPONDING", "RESPONDING": "RESOLVED"}
+        for r in rows:
+            cur = r.get("status", "ACTIVE")
+            nxt_status = nxt.get(cur)
+            if nxt_status:
+                due = sla_map.get(f"{cur}->{nxt_status}")
+                if due is not None:
+                    r["sla_due_minutes"] = due
+                    try:
+                        entered = _dt.datetime.fromisoformat(str(r.get("status_entered_ts") or r.get("ts")).replace("Z", "+00:00"))
+                        if entered.tzinfo is None:
+                            entered = entered.replace(tzinfo=_dt.timezone.utc)
+                        elapsed = (now_dt - entered).total_seconds() / 60
+                        r["sla_due_in_min"] = round(due - elapsed, 1)
+                        r["sla_breached"] = elapsed > due
+                    except Exception:
+                        r["sla_due_in_min"] = due
+                        r["sla_breached"] = False
+    except Exception:
+        pass
+    return rows
 
 @app.post("/emergency/sos")
 def trigger_sos(body: EmergencyCreate):
@@ -847,13 +880,13 @@ def trigger_sos(body: EmergencyCreate):
     if USE_PG:
         with conn:
             with conn.cursor() as cur:
-                cur.execute(q("INSERT INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status"), (em_id, body.station_id, body.type, body.reported_by, body.status, now, body.location_coord))
+                cur.execute(q("INSERT INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord, status_entered_ts) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, status_entered_ts=EXCLUDED.status_entered_ts"), (em_id, body.station_id, body.type, body.reported_by, body.status, now, body.location_coord, now))
                 cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (str(uuid.uuid4())[:8], body.reported_by, f"EMERGENCY_SOS_{body.type}", "emergencies", None, em_id, now))
     else:
-        conn.execute("INSERT INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=excluded.status", (em_id, body.station_id, body.type, body.reported_by, body.status, now, body.location_coord))
+        conn.execute("INSERT INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord, status_entered_ts) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=excluded.status, status_entered_ts=excluded.status_entered_ts", (em_id, body.station_id, body.type, body.reported_by, body.status, now, body.location_coord, now))
         conn.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)", (str(uuid.uuid4())[:8], body.reported_by, f"EMERGENCY_SOS_{body.type}", "emergencies", None, em_id, now))
         conn.commit()
-    data = {"id": em_id, "station_id": body.station_id, "type": body.type, "reported_by": body.reported_by, "status": body.status, "ts": now, "location_coord": body.location_coord}
+    data = {"id": em_id, "station_id": body.station_id, "type": body.type, "reported_by": body.reported_by, "status": body.status, "ts": now, "location_coord": body.location_coord, "status_entered_ts": now}
     notify_gateway(body.station_id, "emergencies", em_id, "STATUS_CHANGE", data)
     # SOS auto-reserve: medical distress locks O2 + trauma kit via urgent indent (soft reserve)
     try:
@@ -882,18 +915,19 @@ def update_emergency(emergency_id: str, patch: dict):
         except Exception:
             pass
     assignee = patch.get("assignee")
+    now2 = utc_now()
     if USE_PG:
         with conn:
             with conn.cursor() as cur:
                 if assignee is not None:
-                    cur.execute(q("UPDATE emergencies SET status=?, assignee=? WHERE id=?"), (status, assignee, emergency_id))
+                    cur.execute(q("UPDATE emergencies SET status=?, assignee=?, status_entered_ts=? WHERE id=?"), (status, assignee, now2, emergency_id))
                 else:
-                    cur.execute(q("UPDATE emergencies SET status=? WHERE id=?"), (status, emergency_id))
+                    cur.execute(q("UPDATE emergencies SET status=?, status_entered_ts=? WHERE id=?"), (status, now2, emergency_id))
     else:
         if assignee is not None:
-            conn.execute("UPDATE emergencies SET status=?, assignee=? WHERE id=?", (status, assignee, emergency_id))
+            conn.execute("UPDATE emergencies SET status=?, assignee=?, status_entered_ts=? WHERE id=?", (status, assignee, now2, emergency_id))
         else:
-            conn.execute("UPDATE emergencies SET status=? WHERE id=?", (status, emergency_id))
+            conn.execute("UPDATE emergencies SET status=?, status_entered_ts=? WHERE id=?", (status, now2, emergency_id))
         conn.commit()
     # decision audit: resolving/acking a CRITICAL distress is a logged decision
     try:
@@ -1338,9 +1372,9 @@ def check_overdue():
                     if USE_PG:
                         with c3:
                             with c3.cursor() as cur3:
-                                cur3.execute(q("INSERT INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord, sortie_id) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (em_id, r["station_id"], "SOS_WHITEOUT", "AUTO-WATCHDOG", "ACTIVE", now, r["destination"], r["id"]))
+                                cur3.execute(q("INSERT INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord, sortie_id, status_entered_ts) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (em_id, r["station_id"], "SOS_WHITEOUT", "AUTO-WATCHDOG", "ACTIVE", now, r["destination"], r["id"], now))
                     else:
-                        c3.execute("INSERT OR IGNORE INTO emergencies VALUES (?,?,?,?,?,?,?, ?, ?)", (em_id, r["station_id"], "SOS_WHITEOUT", "AUTO-WATCHDOG", "ACTIVE", now, r["destination"], None, r["id"]))
+                        c3.execute("INSERT OR IGNORE INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord, assignee, sortie_id, status_entered_ts) VALUES (?,?,?,?,?,?,?,?,?,?)", (em_id, r["station_id"], "SOS_WHITEOUT", "AUTO-WATCHDOG", "ACTIVE", now, r["destination"], None, r["id"], now))
                         c3.commit()
                     auto_sos.append(em_id)
                     notify_gateway(r["station_id"], "emergencies", em_id, "STATUS_CHANGE", {"id": em_id, "type": "SOS_WHITEOUT", "sortie_id": r["id"]})
@@ -1352,6 +1386,53 @@ def check_overdue():
                         except Exception:
                             pass
     return {"marked_overdue": marked, "auto_sos": auto_sos, "checked_at": now}
+
+def check_triage_sla():
+    """Watchdog: audit TRIAGE_SLA_BREACH when an emergency misses its next-state due time."""
+    try:
+        sla_rows = _fetch_all("SELECT from_status, to_status, due_minutes FROM triage_sla")
+        sla_map = {f"{r['from_status']}->{r['to_status']}": r["due_minutes"] for r in sla_rows}
+        nxt = {"ACTIVE": "ACK", "ACK": "RESPONDING", "RESPONDING": "RESOLVED"}
+        now = utc_now()
+        import datetime as _dt
+        now_dt = _dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=_dt.timezone.utc)
+        for em in _fetch_all("SELECT id, station_id, status, status_entered_ts, ts FROM emergencies WHERE status IN ('ACTIVE','ACK','RESPONDING')"):
+            cur = em.get("status")
+            to_status = nxt.get(cur)
+            if not to_status:
+                continue
+            due = sla_map.get(f"{cur}->{to_status}")
+            if due is None:
+                continue
+            try:
+                entered = _dt.datetime.fromisoformat(str(em.get("status_entered_ts") or em.get("ts")).replace("Z", "+00:00"))
+                if entered.tzinfo is None:
+                    entered = entered.replace(tzinfo=_dt.timezone.utc)
+                elapsed = (now_dt - entered).total_seconds() / 60
+                if elapsed > due:
+                    bid = f"BR-{em['id']}-{cur}"
+                    conn = get_conn()
+                    try:
+                        if USE_PG:
+                            with conn:
+                                with conn.cursor() as cur2:
+                                    cur2.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (bid[:8] + cur[:3], "AUTO-WATCHDOG", "TRIAGE_SLA_BREACH", "emergencies", cur, to_status, now))
+                        else:
+                            conn.execute("INSERT OR IGNORE INTO audit_log VALUES (?,?,?,?,?,?,?)", (bid[:8] + cur[:3], "AUTO-WATCHDOG", "TRIAGE_SLA_BREACH", "emergencies", cur, to_status, now))
+                            conn.commit()
+                    finally:
+                        if USE_PG:
+                            try:
+                                from .db import release_conn as _rcb
+                                _rcb(conn)
+                            except Exception:
+                                pass
+            except Exception:
+                continue
+    except Exception as e:
+        logger.debug(f"[triage_sla] {e}")
 
 @app.post("/tracking/personnel")
 def update_personnel_position(body: dict):
