@@ -9,6 +9,8 @@ The system is offline-first, decentralized, and air-gapped. It is designed to su
 
 > **Live demo (3.5 minutes):** see `PITCH_DECK.md`. The Field PWA, Sync Gateway, and HQ Dashboard run with `docker compose up`, even with WiFi turned off. **Production-ready:** extreme-edge pillars (DTN data muling, neuromorphic SNN inference, and vision-fused local tracking), database-driven procurement, per-station physics, live Open-Meteo weather, AIS vessel tracking, power-aware inference, and local-frame tracking that needs no GPS. No silent mocks: every fallback (AIS schedule interpolation, physics residual, offline schematic) carries a `SourceBadge` (`LIVE · Ns ago` / `STALE · Nh ago` / `MOCK SCHEDULE` / `OFFLINE`) with its age and machine-readable reason (`no_key` / `429` / `forced_mock`).
 
+> **100% PS coverage (2026, all stations):** Expedition planner (ANTARCTIC/ARCTIC, chain/vessel/date validation, auto-pack, readiness+cost), cargo custody (GOA→CRATE, cold-chain blocking, printable labels), FEFO lot inventory (lots entity, `GET /lots`, bulk lot_code, field FEFO consume), personnel live on local grid (cyan dots, buddy lines via `POST /tracking/personnel`), buddy-pair sortie enforcement (solo needs STATION_LEAD audit), emergency triage `ACTIVE→ACK→RESPONDING→RESOLVED` with SLA breach `TRIAGE_SLA_BREACH` watchdog + medevac auto-task + decision overrides + timeline, mutual-aid + freight rates. All offline-first, audited, sync/DTN covered.
+
 ---
 
 ## Table of Contents

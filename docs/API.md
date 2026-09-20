@@ -5,6 +5,8 @@
 
 Base: `http://localhost:8000` (or `hq:8000` in Docker). All JSON. CORS via `ALLOWED_ORIGINS` env (default `*` in dev, restrict in prod). See `hq/app/main.py:156` for `health`.
 
+> **100% PS coverage:** `GET /lots` + lot FEFO consume (field) & bulk `lot_code`, `GET /freight_rates` + `PUT` + `GET /expeditions/{id}/cost` + `readiness.cost_inr`, leg chain/date/vessel overlap validation, personnel `program` + per-program sortie check, triage SLA (`GET /emergencies` `sla_*`, watchdog `TRIAGE_SLA_BREACH`), medevac sortie on medical `ACK`, manifest cold-chain blocking (`override_temp`), printable labels, buddy-pair enforcement, `personnel_positions` local frame (`POST/GET /tracking/personnel`).
+
 ## Health
 
 `GET /health` → `{status:"ok", db:"postgres"|"sqlite-fallback", ts}` (+ PG `pool: {size,waiting}` when pooled)

@@ -70,9 +70,13 @@
 >
 > **A 'two-month rule'** — a named, explicit long-horizon warning tier, so a slow-building shortage is flagged weeks out, not just when it turns critical. That's a direct answer to the exact question the former ISRO chairman asked in 2013. (LIVE: `FORECAST_60D` tier + readiness watch.)
 >
-> **Expedition planner, live** — centralized ISEA Antarctic + Himadri Arctic programs with voyage legs, AL-1403-style manifests, custody stages, auto-pack stowage, and per-station readiness. Field tablets plan offline; DTN carries the plan home.
+> **Expedition planner, live** — centralized ISEA Antarctic + Himadri Arctic programs with voyage legs (chain/date/vessel-overlap validated), AL-1403-style manifests (cold-chain blocking, printable labels), custody stages, auto-pack stowage, per-station readiness **plus voyage cost rollup** (`GET /expeditions/{id}/cost`). Field tablets plan offline; DTN carries the plan home.
 >
-> **Watchdog + triage, live** — overdue sorties auto-escalate to SOS after 30 minutes; distress follows `ACTIVE → ACK → RESPONDING → RESOLVED` with every override audited.
+> **Personnel live on the map + buddy rule, live** — every sortie is a buddy pair (solo needs STATION_LEAD audit), roster is per-program (ANTARCTIC/ARCTIC/BOTH), and personnel dots + buddy lines ride the same GPS-denied local grid as cargo (`POST /tracking/personnel`).
+>
+> **Lot-level FEFO, live** — inventory is lot-tracked with earliest-expiry-first consume, `GET /lots` + `lot_code` in bulk import, synced via DTN.
+>
+> **Watchdog + triage + SLA, live** — overdue sorties auto-escalate to SOS after 30 minutes; distress follows `ACTIVE → ACK → RESPONDING → RESOLVED` with SLA breach `TRIAGE_SLA_BREACH` watchdog and every override audited; medical `ACK` auto-tasks a medevac sortie.
 >
 > **A decision audit trail** — every time a critical alert is overridden by a person — a resupply delayed, an alert dismissed — it's logged with who, when, and what the system's stated risk was at that moment. We're not taking authority away from station leadership. We're making sure a critical decision is never invisible again. (LIVE: `GET /overrides` + `GET /timeline`.)
 >
