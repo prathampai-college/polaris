@@ -463,31 +463,36 @@ export async function listSorties(stationId?: string) {
   return db.selectObjects(`SELECT s.*, p.name as lead_name, p.role as lead_role FROM field_sorties s LEFT JOIN personnel p ON p.id=s.lead_personnel_id ORDER BY s.departure_time DESC`);
 }
 
-export async function createSortie(opts: { stationId: string; leadPersonnelId: string; destination: string; expectedReturnTime: string; createdBy: string; deviceId: string }) {
+export async function createSortie(opts: { stationId: string; leadPersonnelId: string; destination: string; expectedReturnTime: string; createdBy: string; deviceId: string; buddyPersonnelId?: string; soloOverride?: boolean }) {
   const db = await getDb();
   const { ulid } = await import('ulid');
   const { encode } = await import('@msgpack/msgpack');
+  if (!opts.buddyPersonnelId && !opts.soloOverride) throw new Error('buddy required — select buddy or request STATION_LEAD solo override');
+  if (opts.buddyPersonnelId && opts.buddyPersonnelId === opts.leadPersonnelId) throw new Error('buddy must differ from lead');
   const id = ulid();
   const ts = new Date().toISOString();
   const outboxUlid = ulid();
-  const sortie = {
+  const sortie: any = {
     id,
     station_id: opts.stationId,
     lead_personnel_id: opts.leadPersonnelId,
+    buddy_personnel_id: opts.buddyPersonnelId || null,
     destination: opts.destination,
     departure_time: ts,
     expected_return_time: opts.expectedReturnTime,
-    safety_status: 'ACTIVE'
+    safety_status: 'ACTIVE',
   };
   const patchBytes = encode(sortie);
   db.exec('BEGIN');
   try {
     db.exec({
-      sql: 'INSERT INTO field_sorties (id, station_id, lead_personnel_id, destination, departure_time, expected_return_time, safety_status) VALUES (?,?,?,?,?,?,?)',
-      bind: [id, opts.stationId, opts.leadPersonnelId, opts.destination, ts, opts.expectedReturnTime, 'ACTIVE']
+      sql: 'INSERT INTO field_sorties (id, station_id, lead_personnel_id, destination, departure_time, expected_return_time, safety_status, buddy_personnel_id) VALUES (?,?,?,?,?,?,?,?)',
+      bind: [id, opts.stationId, opts.leadPersonnelId, opts.destination, ts, opts.expectedReturnTime, 'ACTIVE', opts.buddyPersonnelId || null]
     });
     db.exec({ sql: 'UPDATE personnel SET status=? WHERE id=?', bind: ['FIELD_SORTIE', opts.leadPersonnelId] });
-    db.exec({ sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)', bind: [ulid(), opts.createdBy, 'SORTIE_START', 'field_sorties', null, JSON.stringify(sortie), ts] });
+    if (opts.buddyPersonnelId) db.exec({ sql: 'UPDATE personnel SET status=? WHERE id=?', bind: ['FIELD_SORTIE', opts.buddyPersonnelId] });
+    const auditAction = !opts.buddyPersonnelId && opts.soloOverride ? 'SORTIE_SOLO_OVERRIDE' : 'SORTIE_START';
+    db.exec({ sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)', bind: [ulid(), opts.createdBy, auditAction, 'field_sorties', null, JSON.stringify(sortie), ts] });
     db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, status) VALUES (?,?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'field_sorties', id, 'UPSERT', patchBytes, 0, ts, 'PENDING'] });
     db.exec('COMMIT');
     return { sortie, outboxUlid };
@@ -511,11 +516,10 @@ export async function updateSortieStatus(opts: { sortieId: string; safetyStatus:
   db.exec('BEGIN');
   try {
     if (opts.safetyStatus === 'RETURNED') {
-      const s = db.selectObjects('SELECT lead_personnel_id FROM field_sorties WHERE id=?', [opts.sortieId])[0];
+      const s: any = db.selectObjects('SELECT lead_personnel_id, buddy_personnel_id FROM field_sorties WHERE id=?', [opts.sortieId])[0];
       db.exec({ sql: 'UPDATE field_sorties SET safety_status=?, actual_return_time=? WHERE id=?', bind: [opts.safetyStatus, ts, opts.sortieId] });
-      if (s?.lead_personnel_id) {
-        db.exec({ sql: 'UPDATE personnel SET status=? WHERE id=?', bind: ['ON_STATION', s.lead_personnel_id] });
-      }
+      if (s?.lead_personnel_id) db.exec({ sql: 'UPDATE personnel SET status=? WHERE id=?', bind: ['ON_STATION', s.lead_personnel_id] });
+      if (s?.buddy_personnel_id) db.exec({ sql: 'UPDATE personnel SET status=? WHERE id=?', bind: ['ON_STATION', s.buddy_personnel_id] });
     } else {
       db.exec({ sql: 'UPDATE field_sorties SET safety_status=? WHERE id=?', bind: [opts.safetyStatus, opts.sortieId] });
     }

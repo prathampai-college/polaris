@@ -39,17 +39,25 @@ def test_personnel_list_and_upsert():
     assert matches[0]["name"] == "Dr. Test Expeditioner"
 
 def test_sortie_checkout_and_return():
-    # Create sortie
+    # ensure clean personnel/buddy state (test isolation across files)
+    try:
+        conn = get_conn()
+        conn.execute("UPDATE personnel SET status='ON_STATION' WHERE id IN ('PER-BHA-01','PER-BHA-02')")
+        conn.execute("DELETE FROM field_sorties WHERE id IN ('SORTIE-TEST-01','SORTIE-WD-01')")
+        conn.commit()
+    except Exception:
+        pass
     sortie_payload = {
         "id": "SORTIE-TEST-01",
         "station_id": "ST-BHARATI",
         "lead_personnel_id": "PER-BHA-01",
+        "buddy_personnel_id": "PER-BHA-02",
         "destination": "Testing Moraine Grid Alpha",
         "expected_return_time": "2026-10-01T12:00:00Z",
         "safety_status": "ACTIVE"
     }
     r = client.post("/sorties", json=sortie_payload)
-    assert r.status_code == 200
+    assert r.status_code == 200, r.text
 
     # Verify personnel status changed to FIELD_SORTIE
     r = client.get("/personnel?station_id=ST-BHARATI")

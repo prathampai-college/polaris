@@ -7,7 +7,7 @@ interface PersonnelTabProps {
   emergencies: any[];
   currentStation: string;
   onUpdatePersonnelStatus: (id: string, status: string) => void;
-  onCreateSortie: (leadId: string, destination: string, expectedReturn: string) => void;
+  onCreateSortie: (leadId: string, destination: string, expectedReturn: string, buddyId?: string, soloOverride?: boolean) => void;
   onUpdateSortieStatus: (sortieId: string, status: string) => void;
   onTriggerSOS: (type: string, locationCoord?: string) => void;
   onResolveEmergency: (emergencyId: string) => void;
@@ -32,8 +32,10 @@ export function PersonnelTab({
 
   const [showSortieModal, setShowSortieModal] = useState(false);
   const [sortieLead, setSortieLead] = useState('');
+  const [sortieBuddy, setSortieBuddy] = useState('');
   const [sortieDest, setSortieDest] = useState('');
   const [sortieHours, setSortieHours] = useState('4');
+  const [soloOverride, setSoloOverride] = useState(false);
 
   const stationPersonnel = useMemo(() => {
     return personnel.filter((p: any) => !p.station_id || p.station_id === currentStation);
@@ -62,10 +64,14 @@ export function PersonnelTab({
 
   function handleSortieSubmit() {
     if (!sortieLead || !sortieDest) return;
+    if (!sortieBuddy && !soloOverride) return;
+    if (sortieBuddy && sortieBuddy === sortieLead) return;
     const expected = new Date(Date.now() + (Number(sortieHours) || 4) * 3600000).toISOString();
-    onCreateSortie(sortieLead, sortieDest, expected);
+    onCreateSortie(sortieLead, sortieDest, expected, sortieBuddy || undefined, soloOverride);
     setShowSortieModal(false);
     setSortieDest('');
+    setSortieBuddy('');
+    setSoloOverride(false);
   }
 
   return (
@@ -421,6 +427,27 @@ export function PersonnelTab({
               </div>
 
               <div>
+                <label className="text-xs font-semibold text-white/70 block mb-1">Buddy (mandatory pair)</label>
+                <select
+                  value={sortieBuddy}
+                  onChange={(e) => setSortieBuddy(e.target.value)}
+                  className="w-full bg-black/40 border border-white/15 rounded-xl px-3 h-11 text-xs focus:outline-none focus:border-teal-400"
+                >
+                  <option value="">Select buddy…</option>
+                  {stationPersonnel.filter((p: any) => p.id !== sortieLead && p.status === 'ON_STATION').map((p: any) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.role})
+                    </option>
+                  ))}
+                </select>
+                <label className="flex items-center gap-2 mt-2 text-xs text-white/70">
+                  <input type="checkbox" checked={soloOverride} onChange={(e) => setSoloOverride(e.target.checked)} />
+                  Solo override — requires STATION_LEAD (audited)
+                </label>
+                {sortieBuddy && sortieBuddy === sortieLead && <div className="text-xs text-red-400 mt-1">Buddy must differ from lead</div>}
+              </div>
+
+              <div>
                 <label className="text-xs font-semibold text-white/70 block mb-1">Expected Return Window</label>
                 <select
                   value={sortieHours}
@@ -436,7 +463,8 @@ export function PersonnelTab({
 
               <button
                 onClick={handleSortieSubmit}
-                className="w-full h-11 rounded-xl bg-teal-500 hover:bg-teal-400 text-white font-bold text-xs shadow-lg shadow-teal-500/25 transition"
+                disabled={!sortieLead || !sortieDest || (!sortieBuddy && !soloOverride)}
+                className="w-full h-11 rounded-xl bg-teal-500 hover:bg-teal-400 text-white font-bold text-xs shadow-lg shadow-teal-500/25 transition disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 Confirm Checkout & Log Sortie
               </button>

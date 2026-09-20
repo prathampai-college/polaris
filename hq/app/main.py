@@ -703,6 +703,9 @@ class SortieCreate(BaseModel):
     departure_time: str | None = None
     expected_return_time: str
     safety_status: str = "ACTIVE"
+    buddy_personnel_id: str | None = None
+    expedition_id: str | None = None
+    solo_override: bool = False
 
 @app.get("/sorties")
 def list_sorties(station_id: str = None):
@@ -711,22 +714,66 @@ def list_sorties(station_id: str = None):
     return _fetch_all("SELECT s.*, p.name as lead_name, p.role as lead_role FROM field_sorties s LEFT JOIN personnel p ON p.id=s.lead_personnel_id ORDER BY s.departure_time DESC")
 
 @app.post("/sorties")
-def create_sortie(body: SortieCreate):
+def create_sortie(body: SortieCreate, request: Request):
     conn = get_conn()
     now = utc_now()
     sortie_id = body.id or f"SORTIE-{uuid.uuid4().hex[:8]}"
     dep_time = body.departure_time or now
+    # buddy-pair enforcement: every sortie must have a distinct buddy unless solo_override by STATION_LEAD+
+    if not body.buddy_personnel_id:
+        if not body.solo_override:
+            raise HTTPException(400, "buddy_personnel_id required — solo sortie needs solo_override + STATION_LEAD authorization")
+        # solo override requires STATION_LEAD+ role
+        try:
+            user = await_auth(request)  # type: ignore
+            role = (user or {}).get("role", "VIEWER")
+            from .auth import ROLE_HIERARCHY
+            if ROLE_HIERARCHY.get(role, 0) < ROLE_HIERARCHY.get("STATION_LEAD", 3):
+                raise HTTPException(403, "solo sortie override requires STATION_LEAD or higher")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(403, "solo sortie override requires STATION_LEAD or higher")
+    if body.buddy_personnel_id and body.buddy_personnel_id == body.lead_personnel_id:
+        raise HTTPException(400, "buddy must differ from lead")
+    if body.buddy_personnel_id:
+        for pid in [body.lead_personnel_id, body.buddy_personnel_id]:
+            row = _fetch_one("SELECT status FROM personnel WHERE id=?", (pid,))
+            if not row:
+                raise HTTPException(404, f"personnel {pid} not found")
+            if row.get("status") != "ON_STATION":
+                raise HTTPException(400, f"personnel {pid} not ON_STATION (is {row.get('status')})")
+    else:
+        row = _fetch_one("SELECT status FROM personnel WHERE id=?", (body.lead_personnel_id,))
+        if not row:
+            raise HTTPException(404, f"personnel {body.lead_personnel_id} not found")
     if USE_PG:
         with conn:
             with conn.cursor() as cur:
-                cur.execute(q("INSERT INTO field_sorties (id, station_id, lead_personnel_id, destination, departure_time, expected_return_time, safety_status) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET safety_status=EXCLUDED.safety_status"), (sortie_id, body.station_id, body.lead_personnel_id, body.destination, dep_time, body.expected_return_time, body.safety_status))
+                cur.execute(q("INSERT INTO field_sorties (id, station_id, lead_personnel_id, destination, departure_time, expected_return_time, safety_status, expedition_id, buddy_personnel_id) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET safety_status=EXCLUDED.safety_status, buddy_personnel_id=EXCLUDED.buddy_personnel_id"), (sortie_id, body.station_id, body.lead_personnel_id, body.destination, dep_time, body.expected_return_time, body.safety_status, body.expedition_id, body.buddy_personnel_id))
                 cur.execute(q("UPDATE personnel SET status='FIELD_SORTIE' WHERE id=?"), (body.lead_personnel_id,))
+                if body.buddy_personnel_id:
+                    cur.execute(q("UPDATE personnel SET status='FIELD_SORTIE' WHERE id=?"), (body.buddy_personnel_id,))
+                # audit solo override
+                if not body.buddy_personnel_id and body.solo_override:
+                    cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (f"SOLO-{uuid.uuid4().hex[:8]}", body.lead_personnel_id, "SORTIE_SOLO_OVERRIDE", "field_sorties", None, sortie_id, now))
     else:
-        conn.execute("INSERT INTO field_sorties (id, station_id, lead_personnel_id, destination, departure_time, expected_return_time, safety_status) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET safety_status=excluded.safety_status", (sortie_id, body.station_id, body.lead_personnel_id, body.destination, dep_time, body.expected_return_time, body.safety_status))
+        conn.execute("INSERT INTO field_sorties (id, station_id, lead_personnel_id, destination, departure_time, expected_return_time, safety_status, expedition_id, buddy_personnel_id) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET safety_status=excluded.safety_status, buddy_personnel_id=excluded.buddy_personnel_id", (sortie_id, body.station_id, body.lead_personnel_id, body.destination, dep_time, body.expected_return_time, body.safety_status, body.expedition_id, body.buddy_personnel_id))
         conn.execute("UPDATE personnel SET status='FIELD_SORTIE' WHERE id=?", (body.lead_personnel_id,))
+        if body.buddy_personnel_id:
+            conn.execute("UPDATE personnel SET status='FIELD_SORTIE' WHERE id=?", (body.buddy_personnel_id,))
+        if not body.buddy_personnel_id and body.solo_override:
+            conn.execute("INSERT OR IGNORE INTO audit_log VALUES (?,?,?,?,?,?,?)", (f"SOLO-{uuid.uuid4().hex[:8]}", body.lead_personnel_id, "SORTIE_SOLO_OVERRIDE", "field_sorties", None, sortie_id, now))
         conn.commit()
-    notify_gateway(body.station_id, "field_sorties", sortie_id, "UPSERT", {"id": sortie_id, "station_id": body.station_id, "lead_personnel_id": body.lead_personnel_id, "destination": body.destination, "departure_time": dep_time, "expected_return_time": body.expected_return_time, "safety_status": body.safety_status})
+    notify_gateway(body.station_id, "field_sorties", sortie_id, "UPSERT", {"id": sortie_id, "station_id": body.station_id, "lead_personnel_id": body.lead_personnel_id, "buddy_personnel_id": body.buddy_personnel_id, "destination": body.destination, "departure_time": dep_time, "expected_return_time": body.expected_return_time, "safety_status": body.safety_status})
     return {"status": "ok", "id": sortie_id}
+
+async def await_auth(request: Request):
+    try:
+        from .auth import get_current_user
+        return await get_current_user(request)
+    except Exception:
+        return None
 
 @app.patch("/sorties/{sortie_id}")
 def update_sortie(sortie_id: str, patch: dict):
@@ -742,20 +789,27 @@ def update_sortie(sortie_id: str, patch: dict):
                 else:
                     cur.execute(q("UPDATE field_sorties SET safety_status=? WHERE id=?"), (status, sortie_id))
                 if status == "RETURNED":
-                    cur.execute(q("SELECT lead_personnel_id FROM field_sorties WHERE id=?"), (sortie_id,))
+                    cur.execute(q("SELECT lead_personnel_id, buddy_personnel_id FROM field_sorties WHERE id=?"), (sortie_id,))
                     r = cur.fetchone()
-                    if r and r[0]:
+                    if r:
                         cur.execute(q("UPDATE personnel SET status='ON_STATION' WHERE id=?"), (r[0],))
+                        if len(r) > 1 and r[1]:
+                            cur.execute(q("UPDATE personnel SET status='ON_STATION' WHERE id=?"), (r[1],))
     else:
         if actual_return:
             conn.execute("UPDATE field_sorties SET safety_status=?, actual_return_time=? WHERE id=?", (status, actual_return, sortie_id))
         else:
             conn.execute("UPDATE field_sorties SET safety_status=? WHERE id=?", (status, sortie_id))
         if status == "RETURNED":
-            cur = conn.execute("SELECT lead_personnel_id FROM field_sorties WHERE id=?", (sortie_id,))
+            cur = conn.execute("SELECT lead_personnel_id, buddy_personnel_id FROM field_sorties WHERE id=?", (sortie_id,))
             r = cur.fetchone()
             if r and r[0]:
                 conn.execute("UPDATE personnel SET status='ON_STATION' WHERE id=?", (r[0],))
+                try:
+                    if len(r) > 1 and r[1]:
+                        conn.execute("UPDATE personnel SET status='ON_STATION' WHERE id=?", (r[1],))
+                except Exception:
+                    pass
         conn.commit()
     row = _fetch_one("SELECT * FROM field_sorties WHERE id=?", (sortie_id,))
     if row:
