@@ -87,8 +87,8 @@ def test_triage_machine_and_watchdog():
     assert r.status_code == 400  # regression blocked
     r = client.patch("/emergency/SOS-TRI-01", json={"status": "RESPONDING"})
     assert r.status_code == 200
-    # overdue sortie -> watchdog marks + auto SOS (buddy required)
-    r = client.post("/sorties", json={"id": "SORTIE-WD-01", "station_id": "ST-BHARATI", "lead_personnel_id": "PER-BHA-01", "buddy_personnel_id": "PER-BHA-02", "destination": "Test Ridge", "departure_time": "2020-01-01T00:00:00", "expected_return_time": "2020-01-01T01:00:00", "safety_status": "ACTIVE"})
+    # overdue sortie -> watchdog marks + auto SOS (buddy required, use free personnel after medevac consumed 01/02)
+    r = client.post("/sorties", json={"id": "SORTIE-WD-01", "station_id": "ST-BHARATI", "lead_personnel_id": "PER-BHA-04", "buddy_personnel_id": "PER-BHA-05", "destination": "Test Ridge", "departure_time": "2020-01-01T00:00:00", "expected_return_time": "2020-01-01T01:00:00", "safety_status": "ACTIVE"})
     assert r.status_code == 200
     r = client.post("/sorties/check-overdue")
     assert r.status_code == 200

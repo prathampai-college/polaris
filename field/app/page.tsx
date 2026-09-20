@@ -495,6 +495,25 @@ export default function FieldPage() {
     }
   }
 
+  async function handleTriageEmergency(emergencyId: string, status: string) {
+    try {
+      const { updateEmergencyStatus } = await import('../lib/db');
+      await updateEmergencyStatus({ emergencyId, status, actorId: ACTOR_ID, deviceId: DEVICE_ID, assignee: ACTOR_ID });
+      // push via HTTP as well for immediate HQ visibility (DTN/VC also drains)
+      try {
+        await fetch(`${HQ_URL}/emergency/${emergencyId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
+          body: JSON.stringify({ status, assignee: ACTOR_ID, actor_id: ACTOR_ID }),
+        });
+      } catch {}
+      pushToast(`Triage → ${status} (medevac auto-tasks on ACK of medical)`);
+      refresh();
+    } catch (e: any) {
+      pushToast(e.message);
+    }
+  }
+
   async function handleCreateExpedition(program: string, name: string, season: string) {
     try {
       await createExpeditionOffline({ program, name, season, deviceId: DEVICE_ID, createdBy: ACTOR_ID });
@@ -818,6 +837,7 @@ export default function FieldPage() {
             onUpdateSortieStatus={handleUpdateSortieStatus}
             onTriggerSOS={handleTriggerSOS}
             onResolveEmergency={handleResolveEmergency}
+            onTriageEmergency={handleTriageEmergency}
             glove={glove}
           />
         )}

@@ -956,6 +956,53 @@ def update_emergency(emergency_id: str, patch: dict):
     row = _fetch_one("SELECT * FROM emergencies WHERE id=?", (emergency_id,))
     if row:
         notify_gateway(row.get("station_id", "ST-BHARATI"), "emergencies", emergency_id, "STATUS_CHANGE", row)
+    # medevac auto-tasking: on ACK of medical SOS, create linked EMERGENCY sortie (lead = assignee, buddy auto-paired)
+    try:
+        if status == "ACK" and row and row.get("type") == "SOS_MEDICAL" and not row.get("sortie_id"):
+            sid = row.get("station_id", "ST-BHARATI")
+            lead = assignee or patch.get("actor_id")
+            # validate lead is personnel, else pick ON_STATION at station
+            if lead:
+                prow = _fetch_one("SELECT id FROM personnel WHERE id=? AND station_id=?", (lead, sid))
+                if not prow:
+                    lead = None
+            if not lead:
+                cand = _fetch_one("SELECT id FROM personnel WHERE station_id=? AND status='ON_STATION' ORDER BY id LIMIT 1", (sid,))
+                lead = (cand or {}).get("id")
+            buddy = None
+            if lead:
+                brow = _fetch_one("SELECT id FROM personnel WHERE station_id=? AND status='ON_STATION' AND id!=? ORDER BY id LIMIT 1", (sid, lead))
+                buddy = (brow or {}).get("id")
+            if lead:
+                med_id = f"MED-{emergency_id[-8:]}"
+                c4 = get_conn()
+                try:
+                    dest = row.get("location_coord") or "Medical evac"
+                    if USE_PG:
+                        with c4:
+                            with c4.cursor() as cur4:
+                                cur4.execute(q("INSERT INTO field_sorties (id, station_id, lead_personnel_id, destination, departure_time, expected_return_time, safety_status, buddy_personnel_id) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (med_id, sid, lead, dest, now2, now2, "EMERGENCY", buddy))
+                                cur4.execute(q("UPDATE personnel SET status='FIELD_SORTIE' WHERE id=?"), (lead,))
+                                if buddy:
+                                    cur4.execute(q("UPDATE personnel SET status='FIELD_SORTIE' WHERE id=?"), (buddy,))
+                                cur4.execute(q("UPDATE emergencies SET sortie_id=? WHERE id=?"), (med_id, emergency_id))
+                    else:
+                        c4.execute("INSERT OR IGNORE INTO field_sorties VALUES (?,?,?,?,?,?,?,?, ?,?)", (med_id, sid, lead, dest, now2, now2, None, "EMERGENCY", None, buddy))
+                        c4.execute("UPDATE personnel SET status='FIELD_SORTIE' WHERE id=?", (lead,))
+                        if buddy:
+                            c4.execute("UPDATE personnel SET status='FIELD_SORTIE' WHERE id=?", (buddy,))
+                        c4.execute("UPDATE emergencies SET sortie_id=? WHERE id=?", (med_id, emergency_id))
+                        c4.commit()
+                    notify_gateway(sid, "field_sorties", med_id, "UPSERT", {"id": med_id, "station_id": sid, "lead_personnel_id": lead, "buddy_personnel_id": buddy, "safety_status": "EMERGENCY"})
+                finally:
+                    if USE_PG:
+                        try:
+                            from .db import release_conn as _rcm
+                            _rcm(c4)
+                        except Exception:
+                            pass
+    except Exception as e:
+        logger.debug(f"[medevac] {e}")
     return {"status": "ok", "id": emergency_id}
 
 # --- Expedition planning: centralized platform (ANTARCTIC + ARCTIC programs) ---
