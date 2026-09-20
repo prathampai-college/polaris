@@ -676,6 +676,7 @@ class PersonnelUpsert(BaseModel):
     blood_group: str = "O+"
     emergency_contact: str = ""
     status: str = "ON_STATION"
+    program: str = "BOTH"
 
 @app.get("/personnel")
 def list_personnel(station_id: str = None):
@@ -685,13 +686,15 @@ def list_personnel(station_id: str = None):
 
 @app.post("/personnel")
 def upsert_personnel(body: PersonnelUpsert):
+    if body.program not in ("ANTARCTIC", "ARCTIC", "BOTH"):
+        raise HTTPException(400, "program must be ANTARCTIC|ARCTIC|BOTH")
     conn = get_conn()
     if USE_PG:
         with conn:
             with conn.cursor() as cur:
-                cur.execute(q("INSERT INTO personnel (id, station_id, name, role, blood_group, emergency_contact, status) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET station_id=EXCLUDED.station_id, name=EXCLUDED.name, role=EXCLUDED.role, blood_group=EXCLUDED.blood_group, emergency_contact=EXCLUDED.emergency_contact, status=EXCLUDED.status"), (body.id, body.station_id, body.name, body.role, body.blood_group, body.emergency_contact, body.status))
+                cur.execute(q("INSERT INTO personnel (id, station_id, name, role, blood_group, emergency_contact, status, program) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET station_id=EXCLUDED.station_id, name=EXCLUDED.name, role=EXCLUDED.role, blood_group=EXCLUDED.blood_group, emergency_contact=EXCLUDED.emergency_contact, status=EXCLUDED.status, program=EXCLUDED.program"), (body.id, body.station_id, body.name, body.role, body.blood_group, body.emergency_contact, body.status, body.program))
     else:
-        conn.execute("INSERT INTO personnel (id, station_id, name, role, blood_group, emergency_contact, status) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET station_id=excluded.station_id, name=excluded.name, role=excluded.role, blood_group=excluded.blood_group, emergency_contact=excluded.emergency_contact, status=excluded.status", (body.id, body.station_id, body.name, body.role, body.blood_group, body.emergency_contact, body.status))
+        conn.execute("INSERT INTO personnel (id, station_id, name, role, blood_group, emergency_contact, status, program) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET station_id=excluded.station_id, name=excluded.name, role=excluded.role, blood_group=excluded.blood_group, emergency_contact=excluded.emergency_contact, status=excluded.status, program=excluded.program", (body.id, body.station_id, body.name, body.role, body.blood_group, body.emergency_contact, body.status, body.program))
         conn.commit()
     notify_gateway(body.station_id, "personnel", body.id, "UPSERT", getattr(body, "model_dump", body.dict)())
     return {"status": "ok", "id": body.id}
@@ -748,6 +751,17 @@ def create_sortie(body: SortieCreate, request: Request):
         row = _fetch_one("SELECT status FROM personnel WHERE id=?", (body.lead_personnel_id,))
         if not row:
             raise HTTPException(404, f"personnel {body.lead_personnel_id} not found")
+    # per-program rostering: sortie program must contain personnel program
+    if body.expedition_id:
+        exp = _fetch_one("SELECT program FROM expeditions WHERE id=?", (body.expedition_id,))
+        exp_prog = (exp or {}).get("program", "ANTARCTIC")
+        for pid in [body.lead_personnel_id, body.buddy_personnel_id]:
+            if not pid:
+                continue
+            prow = _fetch_one("SELECT program FROM personnel WHERE id=?", (pid,))
+            pprog = (prow or {}).get("program") or "BOTH"
+            if pprog != "BOTH" and pprog != exp_prog:
+                raise HTTPException(400, f"personnel {pid} program {pprog} incompatible with expedition {exp_prog}")
     if USE_PG:
         with conn:
             with conn.cursor() as cur:

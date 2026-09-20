@@ -201,6 +201,7 @@ export function PersonnelTab({
                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/70 font-mono font-bold">
                         {p.blood_group}
                       </span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${p.program === 'ARCTIC' ? 'bg-cyan-500/15 text-cyan-300' : p.program === 'ANTARCTIC' ? 'bg-teal-500/15 text-teal-300' : 'bg-white/10 text-white/60'}`}>{p.program || 'BOTH'}</span>
                     </div>
                     <div className="text-xs text-white/50 truncate mt-0.5">{p.role}</div>
                     <div className="text-[10px] text-white/40 font-mono mt-0.5">
