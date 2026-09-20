@@ -11,6 +11,7 @@ interface PersonnelTabProps {
   onUpdateSortieStatus: (sortieId: string, status: string) => void;
   onTriggerSOS: (type: string, locationCoord?: string) => void;
   onResolveEmergency: (emergencyId: string) => void;
+  onTriageEmergency?: (emergencyId: string, status: string) => void;
   glove?: boolean;
 }
 
@@ -24,6 +25,7 @@ export function PersonnelTab({
   onUpdateSortieStatus,
   onTriggerSOS,
   onResolveEmergency,
+  onTriageEmergency,
   glove
 }: PersonnelTabProps) {
   const [showSosModal, setShowSosModal] = useState(false);
@@ -108,12 +110,15 @@ export function PersonnelTab({
                     </div>
                   )}
                 </div>
-                <button
-                  onClick={() => onResolveEmergency(em.id)}
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition shadow-md shadow-emerald-600/30"
-                >
-                  Mark Resolved ✓
-                </button>
+                <div className="flex gap-1.5 flex-wrap">
+                  {em.status === 'ACTIVE' && (
+                    <button onClick={() => (onTriageEmergency ? onTriageEmergency(em.id, 'ACK') : onResolveEmergency(em.id))} className="px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold">ACK</button>
+                  )}
+                  {(em.status === 'ACTIVE' || em.status === 'ACK') && (
+                    <button onClick={() => onTriageEmergency && onTriageEmergency(em.id, 'RESPONDING')} className="px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold">Responding</button>
+                  )}
+                  <button onClick={() => onResolveEmergency(em.id)} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">Resolved ✓</button>
+                </div>
               </div>
             ))}
           </div>
