@@ -26,6 +26,7 @@ export function ExpeditionsTab({
     if (!selected) return [];
     return manifests.filter((m: any) => m.expedition_id === selected && (!m.destination_station || m.destination_station === currentStation));
   }, [manifests, selected, currentStation]);
+  const [labelFor, setLabelFor] = useState<string | null>(null);
 
   const stagedPct = useMemo(() => {
     if (!selected) return 0;
@@ -111,10 +112,20 @@ export function ExpeditionsTab({
                     <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-white/70 font-mono font-bold">{m.stage}</span>
                   </div>
                   <div className="text-[11px] text-white/50 font-mono">{m.labelling_code} • {m.qty} {m.unit} • {m.temp_zone}</div>
-                  {nx && (
-                    <button onClick={() => onAdvanceManifest(m.id, nx)} className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold">
-                      Advance → {nx}
-                    </button>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {nx && (
+                      <button onClick={() => onAdvanceManifest(m.id, nx)} className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold">Advance → {nx}</button>
+                    )}
+                    <button onClick={() => setLabelFor(labelFor === m.id ? null : m.id)} className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white text-xs font-bold border border-white/10">Label</button>
+                  </div>
+                  {labelFor === m.id && (
+                    <div className="label-sheet bg-white text-black p-3 rounded-xl mt-2 font-mono text-xs">
+                      <div className="font-black">{m.description || m.labelling_code}</div>
+                      <div>{m.labelling_code} • {m.qty} {m.unit}</div>
+                      <div>{m.container_id || 'Unassigned'} → {m.destination_station}</div>
+                      <div className="border-2 border-black p-2 mt-2 text-center font-black tracking-widest">{m.labelling_code}</div>
+                      <button onClick={() => window.print()} className="mt-2 w-full h-8 rounded bg-black text-white font-bold text-xs">Print</button>
+                    </div>
                   )}
                 </div>
               );
