@@ -179,46 +179,91 @@ export function bumpVC(deviceId: string, vc: Record<string, number>): Record<str
   return next;
 }
 
-// Atomic transaction: update asset + insert transaction + outbox + audit
-// Expiry: cannot CONSUME expired MEDICAL without override + audit entry (PLAN §3.2)
-export async function consumeAsset(opts: { assetId: string; delta: number; type: 'CONSUME'|'IN'|'OUT'|'ADJUST'; actorId: string; deviceId: string; overrideExpired?: boolean }) {
+// Lot-level FEFO inventory: consume drains earliest-expiry lots first, IN creates new lot, assets.qty stays derived SUM
+// Supports backward-compat template without lot_code (routes qty into a new lot), blocked cold-chain handled in manifest layer
+export async function consumeAsset(opts: { assetId: string; delta: number; type: 'CONSUME'|'IN'|'OUT'|'ADJUST'; actorId: string; deviceId: string; overrideExpired?: boolean; lotId?: string }) {
   const db = await getDb();
   const { ulid } = await import('ulid');
   const { encode } = await import('@msgpack/msgpack');
-  // ponytail: BEGIN IMMEDIATE before read to avoid TOCTOU on concurrent tabs
   db.exec('BEGIN IMMEDIATE');
   let asset: any;
   try {
     asset = db.selectObjects('SELECT * FROM assets WHERE id=?', [opts.assetId])[0];
     if (!asset) throw new Error('asset not found');
   } catch (e) { try { db.exec('ROLLBACK'); } catch {} throw e; }
-  const newQty = asset.qty + opts.delta;
-  if (newQty < 0) { try { db.exec('ROLLBACK'); } catch {} throw new Error('insufficient stock'); }
-  // Expired guard: block any expired stock from CONSUME without override (covers MEDICAL/OXYGEN/FOOD)
-  if (opts.type==='CONSUME' && asset.expiry_date && _isExpired(asset.expiry_date) && !opts.overrideExpired) {
-    db.exec('ROLLBACK');
-    throw new Error(`EXPIRED: ${asset.sku} expired ${asset.expiry_date} — requires override + audit`);
-  }
-  const patch = { qty: newQty, version: (asset.version ?? 1) + 1, updated_at: new Date().toISOString() };
-  const patchBytes = encode(patch);
   const id = ulid();
   const ts = new Date().toISOString();
   const outboxUlid = ulid();
   const auditAction = opts.overrideExpired ? `${opts.type}_OVERRIDE_EXPIRED` : opts.type;
-  // VC stamp
   let vc: Record<string, number> = {};
   try { const row = db.selectObjects('SELECT vector_clock FROM assets WHERE id=?', [opts.assetId])[0]; if (row?.vector_clock) vc = JSON.parse(row.vector_clock); } catch {}
   vc[opts.deviceId] = (vc[opts.deviceId] ?? 0) + 1;
   const vcStr = JSON.stringify(vc);
   try {
-    db.exec({ sql: 'UPDATE assets SET qty=?, version=?, updated_at=?, vector_clock=? WHERE id=?', bind: [newQty, patch.version, patch.updated_at, vcStr, opts.assetId] });
-    db.exec({ sql: 'INSERT INTO transactions (id, asset_id, type, qty_delta, actor_id, ts, sync_status) VALUES (?,?,?,?,?,?,?)', bind: [id, opts.assetId, opts.type, opts.delta, opts.actorId, ts, 'PENDING'] });
-    db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, vector_clock) VALUES (?,?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'assets', opts.assetId, opts.type, patchBytes, asset.version, ts, vcStr] });
-    db.exec({ sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)', bind: [id, opts.actorId, auditAction, 'assets', JSON.stringify({ qty: asset.qty, version: asset.version }), JSON.stringify(patch), ts] });
+    if (opts.delta < 0) {
+      // FEFO: respect lot expiry; fail closed on expired without override
+      if (opts.type==='CONSUME' && asset.expiry_date && _isExpired(asset.expiry_date) && !opts.overrideExpired) {
+        db.exec('ROLLBACK');
+        throw new Error(`EXPIRED: ${asset.sku} expired ${asset.expiry_date} — requires override + audit`);
+      }
+      let need = -opts.delta;
+      let lots: any[] = [];
+      if (opts.lotId) {
+        lots = db.selectObjects('SELECT * FROM lots WHERE id=? AND asset_sku=?', [opts.lotId, asset.sku]);
+        if (!lots.length) { db.exec('ROLLBACK'); throw new Error(`lot ${opts.lotId} not found for ${asset.sku}`); }
+      } else {
+        lots = db.selectObjects("SELECT * FROM lots WHERE asset_sku=? AND qty>0 ORDER BY CASE WHEN expiry_date IS NULL THEN 1 ELSE 0 END, expiry_date ASC", [asset.sku]);
+      }
+      let totalAvail = lots.reduce((s: number, l: any) => s + Number(l.qty || 0), 0);
+      if (totalAvail < need) { db.exec('ROLLBACK'); throw new Error(`insufficient lot stock for ${asset.sku}: need ${need}, have ${totalAvail}`); }
+      for (const lot of lots) {
+        if (need <= 0) break;
+        if (opts.type==='CONSUME' && lot.expiry_date && _isExpired(lot.expiry_date) && !opts.overrideExpired) {
+          continue;
+        }
+        const take = Math.min(Number(lot.qty), need);
+        const newLotQty = Number(lot.qty) - take;
+        db.exec({ sql: 'UPDATE lots SET qty=? WHERE id=?', bind: [newLotQty, lot.id] });
+        const lotPatch = { lot_code: lot.lot_code, qty: newLotQty, asset_sku: lot.asset_sku };
+        const lotUlid = ulid();
+        db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, vector_clock) VALUES (?,?,?,?,?,?,?,?,?)', bind: [lotUlid, opts.deviceId, 'lots', lot.id, 'UPSERT', encode(lotPatch), 0, ts, vcStr] });
+        need -= take;
+      }
+      if (need > 0) { db.exec('ROLLBACK'); throw new Error(`FEFO exhausted without covering need — expired lots blocked; use override`); }
+      const sumRow = db.selectObjects('SELECT COALESCE(SUM(qty),0) as s FROM lots WHERE asset_sku=?', [asset.sku])[0] as any;
+      const newQty = Number(sumRow?.s || 0);
+      const patch = { qty: newQty, version: (asset.version ?? 1) + 1, updated_at: new Date().toISOString() };
+      db.exec({ sql: 'UPDATE assets SET qty=?, version=?, updated_at=?, vector_clock=? WHERE id=?', bind: [newQty, patch.version, patch.updated_at, vcStr, opts.assetId] });
+      db.exec({ sql: 'INSERT INTO transactions (id, asset_id, type, qty_delta, actor_id, ts, sync_status) VALUES (?,?,?,?,?,?,?)', bind: [id, opts.assetId, opts.type, opts.delta, opts.actorId, ts, 'PENDING'] });
+      db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, vector_clock) VALUES (?,?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'assets', opts.assetId, opts.type, encode(patch), asset.version, ts, vcStr] });
+      db.exec({ sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)', bind: [id, opts.actorId, auditAction, 'assets', JSON.stringify({ qty: asset.qty, version: asset.version }), JSON.stringify(patch), ts] });
+    } else if (opts.delta > 0) {
+      // IN: create new lot
+      const lotId = ulid();
+      const lotCode = `${asset.sku}-L-${id.slice(-6)}`;
+      const expiry = asset.expiry_date || null;
+      db.exec({ sql: 'INSERT INTO lots (id, asset_sku, lot_code, qty, expiry_date, crate_id, received_ts) VALUES (?,?,?,?,?,?,?)', bind: [lotId, asset.sku, lotCode, opts.delta, expiry, asset.crate_id, ts] });
+      const lotUlid = ulid();
+      db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, vector_clock) VALUES (?,?,?,?,?,?,?,?,?)', bind: [lotUlid, opts.deviceId, 'lots', lotId, 'UPSERT', encode({ asset_sku: asset.sku, lot_code: lotCode, qty: opts.delta, expiry_date: expiry, crate_id: asset.crate_id }), 0, ts, vcStr] });
+      const sumRow = db.selectObjects('SELECT COALESCE(SUM(qty),0) as s FROM lots WHERE asset_sku=?', [asset.sku])[0] as any;
+      const newQty = Number(sumRow?.s || 0);
+      const patch = { qty: newQty, version: (asset.version ?? 1) + 1, updated_at: new Date().toISOString() };
+      db.exec({ sql: 'UPDATE assets SET qty=?, version=?, updated_at=?, vector_clock=? WHERE id=?', bind: [newQty, patch.version, patch.updated_at, vcStr, opts.assetId] });
+      db.exec({ sql: 'INSERT INTO transactions (id, asset_id, type, qty_delta, actor_id, ts, sync_status) VALUES (?,?,?,?,?,?,?)', bind: [id, opts.assetId, opts.type, opts.delta, opts.actorId, ts, 'PENDING'] });
+      db.exec({ sql: 'INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, created_at, vector_clock) VALUES (?,?,?,?,?,?,?,?,?)', bind: [outboxUlid, opts.deviceId, 'assets', opts.assetId, opts.type, encode(patch), asset.version, ts, vcStr] });
+      db.exec({ sql: 'INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)', bind: [id, opts.actorId, auditAction, 'assets', JSON.stringify({ qty: asset.qty, version: asset.version }), JSON.stringify(patch), ts] });
+    } else {
+      // zero delta => no-op
+      db.exec('ROLLBACK');
+      throw new Error('delta must be non-zero');
+    }
     db.exec('COMMIT');
   } catch (e) {
- db.exec('ROLLBACK'); throw e; }
-  return { newQty, outboxUlid, patch, vector_clock: vc };
+    try { db.exec('ROLLBACK'); } catch {}
+    throw e;
+  }
+  const finalRow = db.selectObjects('SELECT qty, version FROM assets WHERE id=?', [opts.assetId])[0] as any;
+  return { newQty: finalRow?.qty, outboxUlid, vector_clock: vc };
 }
 
 export async function createIndent(opts: { stationId: string; assetId: string; qty: number; urgency: string; createdBy: string; deviceId: string; }) {

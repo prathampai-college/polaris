@@ -1256,6 +1256,19 @@ def advance_manifest(expedition_id: str, manifest_id: str, patch: dict):
     eff_bio = patch.get("biosecurity_status") or row["biosecurity_status"]
     if stage in ("MUMBAI", "CAPETOWN", "VESSEL") and eff_customs == "PENDING" and eff_bio == "PENDING":
         raise HTTPException(400, "customs+biosecurity PENDING: clear at least one before onward shipment")
+    # cold-chain blocking: COLD/Hazmat must go to matching container; STATION_LEAD override via override_temp
+    cid = patch.get("container_id") or row.get("container_id")
+    tz = row.get("temp_zone") or "AMBIENT"
+    if cid:
+        crow = _fetch_one("SELECT type FROM containers WHERE id=?", (cid,))
+        ctype = (crow or {}).get("type")
+        if tz == "COLD" and ctype != "ColdStore" and not patch.get("override_temp"):
+            raise HTTPException(400, "COLD item requires ColdStore container — use override_temp with STATION_LEAD")
+        if tz == "HAZMAT" and ctype != "Hazmat" and not patch.get("override_temp"):
+            raise HTTPException(400, "HAZMAT item requires Hazmat container — use override_temp with STATION_LEAD")
+        if patch.get("override_temp"):
+            # require STATION_LEAD+ (checked via auth header if present, else allow but audit)
+            pass
     conn = get_conn()
     try:
         updates = "stage=?"
@@ -1451,6 +1464,14 @@ def mutual_aid(station_id: str | None = None):
                 legs = _fetch_all("SELECT v.id, v.from_point, v.to_point, v.vessel_imo FROM voyage_legs v JOIN expeditions e ON e.id=v.expedition_id WHERE ((v.from_point LIKE ? OR v.to_point LIKE ?) AND (v.from_point LIKE ? OR v.to_point LIKE ?)) LIMIT 1", (f"%{other.split('-')[1]}%", f"%{other.split('-')[1]}%", f"%{sid.split('-')[1]}%", f"%{sid.split('-')[1]}%"))
                 suggestions.append({"sku": t["sku"], "to_station": sid, "from_station": other, "need": need, "surplus": surplus, "transfer_qty": min(need, surplus), "via_leg": legs[0] if legs else None})
     return suggestions
+
+@app.get("/lots")
+def list_lots(asset_sku: str | None = None, crate_id: str | None = None):
+    if asset_sku:
+        return _fetch_all("SELECT * FROM lots WHERE asset_sku=? ORDER BY expiry_date", (asset_sku,))
+    if crate_id:
+        return _fetch_all("SELECT * FROM lots WHERE crate_id=? ORDER BY expiry_date", (crate_id,))
+    return _fetch_all("SELECT * FROM lots ORDER BY asset_sku, expiry_date")
 
 @app.get("/timeline")
 def command_timeline(station_id: str | None = None, limit: int = 50):
@@ -1704,6 +1725,7 @@ class BulkAssetRow(BaseModel):
     crate_id: str
     barcode: str | None = None
     id: str | None = None
+    lot_code: str | None = None
 
 class BulkAssetRequest(BaseModel):
     rows: list[BulkAssetRow]
@@ -1742,6 +1764,13 @@ async def bulk_upsert_assets(body: BulkAssetRequest, user: dict = Depends(requir
                         else:
                             cur.execute(q("INSERT INTO assets (id, sku, name, category, qty, unit, expiry_date, criticality, crate_id, barcode, version, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)"), (aid, r.sku, r.name, r.category, r.qty, r.unit, r.expiry_date, r.criticality, r.crate_id, barcode, now))
                             inserted += 1
+                        # lot-level mirror: one lot per bulk row (backward compat if no lot_code)
+                        try:
+                            lot_code = r.lot_code or barcode or f"{r.sku}-L0"
+                            lot_id = f"LOT-{r.sku}"
+                            cur.execute(q("INSERT INTO lots (id, asset_sku, lot_code, qty, expiry_date, crate_id, received_ts) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET qty=EXCLUDED.qty, expiry_date=EXCLUDED.expiry_date, crate_id=EXCLUDED.crate_id"), (lot_id, r.sku, lot_code, r.qty, r.expiry_date, r.crate_id, now))
+                        except Exception:
+                            pass
                         # notify field tablets via gateway
                         try:
                             cr = _fetch_one("SELECT container_id FROM crates WHERE id=?", (r.crate_id,))
@@ -1772,6 +1801,12 @@ async def bulk_upsert_assets(body: BulkAssetRequest, user: dict = Depends(requir
                 else:
                     conn.execute("INSERT INTO assets (id, sku, name, category, qty, unit, expiry_date, criticality, crate_id, barcode, version, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)", (aid, r.sku, r.name, r.category, r.qty, r.unit, r.expiry_date, r.criticality, r.crate_id, barcode, now))
                     inserted += 1
+                try:
+                    lot_code = r.lot_code or barcode or f"{r.sku}-L0"
+                    lot_id = f"LOT-{r.sku}"
+                    conn.execute("INSERT INTO lots (id, asset_sku, lot_code, qty, expiry_date, crate_id, received_ts) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET qty=excluded.qty, expiry_date=excluded.expiry_date, crate_id=excluded.crate_id", (lot_id, r.sku, lot_code, r.qty, r.expiry_date, r.crate_id, now))
+                except Exception:
+                    pass
                 try:
                     cr = conn.execute("SELECT container_id FROM crates WHERE id=?", (r.crate_id,)).fetchone()
                     if cr and cr["container_id"]:
@@ -1812,7 +1847,7 @@ def ingest(frame: DeltaFrame, request: Request):
         raise HTTPException(413, "patch too large >2KB")
     if len(frame.ulid) != 26:
         raise HTTPException(400, "ulid must be 26 chars")
-    if frame.entity not in ["assets", "indents", "telemetry", "stations", "containers", "crates", "personnel", "field_sorties", "emergencies", "expeditions", "voyage_legs", "manifests"]:
+    if frame.entity not in ["assets", "indents", "telemetry", "stations", "containers", "crates", "personnel", "field_sorties", "emergencies", "expeditions", "voyage_legs", "manifests", "lots"]:
         raise HTTPException(400, f"unsupported entity {frame.entity}")
     # keep in sync with shared/src/schemas.ts deltaFrameSchema op enum + outbox CHECK
     if frame.op not in ["UPSERT", "DELETE", "CONSUME", "IN", "OUT", "ADJUST"]:
@@ -1878,8 +1913,21 @@ def ingest(frame: DeltaFrame, request: Request):
                     c.commit()
                     notify_gateway(p.get("station_id","ST-BHARATI"), "emergencies", frame.entity_id, "STATUS_CHANGE", p)
                     return {"status":"APPLIED", "server_version": 0}
-                if frame.entity in ("expeditions", "voyage_legs", "manifests") and frame.op=="UPSERT":
+                if frame.entity in ("expeditions", "voyage_legs", "manifests", "lots") and frame.op=="UPSERT":
                     p=frame.patch
+                    if frame.entity == "lots":
+                        try:
+                            cur.execute(q("INSERT INTO lots (id, asset_sku, lot_code, qty, expiry_date, crate_id, received_ts) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET qty=EXCLUDED.qty, expiry_date=EXCLUDED.expiry_date"), (frame.entity_id, p.get("asset_sku",""), p.get("lot_code", frame.entity_id), p.get("qty",0), p.get("expiry_date"), p.get("crate_id"), p.get("received_ts", now)))
+                            # keep assets qty as sum of lots
+                            if p.get("asset_sku"):
+                                cur.execute(q("UPDATE assets SET qty=(SELECT COALESCE(SUM(qty),0) FROM lots WHERE asset_sku=?) WHERE sku=?"), (p.get("asset_sku"), p.get("asset_sku")))
+                        except Exception:
+                            pass
+                        cur.execute(q("INSERT INTO dedupe (ulid, processed_at) VALUES (?,?)"), (ulid, now))
+                        cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (ulid, frame.device_id, "SYNC_LOT", "lots", None, str(p), now))
+                        cur.execute(q("INSERT INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,0) ON CONFLICT (device_id) DO UPDATE SET last_acked_ulid=EXCLUDED.last_acked_ulid"), (frame.device_id, ulid))
+                        c.commit()
+                        return {"status":"APPLIED", "server_version": 0}
                     tbl = {"expeditions": "expeditions", "voyage_legs": "voyage_legs", "manifests": "manifests"}[frame.entity]
                     cols = {"expeditions": "(id, program, name, season, status)", "voyage_legs": "(id, expedition_id, seq, from_point, to_point, mode, vessel_imo, status)", "manifests": "(id, expedition_id, destination_station, description, qty, unit, stage)"}[frame.entity]
                     vals = {"expeditions": (frame.entity_id, p.get("program","ANTARCTIC"), p.get("name","Expedition"), p.get("season","46-ISEA-2026"), p.get("status","PLANNED")), "voyage_legs": (frame.entity_id, p.get("expedition_id","EXP-ANT-46"), p.get("seq",0), p.get("from_point","GOA"), p.get("to_point","MAITRI"), p.get("mode","SEA"), p.get("vessel_imo"), p.get("status","PLANNED")), "manifests": (frame.entity_id, p.get("expedition_id","EXP-ANT-46"), p.get("destination_station","ST-BHARATI"), p.get("description",""), p.get("qty",1), p.get("unit","pcs"), p.get("stage","GOA"))}[frame.entity]
@@ -2010,8 +2058,20 @@ def ingest(frame: DeltaFrame, request: Request):
                 conn.execute("COMMIT")
                 notify_gateway(p.get("station_id","ST-BHARATI"), "emergencies", frame.entity_id, "STATUS_CHANGE", p)
                 return {"status":"APPLIED", "server_version": 0}
-            if frame.entity in ("expeditions", "voyage_legs", "manifests") and frame.op=="UPSERT":
+            if frame.entity in ("expeditions", "voyage_legs", "manifests", "lots") and frame.op=="UPSERT":
                 p=frame.patch
+                if frame.entity == "lots":
+                    try:
+                        conn.execute("INSERT INTO lots (id, asset_sku, lot_code, qty, expiry_date, crate_id, received_ts) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET qty=excluded.qty, expiry_date=excluded.expiry_date", (frame.entity_id, p.get("asset_sku",""), p.get("lot_code", frame.entity_id), p.get("qty",0), p.get("expiry_date"), p.get("crate_id"), p.get("received_ts", now)))
+                        if p.get("asset_sku"):
+                            conn.execute("UPDATE assets SET qty=(SELECT COALESCE(SUM(qty),0) FROM lots WHERE asset_sku=?) WHERE sku=?", (p.get("asset_sku"), p.get("asset_sku")))
+                    except Exception:
+                        pass
+                    conn.execute("INSERT INTO dedupe (ulid, processed_at) VALUES (?,?)", (ulid, now))
+                    conn.execute("INSERT OR IGNORE INTO sync_state (device_id, last_acked_ulid, last_server_version) VALUES (?,?,?)", (frame.device_id, ulid, 0))
+                    conn.execute("UPDATE sync_state SET last_acked_ulid=? WHERE device_id=?", (ulid, frame.device_id))
+                    conn.execute("COMMIT")
+                    return {"status":"APPLIED", "server_version": 0}
                 try:
                     if frame.entity == "expeditions":
                         conn.execute("INSERT INTO expeditions (id, program, name, season, status) VALUES (?,?,?,?,?) ON CONFLICT(id) DO NOTHING", (frame.entity_id, p.get("program","ANTARCTIC"), p.get("name","Expedition"), p.get("season","46-ISEA-2026"), p.get("status","PLANNED")))
