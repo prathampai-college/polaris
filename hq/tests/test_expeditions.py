@@ -27,7 +27,9 @@ def _reset():
         except Exception: pass
         try: conn.execute("DELETE FROM audit_log WHERE action LIKE 'EXPEDITION_%' OR action='SORTIE_OVERDUE'")
         except Exception: pass
-        try: conn.execute("UPDATE personnel SET status='ON_STATION' WHERE id IN ('PER-BHA-01','PER-BHA-02')")
+        try: conn.execute("UPDATE personnel SET status='ON_STATION' WHERE station_id='ST-BHARATI'")
+        except Exception: pass
+        try: conn.execute("UPDATE field_sorties SET safety_status='RETURNED' WHERE id LIKE 'MED-%'")
         except Exception: pass
         try: conn.commit()
         except Exception: pass
