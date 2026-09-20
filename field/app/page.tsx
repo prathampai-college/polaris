@@ -424,7 +424,7 @@ export default function FieldPage() {
     }
   }
 
-  async function handleCreateSortie(leadPersonnelId: string, destination: string, expectedReturnTime: string) {
+  async function handleCreateSortie(leadPersonnelId: string, destination: string, expectedReturnTime: string, buddyPersonnelId?: string, soloOverride?: boolean) {
     try {
       await createSortie({
         stationId: STATION_ID,
@@ -433,8 +433,10 @@ export default function FieldPage() {
         expectedReturnTime,
         createdBy: ACTOR_ID,
         deviceId: DEVICE_ID,
+        buddyPersonnelId,
+        soloOverride,
       });
-      pushToast('Field sortie checkout logged');
+      pushToast(buddyPersonnelId ? `Sortie checkout: lead + buddy paired` : 'Solo sortie — audited STATION_LEAD override');
       refresh();
     } catch (e: any) {
       pushToast(e.message);
