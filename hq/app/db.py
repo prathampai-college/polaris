@@ -357,6 +357,13 @@ def _ensure_expedition_sqlite(conn):
     except Exception:
         pass
     try:
+        conn.execute("UPDATE personnel SET program='ARCTIC' WHERE id LIKE 'PER-HIM-%' AND (program IS NULL OR program='BOTH')")
+        conn.execute("UPDATE personnel SET program='BOTH' WHERE id LIKE 'PER-BHA-%' AND program IS NULL")
+        conn.execute("UPDATE personnel SET program='BOTH' WHERE id LIKE 'PER-MAI-%' AND program IS NULL")
+        conn.commit()
+    except Exception:
+        pass
+    try:
         cur = conn.execute("SELECT COUNT(*) FROM lots")
         if cur.fetchone()[0] == 0:
             for a in conn.execute("SELECT sku, qty, expiry_date, crate_id FROM assets").fetchall():
