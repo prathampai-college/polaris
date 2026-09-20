@@ -1291,6 +1291,55 @@ def advance_manifest(expedition_id: str, manifest_id: str, patch: dict):
                 pass
     return {"status": "ok", "id": manifest_id, "stage": stage}
 
+@app.get("/freight_rates")
+def list_freight_rates():
+    return _fetch_all("SELECT mode, cost_per_kg, base_cost FROM freight_rates ORDER BY mode")
+
+@app.put("/freight_rates/{mode}")
+async def put_freight_rate(mode: str, body: dict, user: dict = Depends(require_role("DISPATCH"))):
+    if mode not in ("SEA", "AIR", "TRAVERSE"):
+        raise HTTPException(400, "mode must be SEA|AIR|TRAVERSE")
+    ckg = float(body.get("cost_per_kg", 0))
+    base = float(body.get("base_cost", 0))
+    if ckg < 0 or base < 0:
+        raise HTTPException(400, "cost must be >=0")
+    conn = get_conn()
+    try:
+        if USE_PG:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(q("INSERT INTO freight_rates (mode, cost_per_kg, base_cost) VALUES (?,?,?) ON CONFLICT (mode) DO UPDATE SET cost_per_kg=EXCLUDED.cost_per_kg, base_cost=EXCLUDED.base_cost"), (mode, ckg, base))
+        else:
+            conn.execute("INSERT INTO freight_rates VALUES (?,?,?) ON CONFLICT(mode) DO UPDATE SET cost_per_kg=excluded.cost_per_kg, base_cost=excluded.base_cost", (mode, ckg, base))
+            conn.commit()
+    finally:
+        if USE_PG:
+            try:
+                from .db import release_conn as _rfr
+                _rfr(conn)
+            except Exception:
+                pass
+    return {"mode": mode, "cost_per_kg": ckg, "base_cost": base}
+
+@app.get("/expeditions/{expedition_id}/cost")
+def expedition_cost(expedition_id: str):
+    ex = _fetch_one("SELECT program FROM expeditions WHERE id=?", (expedition_id,))
+    if not ex:
+        raise HTTPException(404, "expedition not found")
+    legs = _fetch_all("SELECT mode FROM voyage_legs WHERE expedition_id=?", (expedition_id,))
+    mans = _fetch_all("SELECT weight_kg FROM manifests WHERE expedition_id=?", (expedition_id,))
+    rates = {r["mode"]: r for r in _fetch_all("SELECT mode, cost_per_kg, base_cost FROM freight_rates")}
+    leg_cost = sum(float((rates.get(r["mode"], {}).get("base_cost") or 0)) for r in legs)
+    total_w = sum(float(r["weight_kg"] or 0) for r in mans)
+    # manifest freight: use program default per-kg (Antarctic SEA, Arctic AIR) or leg mode avg
+    if legs:
+        avg_ckg = sum(float((rates.get(r["mode"], {}).get("cost_per_kg") or 0)) for r in legs) / len(legs)
+    else:
+        avg_ckg = float((rates.get("SEA" if ex["program"] == "ANTARCTIC" else "AIR", {}).get("cost_per_kg") or 0))
+    manifest_cost = total_w * avg_ckg
+    total = leg_cost + manifest_cost
+    return {"expedition_id": expedition_id, "program": ex["program"], "legs": len(legs), "leg_cost_inr": round(leg_cost, 2), "manifest_weight_kg": round(total_w, 2), "manifest_cost_inr": round(manifest_cost, 2), "total_inr": round(total, 2), "cost_source": "freight_rates base_cost + weight*cost_per_kg"}
+
 @app.post("/expeditions/{expedition_id}/manifests/bulk")
 async def bulk_manifests(expedition_id: str, body: dict, user: dict = Depends(require_role("NCPOR_ADMIN"))):
     rows = body.get("rows", [])
@@ -1372,6 +1421,11 @@ def expedition_readiness(expedition_id: str):
             except Exception:
                 pass
         out["stations"][sid] = {"manifest_total": t, "staged": s, "staged_pct": round(100 * s / t, 1) if t else 100.0, "fuel_days": days, "two_month_warning": warn60}
+    try:
+        cost = expedition_cost(expedition_id)
+        out["cost_inr"] = cost
+    except Exception:
+        pass
     return out
 
 @app.get("/procurement/mutual-aid")
