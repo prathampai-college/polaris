@@ -1127,11 +1127,65 @@ def add_leg(expedition_id: str, body: LegCreate):
     if not ex:
         raise HTTPException(404, "expedition not found")
     if ex["program"] == "ARCTIC" and body.mode == "SEA" and body.vessel_imo:
-        pass  # arctic sea legs allowed but vessel optional
+        pass
     if body.vessel_imo:
         v = _fetch_one("SELECT imo FROM vessels WHERE imo=?", (body.vessel_imo,))
         if not v:
             raise HTTPException(404, f"vessel {body.vessel_imo} not found")
+    # date order validation
+    if body.eta_depart and body.eta_arrive:
+        try:
+            import datetime as _dt
+            d = _dt.datetime.fromisoformat(str(body.eta_depart).replace("Z", "+00:00"))
+            a = _dt.datetime.fromisoformat(str(body.eta_arrive).replace("Z", "+00:00"))
+            if d >= a:
+                raise HTTPException(400, "eta_depart must be before eta_arrive")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+    # chain validation within expedition
+    try:
+        existing = _fetch_all("SELECT seq, from_point, to_point FROM voyage_legs WHERE expedition_id=? ORDER BY seq", (expedition_id,))
+        pred = None
+        succ = None
+        for r in existing:
+            if r["seq"] < body.seq:
+                if pred is None or r["seq"] > pred["seq"]:
+                    pred = r
+            if r["seq"] > body.seq:
+                if succ is None or r["seq"] < succ["seq"]:
+                    succ = r
+        if pred and pred["to_point"] != body.from_point:
+            raise HTTPException(400, f"chain break: leg seq {body.seq} from_point {body.from_point} != predecessor to_point {pred['to_point']}")
+        if succ and body.to_point != succ["from_point"]:
+            raise HTTPException(400, f"chain break: leg seq {body.seq} to_point {body.to_point} != successor from_point {succ['from_point']}")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    # vessel double-booking overlap across all expeditions
+    if body.vessel_imo and body.eta_depart and body.eta_arrive:
+        try:
+            import datetime as _dt
+            nd = _dt.datetime.fromisoformat(str(body.eta_depart).replace("Z", "+00:00"))
+            na = _dt.datetime.fromisoformat(str(body.eta_arrive).replace("Z", "+00:00"))
+            for r in _fetch_all("SELECT id, expedition_id, eta_depart, eta_arrive FROM voyage_legs WHERE vessel_imo=?", (body.vessel_imo,)):
+                if not r.get("eta_depart") or not r.get("eta_arrive"):
+                    continue
+                try:
+                    ed = _dt.datetime.fromisoformat(str(r["eta_depart"]).replace("Z", "+00:00"))
+                    ea = _dt.datetime.fromisoformat(str(r["eta_arrive"]).replace("Z", "+00:00"))
+                    if max(nd, ed) < min(na, ea):
+                        raise HTTPException(409, f"vessel {body.vessel_imo} overlaps leg {r['id']} ({r['expedition_id']})")
+                except HTTPException:
+                    raise
+                except Exception:
+                    continue
+        except HTTPException:
+            raise
+        except Exception:
+            pass
     lid = body.id or f"LEG-{uuid.uuid4().hex[:8]}"
     conn = get_conn()
     try:
