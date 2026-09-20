@@ -802,7 +802,7 @@ export default function FieldPage() {
                 {tab === 'indents' && <IndentsTab assets={assets} indents={indents} indentAsset={indentAsset} setIndentAsset={setIndentAsset} indentQty={indentQty} setIndentQty={setIndentQty} indentUrg={indentUrg} setIndentUrg={setIndentUrg} doIndent={doIndent} doReceive={doReceive} />}
 
         {/* TAB 5: LOCATE (3D CONTAINER X-RAY) */}
-                {tab === 'locate' && <LocateTab assets={assets} highlightCrate={highlightCrate} setHighlightCrate={setHighlightCrate} LocatorWrap={LocatorWrap} />}
+                {tab === 'locate' && <LocateTab assets={assets} highlightCrate={highlightCrate} setHighlightCrate={setHighlightCrate} LocatorWrap={LocatorWrap} personnel={personnel} sorties={sorties} />}
 
         {/* TAB 6: PERSONNEL & MUSTER BOARD */}
         {tab === 'personnel' && (
