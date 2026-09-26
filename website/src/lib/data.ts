@@ -6,9 +6,9 @@ export type Station = {
 };
 
 export const STATIONS: Station[] = [
-  { id: 'ST-BHARATI', name: 'Bharati', coord: '69°24′S 76°11′E', crew: 24, dieselL: 4150, oxygenCyl: 24, bearings: 6, color: '#22f0d8' },
-  { id: 'ST-MAITRI', name: 'Maitri', coord: '70°45′S 11°44′E', crew: 26, dieselL: 3800, oxygenCyl: 18, bearings: 4, color: '#ffb84d' },
-  { id: 'ST-HIMADRI', name: 'Himadri', coord: '78°55′N 11°56′E', crew: 18, dieselL: 2900, oxygenCyl: 30, bearings: 9, color: '#8b8eff' },
+  { id: 'ST-BHARATI', name: 'Bharati', coord: '69°24′S 76°11′E', crew: 24, dieselL: 4150, oxygenCyl: 24, bearings: 6, color: '#0047FF' },
+  { id: 'ST-MAITRI', name: 'Maitri', coord: '70°45′S 11°44′E', crew: 26, dieselL: 3800, oxygenCyl: 18, bearings: 4, color: '#00C2FF' },
+  { id: 'ST-HIMADRI', name: 'Himadri', coord: '78°55′N 11°56′E', crew: 18, dieselL: 2900, oxygenCyl: 30, bearings: 9, color: '#FF4800' },
 ];
 
 export type InvRow = { sku: string; name: string; crate: string; qty: number; unit: string; status: 'CRITICAL' | 'LOW' | 'EXPIRING' | 'OK'; vc: string };
@@ -44,3 +44,6 @@ export const API_ROUTES: { method: string; path: string; note: string }[] = [
 ];
 
 export const TABS = ['Today', 'Inventory', 'Scan', 'Indents', 'Locate'] as const;
+
+export const statusColor = (s: string) =>
+  s === 'CRITICAL' ? 'text-flare' : s === 'LOW' || s === 'EXPIRING' ? 'text-amber-600' : 'text-emerald-600';

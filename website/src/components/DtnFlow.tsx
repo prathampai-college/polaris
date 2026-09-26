@@ -1,41 +1,49 @@
-import { motion } from 'framer-motion';
 import { Crosshair, Database, Radio } from 'lucide-react';
 
-/** DTN custody flow: tablet → mule → HQ */
+/**
+ * DTN custody flow, read left → right: a bundle is created on the field
+ * tablet, physically carried by a mule (person/vehicle), then merged at HQ.
+ * Small squares animate along each connector to read as "packets moving,"
+ * not as a data table — the previous 3-column list was clearer to build
+ * than to read at a glance.
+ */
 export default function DtnFlow({ bundled }: { bundled: number }) {
-  const cols = [
-    { title: 'FIELD TABLET', sub: 'OPFS • BUNDLED', Icon: Crosshair, n: bundled, dot: 'bg-cyan-400', tag: 'PENDING' },
-    { title: 'MULE', sub: 'QR • BroadcastChannel', Icon: Radio, n: 3, dot: 'bg-amber-400', tag: 'CUSTODY' },
-    { title: 'HQ INDIA', sub: 'LWW + Vector Clock', Icon: Database, n: 4, dot: 'bg-violet-400', tag: 'APPLIED' },
+  const stages = [
+    { title: 'FIELD TABLET', sub: 'Bundled locally, OPFS', count: bundled, Icon: Crosshair, tag: 'PENDING' },
+    { title: 'MULE', sub: 'Carried — QR / BroadcastChannel', count: 3, Icon: Radio, tag: 'CUSTODY' },
+    { title: 'HQ INDIA', sub: 'Merged — LWW + vector clock', count: 4, Icon: Database, tag: 'APPLIED' },
   ];
   return (
-    <div className="relative h-[300px] overflow-hidden rounded-xl border border-white/10 bg-[#060f1a] p-4">
-      <div className="dotgrid absolute inset-0 opacity-[0.12]" />
-      <div className="relative grid h-full grid-cols-3 gap-3">
-        {cols.map((col, i) => (
-          <div key={col.title} className="flex flex-col rounded-xl border border-white/[0.08] bg-white/[0.03] p-3 backdrop-blur">
-            <div className="flex items-center gap-2 font-mono text-[10px] tracking-[0.14em] text-white/60">
-              <col.Icon size={12} />{col.title}
+    <div className="flex min-h-[280px] flex-col justify-center border border-structure bg-surface p-5 sm:p-8">
+      <div className="flex items-start">
+        {stages.map((s, i) => (
+          <div key={s.title} className="flex items-start" style={{ flex: i === stages.length - 1 ? '0 0 auto' : '1 1 0%' }}>
+            <div className="flex w-[100px] shrink-0 flex-col items-center text-center sm:w-[128px]">
+              <div className="grid h-14 w-14 place-items-center border-2 border-structure bg-canvas">
+                <s.Icon size={20} className="text-ink" />
+              </div>
+              <div className="mt-2 font-mono text-[10px] tracking-[0.1em] text-ink">{s.title}</div>
+              <div className="mt-0.5 font-mono text-[9px] leading-tight text-slate">{s.sub}</div>
+              <div className="mt-2 border border-structure bg-ink px-2 py-0.5 font-mono text-[11px] font-semibold text-canvas">{s.count}</div>
+              <div className="mt-1 font-mono text-[9px] tracking-[0.08em] text-slate">{s.tag}</div>
             </div>
-            <div className="mt-1 font-mono text-[11px] text-white/35">{col.sub}</div>
-            <div className="mt-3 flex-1 space-y-2 overflow-hidden">
-              {Array.from({ length: col.n }).map((_, k) => (
-                <motion.div key={`${i}-${k}-${col.n}`} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: k * 0.07 }}
-                  className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/40 px-2 py-2">
-                  <div className={`h-2 w-2 animate-pulse rounded-full ${col.dot}`} />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-mono text-[11px] text-white">#{String(1000 + k * 137 + i * 19).padStart(4, '0')} ULID</div>
-                    <div className="font-mono text-[10px] text-white/40">VC [2,1,4] • {col.tag}</div>
-                  </div>
-                </motion.div>
-              ))}
-            </div>
-            <div className="mt-2 font-mono text-[10px] text-white/30">{col.n} bundles</div>
+            {i < stages.length - 1 && (
+              <div className="relative mt-7 h-px flex-1 bg-structure/25">
+                {Array.from({ length: 4 }).map((_, k) => (
+                  <span
+                    key={k}
+                    className="absolute top-1/2 h-1.5 w-1.5 -translate-y-1/2 bg-cobalt animate-flow-right"
+                    style={{ animationDelay: `${k * 0.45 + i * 0.2}s` }}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </div>
-      <div className="pointer-events-none absolute left-[32%] top-1/2 -translate-y-1/2 text-xl text-cyan-300/60">››</div>
-      <div className="pointer-events-none absolute left-[64%] top-1/2 -translate-y-1/2 text-xl text-amber-300/60">››</div>
+      <div className="mt-6 font-mono text-[11px] leading-5 text-slate">
+        Bundles move Field → Mule → HQ opportunistically, over whichever link or hand-carry is available. Each is applied exactly once, in any arrival order, via vector-clock reconciliation.
+      </div>
     </div>
   );
 }
