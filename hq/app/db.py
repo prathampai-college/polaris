@@ -479,73 +479,92 @@ def init_db():
                         seed(cur)
                     except Exception as e:
                         logger.warning(f"[hq] PG seed failed (non-fatal, /health stays up): {e}")
-                else:
-                    # ensure procurement_targets seeded even on existing DB (Phase 1 migration)
-                    try:
-                        cur.execute("SELECT COUNT(*) FROM procurement_targets")
-                        if cur.fetchone()[0] == 0:
-                            seed_procurement_targets(cur)
-                    except Exception:
-                        pass
-                    try:
-                        cur.execute("SELECT COUNT(*) FROM physics_params")
-                        if cur.fetchone()[0] == 0:
-                            seed_physics_params(cur)
-                    except Exception:
-                        pass
-                    # Phase 4: vessels + indents.vessel_imo
-                    try:
-                        cur.execute("SELECT COUNT(*) FROM vessels")
-                    except Exception as e:
-                        if "does not exist" in str(e).lower() or "no such table" in str(e).lower():
-                            cur.execute("CREATE TABLE IF NOT EXISTS vessels (imo TEXT PRIMARY KEY, name TEXT, lat REAL, lon REAL, sog REAL, eta TEXT, station_id TEXT REFERENCES stations(id), last_seen TEXT)")
-                            cur.execute("CREATE INDEX IF NOT EXISTS idx_vessels_station ON vessels(station_id)")
-                    try:
-                        cur.execute("SELECT vessel_imo FROM indents LIMIT 0")
-                    except Exception as e:
-                        if "does not exist" in str(e).lower() or "no such column" in str(e).lower() or "column" in str(e).lower():
-                            try: cur.execute("ALTER TABLE indents ADD COLUMN vessel_imo TEXT REFERENCES vessels(imo)")
+                # Idempotent ensure-block: runs on EVERY boot (was `else:` — so a fresh
+                # PG got stations but no personnel/lots/expeditions until a 2nd restart).
+                # ensure procurement_targets seeded even on existing DB (Phase 1 migration)
+                try:
+                    cur.execute("SELECT COUNT(*) FROM procurement_targets")
+                    if cur.fetchone()[0] == 0:
+                        seed_procurement_targets(cur)
+                except Exception:
+                    pass
+                try:
+                    cur.execute("SELECT COUNT(*) FROM physics_params")
+                    if cur.fetchone()[0] == 0:
+                        seed_physics_params(cur)
+                except Exception:
+                    pass
+                # Phase 4: vessels + indents.vessel_imo
+                try:
+                    cur.execute("SELECT COUNT(*) FROM vessels")
+                except Exception as e:
+                    if "does not exist" in str(e).lower() or "no such table" in str(e).lower():
+                        cur.execute("CREATE TABLE IF NOT EXISTS vessels (imo TEXT PRIMARY KEY, name TEXT, lat REAL, lon REAL, sog REAL, eta TEXT, station_id TEXT REFERENCES stations(id), last_seen TEXT)")
+                        cur.execute("CREATE INDEX IF NOT EXISTS idx_vessels_station ON vessels(station_id)")
+                try:
+                    cur.execute("SELECT vessel_imo FROM indents LIMIT 0")
+                except Exception as e:
+                    if "does not exist" in str(e).lower() or "no such column" in str(e).lower() or "column" in str(e).lower():
+                        try: cur.execute("ALTER TABLE indents ADD COLUMN vessel_imo TEXT REFERENCES vessels(imo)")
+                        except Exception: pass
+                # DTN tables + VC cols
+                for ddl in [
+                    "CREATE TABLE IF NOT EXISTS dtn_bundles (bundle_id TEXT PRIMARY KEY, src TEXT, dst_station TEXT, payload BYTEA, vc TEXT, custody INTEGER DEFAULT 1, created_at TEXT, ttl INTEGER DEFAULT 86400)",
+                    "CREATE TABLE IF NOT EXISTS asset_positions (asset_id TEXT PRIMARY KEY, x DOUBLE PRECISION, y DOUBLE PRECISION, theta DOUBLE PRECISION, conf DOUBLE PRECISION, last_sensor_ts TEXT, station_id TEXT REFERENCES stations(id))",
+                    "CREATE TABLE IF NOT EXISTS snn_state (device_id TEXT PRIMARY KEY, last_features TEXT, spike_count INTEGER DEFAULT 0, last_infer_ts TEXT, total_saved_mw DOUBLE PRECISION DEFAULT 0)",
+                    "CREATE TABLE IF NOT EXISTS personnel (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), name TEXT, role TEXT, blood_group TEXT, emergency_contact TEXT, status TEXT DEFAULT 'ON_STATION')",
+                    "CREATE TABLE IF NOT EXISTS field_sorties (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), lead_personnel_id TEXT, destination TEXT, departure_time TEXT, expected_return_time TEXT, actual_return_time TEXT, safety_status TEXT DEFAULT 'PLANNED', expedition_id TEXT)",
+                    "CREATE TABLE IF NOT EXISTS emergencies (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), type TEXT, reported_by TEXT, status TEXT DEFAULT 'ACTIVE', ts TEXT, location_coord TEXT, assignee TEXT, sortie_id TEXT)",
+                    "CREATE TABLE IF NOT EXISTS expeditions (id TEXT PRIMARY KEY, program TEXT DEFAULT 'ANTARCTIC', name TEXT, season TEXT, status TEXT DEFAULT 'PLANNED', created_by TEXT, created_at TEXT, vector_clock TEXT)",
+                    "CREATE TABLE IF NOT EXISTS voyage_legs (id TEXT PRIMARY KEY, expedition_id TEXT REFERENCES expeditions(id), seq INTEGER DEFAULT 0, from_point TEXT, to_point TEXT, mode TEXT DEFAULT 'SEA', vessel_imo TEXT, eta_depart TEXT, eta_arrive TEXT, status TEXT DEFAULT 'PLANNED')",
+                    "CREATE TABLE IF NOT EXISTS manifests (id TEXT PRIMARY KEY, expedition_id TEXT REFERENCES expeditions(id), owner_org TEXT, project_code TEXT, destination_station TEXT, sku TEXT, description TEXT, qty DOUBLE PRECISION, unit TEXT, weight_kg DOUBLE PRECISION, hazmat_class TEXT, temp_zone TEXT DEFAULT 'AMBIENT', customs_status TEXT DEFAULT 'PENDING', biosecurity_status TEXT DEFAULT 'PENDING', labelling_code TEXT UNIQUE, container_id TEXT, crate_id TEXT, stage TEXT DEFAULT 'GOA', vector_clock TEXT)",
+                    "CREATE TABLE IF NOT EXISTS decision_overrides (id TEXT PRIMARY KEY, ref_type TEXT, ref_id TEXT, station_id TEXT, actor_id TEXT, stated_risk TEXT, action TEXT, ts TEXT)",
+                    "CREATE TABLE IF NOT EXISTS personnel_positions (personnel_id TEXT PRIMARY KEY, x DOUBLE PRECISION, y DOUBLE PRECISION, theta DOUBLE PRECISION, conf DOUBLE PRECISION, last_sensor_ts TEXT, station_id TEXT)",
+                ]:
+                    try: cur.execute(ddl)
+                    except Exception: pass
+                for alter in [
+                    "ALTER TABLE assets ADD COLUMN IF NOT EXISTS vector_clock TEXT",
+                    "ALTER TABLE assets ADD COLUMN IF NOT EXISTS local_coord TEXT",
+                    "ALTER TABLE outbox ADD COLUMN IF NOT EXISTS vector_clock TEXT",
+                    "ALTER TABLE outbox ADD COLUMN IF NOT EXISTS local_coord TEXT",
+                    "ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS vector_clock TEXT",
+                    "ALTER TABLE emergencies ADD COLUMN IF NOT EXISTS assignee TEXT",
+                    "ALTER TABLE emergencies ADD COLUMN IF NOT EXISTS sortie_id TEXT",
+                    "ALTER TABLE field_sorties ADD COLUMN IF NOT EXISTS expedition_id TEXT",
+                    "ALTER TABLE field_sorties ADD COLUMN IF NOT EXISTS buddy_personnel_id TEXT",
+                    "ALTER TABLE emergencies ADD COLUMN IF NOT EXISTS status_entered_ts TEXT",
+                    "ALTER TABLE personnel ADD COLUMN IF NOT EXISTS program TEXT DEFAULT 'BOTH'",
+                ]:
+                    try: cur.execute(alter)
+                    except Exception: pass
+                # seed expeditions on PG when empty
+                try:
+                    cur.execute("SELECT COUNT(*) FROM expeditions")
+                    if cur.fetchone()[0] == 0:
+                        for r in DEFAULT_EXPEDITIONS:
+                            try: cur.execute("INSERT INTO expeditions VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING", (*r, None))
                             except Exception: pass
-                    # DTN tables + VC cols
-                    for ddl in [
-                        "CREATE TABLE IF NOT EXISTS dtn_bundles (bundle_id TEXT PRIMARY KEY, src TEXT, dst_station TEXT, payload BYTEA, vc TEXT, custody INTEGER DEFAULT 1, created_at TEXT, ttl INTEGER DEFAULT 86400)",
-                        "CREATE TABLE IF NOT EXISTS asset_positions (asset_id TEXT PRIMARY KEY, x DOUBLE PRECISION, y DOUBLE PRECISION, theta DOUBLE PRECISION, conf DOUBLE PRECISION, last_sensor_ts TEXT, station_id TEXT REFERENCES stations(id))",
-                        "CREATE TABLE IF NOT EXISTS snn_state (device_id TEXT PRIMARY KEY, last_features TEXT, spike_count INTEGER DEFAULT 0, last_infer_ts TEXT, total_saved_mw DOUBLE PRECISION DEFAULT 0)",
-                        "CREATE TABLE IF NOT EXISTS personnel (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), name TEXT, role TEXT, blood_group TEXT, emergency_contact TEXT, status TEXT DEFAULT 'ON_STATION')",
-                        "CREATE TABLE IF NOT EXISTS field_sorties (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), lead_personnel_id TEXT, destination TEXT, departure_time TEXT, expected_return_time TEXT, actual_return_time TEXT, safety_status TEXT DEFAULT 'PLANNED', expedition_id TEXT)",
-                        "CREATE TABLE IF NOT EXISTS emergencies (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), type TEXT, reported_by TEXT, status TEXT DEFAULT 'ACTIVE', ts TEXT, location_coord TEXT, assignee TEXT, sortie_id TEXT)",
-                        "CREATE TABLE IF NOT EXISTS expeditions (id TEXT PRIMARY KEY, program TEXT DEFAULT 'ANTARCTIC', name TEXT, season TEXT, status TEXT DEFAULT 'PLANNED', created_by TEXT, created_at TEXT, vector_clock TEXT)",
-                        "CREATE TABLE IF NOT EXISTS voyage_legs (id TEXT PRIMARY KEY, expedition_id TEXT REFERENCES expeditions(id), seq INTEGER DEFAULT 0, from_point TEXT, to_point TEXT, mode TEXT DEFAULT 'SEA', vessel_imo TEXT, eta_depart TEXT, eta_arrive TEXT, status TEXT DEFAULT 'PLANNED')",
-                        "CREATE TABLE IF NOT EXISTS manifests (id TEXT PRIMARY KEY, expedition_id TEXT REFERENCES expeditions(id), owner_org TEXT, project_code TEXT, destination_station TEXT, sku TEXT, description TEXT, qty DOUBLE PRECISION, unit TEXT, weight_kg DOUBLE PRECISION, hazmat_class TEXT, temp_zone TEXT DEFAULT 'AMBIENT', customs_status TEXT DEFAULT 'PENDING', biosecurity_status TEXT DEFAULT 'PENDING', labelling_code TEXT UNIQUE, container_id TEXT, crate_id TEXT, stage TEXT DEFAULT 'GOA', vector_clock TEXT)",
-                        "CREATE TABLE IF NOT EXISTS decision_overrides (id TEXT PRIMARY KEY, ref_type TEXT, ref_id TEXT, station_id TEXT, actor_id TEXT, stated_risk TEXT, action TEXT, ts TEXT)",
-                        "CREATE TABLE IF NOT EXISTS personnel_positions (personnel_id TEXT PRIMARY KEY, x DOUBLE PRECISION, y DOUBLE PRECISION, theta DOUBLE PRECISION, conf DOUBLE PRECISION, last_sensor_ts TEXT, station_id TEXT)",
-                    ]:
-                        try: cur.execute(ddl)
-                        except Exception: pass
-                    for alter in [
-                        "ALTER TABLE assets ADD COLUMN IF NOT EXISTS vector_clock TEXT",
-                        "ALTER TABLE assets ADD COLUMN IF NOT EXISTS local_coord TEXT",
-                        "ALTER TABLE outbox ADD COLUMN IF NOT EXISTS vector_clock TEXT",
-                        "ALTER TABLE outbox ADD COLUMN IF NOT EXISTS local_coord TEXT",
-                        "ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS vector_clock TEXT",
-                        "ALTER TABLE emergencies ADD COLUMN IF NOT EXISTS assignee TEXT",
-                        "ALTER TABLE emergencies ADD COLUMN IF NOT EXISTS sortie_id TEXT",
-                        "ALTER TABLE field_sorties ADD COLUMN IF NOT EXISTS expedition_id TEXT",
-                    ]:
-                        try: cur.execute(alter)
-                        except Exception: pass
-                    # seed expeditions on PG when empty
-                    try:
-                        cur.execute("SELECT COUNT(*) FROM expeditions")
-                        if cur.fetchone()[0] == 0:
-                            for r in DEFAULT_EXPEDITIONS:
-                                try: cur.execute("INSERT INTO expeditions VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING", (*r, None))
-                                except Exception: pass
-                            for r in DEFAULT_LEGS:
-                                try: cur.execute("INSERT INTO voyage_legs VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING", r)
-                                except Exception: pass
-                    except Exception:
-                        pass
+                        for r in DEFAULT_LEGS:
+                            try: cur.execute("INSERT INTO voyage_legs VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING", r)
+                            except Exception: pass
+                except Exception:
+                    pass
+                try:
+                    cur.execute("SELECT COUNT(*) FROM personnel")
+                    if cur.fetchone()[0] == 0:
+                        for p in DEFAULT_PERSONNEL:
+                            cur.execute("INSERT INTO personnel (id, station_id, name, role, blood_group, emergency_contact, status) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING", p)
+                except Exception as e:
+                    logger.warning(f"[hq] PG personnel seed failed: {e}")
+                # Opening lot per asset — same ids as the SQLite seed and the field tablet
+                # seed (LOT-{sku}-0 / {sku}-L0) so FEFO consumes converge on both sides.
+                try:
+                    cur.execute("SELECT COUNT(*) FROM lots")
+                    if cur.fetchone()[0] == 0:
+                        cur.execute("INSERT INTO lots (id, asset_sku, lot_code, qty, expiry_date, crate_id, received_ts) SELECT 'LOT-' || sku || '-0', sku, sku || '-L0', qty, expiry_date, crate_id, now()::text FROM assets ON CONFLICT DO NOTHING")
+                except Exception as e:
+                    logger.warning(f"[hq] PG lots seed failed: {e}")
         print(f"[hq] Postgres init ok {DATABASE_URL.split('@')[-1]}")
     else:
         # Drop any cached handle first: it may point at an unlinked inode if
