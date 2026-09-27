@@ -151,15 +151,19 @@ def _apply_asset(cur, ulid, device_id, entity_id, op, patch, vector_clock, ts, n
     # APPLIED without touching stock.
     new_qty = patch.get("qty", qty)
     new_version = patch.get("version", version + 1)
-    if new_qty is not None and float(new_qty) < 0:
-        raise Conflict({"status": "CONFLICT_CRITICAL", "server_version": version, "message": "would go negative, rejected"})
     remote_vc = _loads(vector_clock)
     cmp = compare_vc(existing_vc, remote_vc)
     patch_ts = patch.get("updated_at") or ts or ""
+    # Check who wins BEFORE the negative-qty guard: a stale/losing frame (server
+    # already has a newer vector clock) must be a silent no-op even if its own
+    # stale numbers would go negative — otherwise a replayed loser keeps raising
+    # a false CONFLICT_CRITICAL on every retry instead of being discarded.
     if cmp == "gt" or (cmp == "concurrent" and existing_ts and patch_ts <= existing_ts):
         _audit(cur, ulid, device_id, f"SYNC_{op}_LOCAL_WINS", "assets", json.dumps({"qty": qty, "version": version}), json.dumps(patch), now)
         _ack_state(cur, device_id, ulid)
         return {"status": "APPLIED_LOCAL_WINS", "server_version": version, "reason": "vc_local_newer" if cmp == "gt" else "lww_local_newer"}
+    if new_qty is not None and float(new_qty) < 0:
+        raise Conflict({"status": "CONFLICT_CRITICAL", "server_version": version, "message": "would go negative, rejected"})
     merged = json.dumps(merge_vc(existing_vc, remote_vc))
     cur.execute(q("UPDATE assets SET qty=?, version=?, updated_at=?, vector_clock=? WHERE id=?"), (new_qty, new_version, now, merged, entity_id))
     _audit(cur, ulid, device_id, f"SYNC_{op}", "assets", json.dumps({"qty": qty, "version": version}), json.dumps(patch), now)

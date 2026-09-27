@@ -86,6 +86,17 @@ def test_unknown_entity_is_400_not_404():
     assert r.status_code == 400
 
 
+def test_stale_losing_frame_with_negative_qty_is_local_wins_not_conflict():
+    # Server already has a newer vector clock (from another device) than this stale
+    # replay. Even though the stale frame's own qty would go negative, it must be a
+    # silent no-op (APPLIED_LOCAL_WINS) — not a false CONFLICT_CRITICAL alarm that
+    # would keep re-firing every time the same stale frame is replayed.
+    get_conn().execute("UPDATE assets SET vector_clock='{\"HQ-OTHER\": 5}', updated_at='2030-01-01' WHERE id='A1'")
+    r = client.post("/sync/ingest", json=frame("assets", "A1", {"qty": -50}, op="CONSUME", vc={}))
+    assert r.json()["status"] == "APPLIED_LOCAL_WINS", r.json()
+    get_conn().execute("UPDATE assets SET vector_clock='{}', updated_at='2020-01-01' WHERE id='A1'")
+
+
 def test_indent_sync_cannot_skip_hq_approval():
     iid = f"IND-SM-{str(ULID())[-6:]}"
     client.post("/sync/ingest", json=frame("indents", iid, {"station_id": "ST-BHARATI", "asset_id": "A1", "qty_requested": 1}))
