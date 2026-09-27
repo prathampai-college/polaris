@@ -600,7 +600,6 @@ def forecast(station_id: str, asset_sku: str = "FUEL-DIESEL-001"):
     return {"station_id": station_id, "asset_sku": asset_sku, "qty": qty, "physics": round(phys,1), "residual": round(res,2), "total_per_day": round(total,1), "days_to_stockout": round(days,1), "ci": ci, "ci_source": "placeholder_15pct", "used_model": used, "tele": tele,
             "pure_physics_days": round(qty/phys,1) if phys>0 else 999}
 
-@app.get("/physics/{station_id}")
 @app.get("/physics/params/{station_id}")
 def get_physics(station_id: str):
     """Per-station physics params (Phase 2.3). Falls back to global physics.json if no DB row."""
@@ -1325,36 +1324,6 @@ def advance_manifest(expedition_id: str, manifest_id: str, patch: dict):
                 pass
     return {"status": "ok", "id": manifest_id, "stage": stage}
 
-@app.get("/freight_rates")
-def list_freight_rates():
-    return _fetch_all("SELECT mode, cost_per_kg, base_cost FROM freight_rates ORDER BY mode")
-
-@app.put("/freight_rates/{mode}")
-async def put_freight_rate(mode: str, body: dict, user: dict = Depends(require_role("DISPATCH"))):
-    if mode not in ("SEA", "AIR", "TRAVERSE"):
-        raise HTTPException(400, "mode must be SEA|AIR|TRAVERSE")
-    ckg = float(body.get("cost_per_kg", 0))
-    base = float(body.get("base_cost", 0))
-    if ckg < 0 or base < 0:
-        raise HTTPException(400, "cost must be >=0")
-    conn = get_conn()
-    try:
-        if USE_PG:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(q("INSERT INTO freight_rates (mode, cost_per_kg, base_cost) VALUES (?,?,?) ON CONFLICT (mode) DO UPDATE SET cost_per_kg=EXCLUDED.cost_per_kg, base_cost=EXCLUDED.base_cost"), (mode, ckg, base))
-        else:
-            conn.execute("INSERT INTO freight_rates VALUES (?,?,?) ON CONFLICT(mode) DO UPDATE SET cost_per_kg=excluded.cost_per_kg, base_cost=excluded.base_cost", (mode, ckg, base))
-            conn.commit()
-    finally:
-        if USE_PG:
-            try:
-                from .db import release_conn as _rfr
-                _rfr(conn)
-            except Exception:
-                pass
-    return {"mode": mode, "cost_per_kg": ckg, "base_cost": base}
-
 @app.get("/expeditions/{expedition_id}/cost")
 def expedition_cost(expedition_id: str):
     ex = _fetch_one("SELECT program FROM expeditions WHERE id=?", (expedition_id,))
@@ -1373,25 +1342,6 @@ def expedition_cost(expedition_id: str):
     manifest_cost = total_w * avg_ckg
     total = leg_cost + manifest_cost
     return {"expedition_id": expedition_id, "program": ex["program"], "legs": len(legs), "leg_cost_inr": round(leg_cost, 2), "manifest_weight_kg": round(total_w, 2), "manifest_cost_inr": round(manifest_cost, 2), "total_inr": round(total, 2), "cost_source": "freight_rates base_cost + weight*cost_per_kg"}
-
-@app.post("/expeditions/{expedition_id}/manifests/bulk")
-async def bulk_manifests(expedition_id: str, body: dict, user: dict = Depends(require_role("NCPOR_ADMIN"))):
-    rows = body.get("rows", [])
-    if not rows or len(rows) > 500:
-        raise HTTPException(400, "rows must be 1..500")
-    ex = _fetch_one("SELECT id FROM expeditions WHERE id=?", (expedition_id,))
-    if not ex:
-        raise HTTPException(404, "expedition not found")
-    inserted = 0
-    for r in rows:
-        try:
-            mc = ManifestCreate(**{**r})
-            res = add_manifest(expedition_id, mc)
-            if res.get("status") == "ok":
-                inserted += 1
-        except Exception:
-            continue
-    return {"inserted": inserted, "total": len(rows)}
 
 @app.post("/expeditions/{expedition_id}/auto-pack")
 def auto_pack(expedition_id: str):
@@ -1485,14 +1435,6 @@ def mutual_aid(station_id: str | None = None):
                 legs = _fetch_all("SELECT v.id, v.from_point, v.to_point, v.vessel_imo FROM voyage_legs v JOIN expeditions e ON e.id=v.expedition_id WHERE ((v.from_point LIKE ? OR v.to_point LIKE ?) AND (v.from_point LIKE ? OR v.to_point LIKE ?)) LIMIT 1", (f"%{other.split('-')[1]}%", f"%{other.split('-')[1]}%", f"%{sid.split('-')[1]}%", f"%{sid.split('-')[1]}%"))
                 suggestions.append({"sku": t["sku"], "to_station": sid, "from_station": other, "need": need, "surplus": surplus, "transfer_qty": min(need, surplus), "via_leg": legs[0] if legs else None})
     return suggestions
-
-@app.get("/lots")
-def list_lots(asset_sku: str | None = None, crate_id: str | None = None):
-    if asset_sku:
-        return _fetch_all("SELECT * FROM lots WHERE asset_sku=? ORDER BY expiry_date", (asset_sku,))
-    if crate_id:
-        return _fetch_all("SELECT * FROM lots WHERE crate_id=? ORDER BY expiry_date", (crate_id,))
-    return _fetch_all("SELECT * FROM lots ORDER BY asset_sku, expiry_date")
 
 @app.get("/timeline")
 def command_timeline(station_id: str | None = None, limit: int = 50):
@@ -1727,14 +1669,6 @@ def assets_bulk_template():
     example = "FUEL-DIESEL-001,Diesel (Winter Grade),FUEL_DIESEL,4200,L,,CRITICAL,C1-K1,FUEL-DIESEL-001"
     return PlainTextResponse(content=f"{header}\n{example}\n", media_type="text/csv", headers={"Content-Disposition": "attachment; filename=template_inventory.csv"})
 
-@app.get("/expeditions/manifests/template")
-def manifest_bulk_template():
-    """Generic AL-1403-style manifest template (owner/project/destination/weight/hazmat/customs)."""
-    from fastapi.responses import PlainTextResponse
-    header = "owner_org,project_code,destination_station,sku,description,qty,unit,weight_kg,hazmat_class,temp_zone,customs_status,biosecurity_status,labelling_code"
-    example = "NCPOR,ATMOS-26,ST-BHARATI,FUEL-DIESEL-001,Diesel winter grade,500,L,420,,AMBIENT,CLEARED,CLEARED,EXP-ANT-46-BHARATI-0001"
-    return PlainTextResponse(content=f"{header}\n{example}\n", media_type="text/csv", headers={"Content-Disposition": "attachment; filename=template_manifest.csv"})
-
 class BulkAssetRow(BaseModel):
     sku: str
     name: str
@@ -1847,12 +1781,6 @@ async def bulk_upsert_assets(body: BulkAssetRequest, user: dict = Depends(requir
                 pass
     return {"inserted": inserted, "updated": updated}
 
-@app.get("/sync/state/{device_id}")
-def sync_state(device_id: str):
-    row=_fetch_one("SELECT * FROM sync_state WHERE device_id=?", (device_id,))
-    if not row: return {"device_id": device_id, "last_acked_ulid": None, "last_server_version": 0}
-    return row
-
 @contextmanager
 def _sync_txn():
     """One transaction for the sync writers; yields a cursor-like for apply_frame."""
@@ -1928,11 +1856,6 @@ def dtn_list_bundles(dst_station: str | None = None, limit: int = 50):
     if dst_station:
         return _fetch_all("SELECT bundle_id, src, dst_station, vc, custody, created_at, ttl FROM dtn_bundles WHERE dst_station=? ORDER BY created_at DESC LIMIT ?", (dst_station, limit))
     return _fetch_all("SELECT bundle_id, src, dst_station, vc, custody, created_at, ttl FROM dtn_bundles ORDER BY created_at DESC LIMIT ?", (limit,))
-
-@app.get("/dtn/conflicts")
-def dtn_conflicts(limit: int = 20):
-    # recent deduped/local-wins as conflicts proxy
-    return _fetch_all("SELECT * FROM audit_log WHERE action LIKE 'SYNC_%' ORDER BY ts DESC LIMIT ?", (limit,))
 
 @app.post("/dtn/exchange")
 async def dtn_exchange(request: Request):

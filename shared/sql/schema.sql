@@ -314,4 +314,11 @@ CREATE INDEX IF NOT EXISTS idx_overrides_station ON decision_overrides(station_i
 CREATE INDEX IF NOT EXISTS idx_personnel_positions_station ON personnel_positions(station_id);
 CREATE INDEX IF NOT EXISTS idx_lots_sku ON lots(asset_sku, expiry_date);
 CREATE INDEX IF NOT EXISTS idx_sorties_buddy ON field_sorties(buddy_personnel_id);
+-- Every overview/forecast call does "WHERE station_id=? ORDER BY ts DESC LIMIT 1" on a
+-- table that only grows — without this it's a full scan on every request.
+CREATE INDEX IF NOT EXISTS idx_telemetry_station_ts ON telemetry(station_id, ts);
+CREATE INDEX IF NOT EXISTS idx_indents_station_status ON indents(station_id, status);
+CREATE INDEX IF NOT EXISTS idx_containers_station ON containers(station_id);
+CREATE INDEX IF NOT EXISTS idx_crates_container ON crates(container_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
 
