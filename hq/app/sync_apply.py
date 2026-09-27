@@ -9,7 +9,7 @@ import json
 
 from ._vc import compare_vc, merge_vc
 from .config import ALLOWED
-from .db import USE_PG, utc_now
+from .db import USE_PG, utc_now, q
 
 ASSET_OPS = {"UPSERT", "CONSUME", "IN", "OUT", "ADJUST"}
 
@@ -42,10 +42,6 @@ class Conflict(Exception):
     def __init__(self, ack: dict):
         super().__init__(ack.get("message", "conflict"))
         self.ack = ack
-
-
-def q(sql: str) -> str:
-    return sql.replace("?", "%s") if USE_PG else sql
 
 
 def _loads(s) -> dict:
