@@ -96,7 +96,7 @@ const ws=await connectWs(GW_PORT);
 console.log('   ws connected');
 let acks=[];
 ws.on('message', (data)=>{
-  try{ const ack=fromWire(new Uint8Array(data), PSK_HEX); acks.push(ack); console.log(`   ← ACK ulid=${ack.ulid.slice(0,8)} status=${ack.status} v=${ack.server_version}`); }catch(e){ console.error(' ack decode fail', e.message); }
+  try{ const ack=fromWire(new Uint8Array(data), PSK_HEX); if(ack.type!=='ACK') return; /* downstream pushes now reach tablets too */ acks.push(ack); console.log(`   ← ACK ulid=${ack.ulid.slice(0,8)} status=${ack.status} v=${ack.server_version}`); }catch(e){ console.error(' ack decode fail', e.message); }
 });
 // send 5 frames
 for(const f of frames){
