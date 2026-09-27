@@ -1,0 +1,3 @@
+# POLARIS HQ — TEST-only deps (CI/test runs install requirements.txt + this).
+# Kept out of the runtime image so test tooling never busts or bloats it.
+pytest==8.4.2

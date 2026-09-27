@@ -1,15 +1,15 @@
-# POLARIS HQ — RUNTIME deps only (kept lean so `docker compose build hq` is fast).
-# Training/export deps (torch, snntorch, onnx) live in ai/requirements.txt (pinned)
+# POLARIS HQ — RUNTIME deps only, PINNED so `docker compose build hq` reuses
+# the pip layer instead of re-resolving + redownloading every build.
+# Training/export deps (torch, snntorch, onnx) live in ai/requirements.txt
 # and are intentionally NOT installed in the HQ image: at runtime HQ uses the
 # numpy LIF mirror (hq/app/snn_forecast.py) + onnxruntime for the thermo model.
-# Tests import only numpy (ai/snn/encoder.py), so pytest stays green without torch.
-fastapi>=0.110.0
-uvicorn[standard]>=0.29.0
-pydantic>=2.6.0
-psycopg[binary]>=3.1.0
-psycopg-pool>=3.2.0
-onnxruntime>=1.17.0
-numpy>=1.26.0
-pytest>=8.0.0
-httpx>=0.27.0
-python-ulid>=2.0.0
+# Test-only pytest lives in hq/requirements-test.txt (CI installs both).
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+psycopg[binary]==3.3.4
+psycopg-pool==3.3.1
+onnxruntime==1.29.0
+numpy==2.2.1
+httpx==0.28.1
+python-ulid==4.0.1

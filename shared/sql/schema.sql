@@ -166,6 +166,34 @@ CREATE TABLE IF NOT EXISTS snn_state (
   total_saved_mw REAL DEFAULT 0
 );
 
+-- Expedition planning (ISEA Antarctic + Himadri Arctic programs)
+-- NOTE: defined BEFORE field_sorties/emergencies — Postgres requires the
+-- referenced table to exist at CREATE TABLE time (SQLite defers this,
+-- which is why this ordering bug only broke `docker compose up` / CI).
+CREATE TABLE IF NOT EXISTS expeditions (
+  id TEXT PRIMARY KEY,
+  program TEXT CHECK(program IN ('ANTARCTIC','ARCTIC')) DEFAULT 'ANTARCTIC',
+  name TEXT,
+  season TEXT,
+  status TEXT CHECK(status IN ('PLANNED','STUFFING','IN_TRANSIT','DELIVERED','WINTER_OVER','COMPLETE')) DEFAULT 'PLANNED',
+  created_by TEXT,
+  created_at TEXT,
+  vector_clock TEXT
+);
+
+CREATE TABLE IF NOT EXISTS voyage_legs (
+  id TEXT PRIMARY KEY,
+  expedition_id TEXT REFERENCES expeditions(id),
+  seq INTEGER DEFAULT 0,
+  from_point TEXT,
+  to_point TEXT,
+  mode TEXT CHECK(mode IN ('SEA','AIR','TRAVERSE')) DEFAULT 'SEA',
+  vessel_imo TEXT REFERENCES vessels(imo),
+  eta_depart TEXT,
+  eta_arrive TEXT,
+  status TEXT CHECK(status IN ('PLANNED','DEPARTED','ARRIVED','DELAYED')) DEFAULT 'PLANNED'
+);
+
 CREATE TABLE IF NOT EXISTS personnel (
   id TEXT PRIMARY KEY,
   station_id TEXT REFERENCES stations(id),
@@ -200,31 +228,6 @@ CREATE TABLE IF NOT EXISTS emergencies (
   assignee TEXT,
   sortie_id TEXT REFERENCES field_sorties(id),
   status_entered_ts TEXT
-);
-
--- Expedition planning (ISEA Antarctic + Himadri Arctic programs)
-CREATE TABLE IF NOT EXISTS expeditions (
-  id TEXT PRIMARY KEY,
-  program TEXT CHECK(program IN ('ANTARCTIC','ARCTIC')) DEFAULT 'ANTARCTIC',
-  name TEXT,
-  season TEXT,
-  status TEXT CHECK(status IN ('PLANNED','STUFFING','IN_TRANSIT','DELIVERED','WINTER_OVER','COMPLETE')) DEFAULT 'PLANNED',
-  created_by TEXT,
-  created_at TEXT,
-  vector_clock TEXT
-);
-
-CREATE TABLE IF NOT EXISTS voyage_legs (
-  id TEXT PRIMARY KEY,
-  expedition_id TEXT REFERENCES expeditions(id),
-  seq INTEGER DEFAULT 0,
-  from_point TEXT,
-  to_point TEXT,
-  mode TEXT CHECK(mode IN ('SEA','AIR','TRAVERSE')) DEFAULT 'SEA',
-  vessel_imo TEXT REFERENCES vessels(imo),
-  eta_depart TEXT,
-  eta_arrive TEXT,
-  status TEXT CHECK(status IN ('PLANNED','DEPARTED','ARRIVED','DELAYED')) DEFAULT 'PLANNED'
 );
 
 CREATE TABLE IF NOT EXISTS manifests (

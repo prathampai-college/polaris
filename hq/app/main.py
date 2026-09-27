@@ -87,7 +87,13 @@ def notify_gateway(station_id: str, entity: str, entity_id: str, op: str, patch:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    # /health must answer even if the DB is still coming up (compose
+    # healthcheck gates gateway/field on hq). Never let a DB error here
+    # crash the app — log and keep serving degraded.
+    try:
+        init_db()
+    except Exception as e:
+        logger.error(f"[hq] init_db failed at startup (serving degraded, /health stays up): {e}", exc_info=True)
     try: load_forecast_model()
     except Exception as e: print("[hq forecast] model fallback", e)
     # Phase 2.2: start weather poller (Open-Meteo / IMD) if not sim-only disabled

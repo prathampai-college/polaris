@@ -34,3 +34,10 @@ node_modules
 .cat
 tmp
 *.tsbuildinfo
+# Build-speed: never shipped into any image (no Dockerfile COPYs these),
+# but without these entries Docker still tars+sends them in the build
+# context once per service (context is the repo root).
+website/
+coverage_html/
+.coverage*
+ai/runner/

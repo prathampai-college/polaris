@@ -1,4 +1,6 @@
-import os, sqlite3, pathlib, json, datetime, threading
+import os, sqlite3, pathlib, json, datetime, threading, logging
+
+logger = logging.getLogger("polaris.hq.db")
 
 def utc_now() -> str:
     try:
@@ -444,17 +446,39 @@ def init_db():
             with conn.cursor() as cur:
                 try: cur.execute("CREATE EXTENSION IF NOT EXISTS timescaledb;")
                 except Exception: pass
-                # psycopg may not allow multi-statement execute; split and run one by one
-                for stmt in [s.strip() for s in _pg_schema_sql().split(";") if s.strip()]:
+                # psycopg may not allow multi-statement execute; split and run one by one.
+                # Two-pass: first pass may hit forward FK refs on older schema.sql
+                # revisions (e.g. field_sorties REFERENCES expeditions before it
+                # exists) — retry failures once after all tables exist.
+                stmts = [s.strip() for s in _pg_schema_sql().split(";") if s.strip()]
+                deferred: list = []
+                for stmt in stmts:
                     try:
                         cur.execute(stmt)
                     except Exception as e:
-                        # ignore "already exists" but raise others
-                        if "already exists" not in str(e).lower():
-                            raise
-                cur.execute("SELECT COUNT(*) FROM stations")
-                if cur.fetchone()[0] == 0:
-                    seed(cur)
+                        msg = str(e).lower()
+                        if "already exists" in msg:
+                            continue
+                        deferred.append((stmt, e))
+                for stmt, first_err in deferred:
+                    try:
+                        cur.execute(stmt)
+                    except Exception as e:
+                        msg = str(e).lower()
+                        if "already exists" in msg:
+                            continue
+                        logger.warning(f"[hq] PG schema stmt failed (non-fatal): {first_err} / retry: {e} :: {stmt[:120]}")
+                try:
+                    cur.execute("SELECT COUNT(*) FROM stations")
+                    _n_stations = cur.fetchone()[0]
+                except Exception as e:
+                    logger.warning(f"[hq] PG stations check failed (non-fatal): {e}")
+                    _n_stations = 1  # skip seeding, keep app bootable for /health
+                if _n_stations == 0:
+                    try:
+                        seed(cur)
+                    except Exception as e:
+                        logger.warning(f"[hq] PG seed failed (non-fatal, /health stays up): {e}")
                 else:
                     # ensure procurement_targets seeded even on existing DB (Phase 1 migration)
                     try:
