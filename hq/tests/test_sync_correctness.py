@@ -84,3 +84,11 @@ def test_bad_bundle_does_not_sink_batch():
 def test_unknown_entity_is_400_not_404():
     r = client.post("/sync/ingest", json=frame("stations", "ST-BHARATI", {"name": "x"}))
     assert r.status_code == 400
+
+
+def test_indent_sync_cannot_skip_hq_approval():
+    iid = f"IND-SM-{str(ULID())[-6:]}"
+    client.post("/sync/ingest", json=frame("indents", iid, {"station_id": "ST-BHARATI", "asset_id": "A1", "qty_requested": 1}))
+    r = client.post("/sync/ingest", json=frame("indents", iid, {"status": "RECEIVED"}))
+    assert r.status_code == 400
+    assert one("SELECT status FROM indents WHERE id=?", (iid,)) == ("DRAFT",)

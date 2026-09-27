@@ -50,7 +50,8 @@ def test_next_public_psk_not_in_compose():
     lines = [l for l in compose.splitlines() if "NEXT_PUBLIC_PSK_HEX" in l and not l.strip().startswith("#")]
     assert len(lines) == 0, f"docker-compose.yml should not set NEXT_PUBLIC_PSK_HEX (found: {lines})"
     env_example = pathlib.Path(".env.example").read_text()
-    assert "NEXT_PUBLIC_PSK_HEX removed" in env_example or "never bake it" in env_example
+    # the PSK must never be assigned to a browser-exposed var
+    assert not any(l.strip().startswith("NEXT_PUBLIC_PSK") for l in env_example.splitlines())
 
 def test_cors_rejects_unknown_origin_when_explicit(monkeypatch=None):
     # In prod ALLOWED_ORIGINS is explicit; evil origin must not be echoed.

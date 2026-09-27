@@ -333,9 +333,7 @@ async def patch_indent(indent_id: str, body: IndentPatch, user: dict = Depends(r
         cur_status=row["status"]
         station_id=row.get("station_id") or "ST-BHARATI"
         allowed = ALLOWED.get(cur_status, [])
-        # allow DRAFT->RECEIVED for offline field demo (tolerant), otherwise enforce state machine
-        is_offline_shortcut = (cur_status == "DRAFT" and body.status == "RECEIVED")
-        if body.status not in allowed and not is_offline_shortcut:
+        if body.status not in allowed:
             raise HTTPException(400, f"invalid transition {cur_status}->{body.status}")
         # Phase 4: validate vessel_imo if provided
         if body.vessel_imo is not None:

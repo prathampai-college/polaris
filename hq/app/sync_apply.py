@@ -8,6 +8,7 @@ transaction (and a SAVEPOINT for bulk)."""
 import json
 
 from ._vc import compare_vc, merge_vc
+from .config import ALLOWED
 from .db import USE_PG, utc_now
 
 ASSET_OPS = {"UPSERT", "CONSUME", "IN", "OUT", "ADJUST"}
@@ -95,7 +96,10 @@ def apply_frame(cur, *, ulid: str, device_id: str, entity: str, entity_id: str, 
     fields = {k: patch[k] for k in cols if k in patch}
     if entity == "emergencies" and "status" in fields and "status_entered_ts" not in fields:
         fields["status_entered_ts"] = now  # triage-SLA watchdog clocks from this
-    exists = cur.execute(q(f"SELECT 1 FROM {entity} WHERE id=?"), (entity_id,)).fetchone()
+    exists = cur.execute(q(f"SELECT {'status' if entity == 'indents' else '1'} FROM {entity} WHERE id=?"), (entity_id,)).fetchone()
+    if exists and entity == "indents" and "status" in fields and fields["status"] != exists[0] and fields["status"] not in ALLOWED.get(exists[0], []):
+        # Same state machine as PATCH /indents — a tablet can't skip HQ approval/dispatch.
+        raise Rejected(f"invalid indent transition {exists[0]}->{fields['status']}")
     if exists:
         # Only columns present in the patch — a status-only patch must never
         # clobber name/role/expiry with defaults (old COALESCE(default, …) bug).
