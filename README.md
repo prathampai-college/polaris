@@ -6,6 +6,9 @@
 
 `docker compose up` starts the field tablet app, the sync gateway, HQ, the HQ dashboard and the database. The tablet keeps working with no link and syncs when one returns. `PITCH_DECK.md` has the demo walkthrough.
 
+> **New to the code?** Read [docs/START_HERE.md](docs/START_HERE.md) first (15 min), then the guide for your part:
+> [field](docs/guide/01-field.md) · [hq](docs/guide/02-hq.md) · [gateway](docs/guide/03-gateway.md) · [shared](docs/guide/04-shared.md) · [hq-dashboard](docs/guide/05-hq-dashboard.md) · [website](docs/guide/06-website.md) · [ai, scripts & tests](docs/guide/07-ai-scripts-tests.md)
+
 ---
 
 ## What it covers
