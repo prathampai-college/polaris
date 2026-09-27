@@ -19,10 +19,7 @@ COPY field/components ./components
 COPY field/lib ./lib
 COPY field/public ./public
 COPY field/next.config.mjs field/next-env.d.ts field/postcss.config.mjs field/tailwind.config.ts field/tsconfig.json ./
-ARG NEXT_PUBLIC_HQ_URL=http://localhost:8000
-ARG NEXT_PUBLIC_GATEWAY_URL=ws://localhost:8787
-ENV NEXT_PUBLIC_HQ_URL=$NEXT_PUBLIC_HQ_URL
-ENV NEXT_PUBLIC_GATEWAY_URL=$NEXT_PUBLIC_GATEWAY_URL
+# No build-time endpoints: tablets read HQ/gateway URLs from /api/config at runtime.
 # Disable Next telemetry phone-home during build (stalls/hangs on restricted networks)
 ENV NEXT_TELEMETRY_DISABLED=1
 # --no-audit --no-fund skips slow registry metadata; keep output visible (no --silent)

@@ -84,7 +84,7 @@ coverage/
 .parcel-cache/
 
 # PWA generated (regenerated at build)
-field/public/sw.js
+# field/public/sw.js is hand-written (offline app shell) — tracked on purpose
 field/public/workbox-*.js
 field/public/*.map
 hq-dashboard/public/sw.js

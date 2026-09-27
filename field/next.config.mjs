@@ -12,10 +12,15 @@ const nextConfig = {
   poweredByHeader: false,
   eslint: { ignoreDuringBuilds: true },
   experimental: { esmExternals: 'loose' },
-  async headers() { return [{ source: '/(.*)', headers: securityHeaders }]; },
+  async headers() {
+    return [
+      { source: '/(.*)', headers: securityHeaders },
+      // The SW must always be revalidated or a stale worker pins old app shells.
+      { source: '/sw.js', headers: [{ key: 'Cache-Control', value: 'no-cache' }, { key: 'Service-Worker-Allowed', value: '/' }] },
+    ];
+  },
   webpack: (config) => {
     config.experiments = { ...config.experiments, asyncWebAssembly: true };
-    config.module.rules.push({ test: /\.sql$/, type: 'asset/source' });
     return config;
   },
 };
