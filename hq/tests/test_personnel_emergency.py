@@ -79,6 +79,37 @@ def test_sortie_checkout_and_return():
     p1 = next(p for p in r.json() if p["id"] == "PER-BHA-01")
     assert p1["status"] == "ON_STATION"
 
+def test_sortie_solo_override_requires_station_lead():
+    # PER-BHA-01 must be ON_STATION for a fresh solo checkout
+    try:
+        conn = get_conn()
+        conn.execute("UPDATE personnel SET status='ON_STATION' WHERE id='PER-BHA-01'")
+        conn.execute("DELETE FROM field_sorties WHERE id IN ('SORTIE-SOLO-DENY','SORTIE-SOLO-OK')")
+        conn.commit()
+    except Exception:
+        pass
+
+    solo_payload = {
+        "id": "SORTIE-SOLO-DENY",
+        "station_id": "ST-BHARATI",
+        "lead_personnel_id": "PER-BHA-01",
+        "destination": "Testing Moraine Grid Solo",
+        "expected_return_time": "2026-10-01T12:00:00Z",
+        "solo_override": True,
+    }
+    # No auth at all -> must be rejected, not silently accepted (regression test for the
+    # missing `await` on await_auth() that made this path always 403 regardless of role,
+    # and would equally have hidden a bug that let it always succeed).
+    r = client.post("/sorties", json=solo_payload)
+    assert r.status_code == 403, r.text
+
+    from hq.app.auth import sign_jwt
+    from hq.app.config import SECRET_KEY, TOKEN_EXPIRY_DAYS
+    lead_token = sign_jwt({"sub": "TEST-HQ", "role": "STATION_LEAD", "station_id": "ST-BHARATI", "device_id": "TEST-HQ"}, SECRET_KEY, TOKEN_EXPIRY_DAYS)
+    solo_payload["id"] = "SORTIE-SOLO-OK"
+    r = client.post("/sorties", json=solo_payload, headers={"Authorization": f"Bearer {lead_token}"})
+    assert r.status_code == 200, r.text
+
 def test_emergency_sos_lifecycle():
     # Trigger SOS
     sos_payload = {

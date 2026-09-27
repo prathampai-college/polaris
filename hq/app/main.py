@@ -724,7 +724,7 @@ def list_sorties(station_id: str = None):
     return _fetch_all("SELECT s.*, p.name as lead_name, p.role as lead_role FROM field_sorties s LEFT JOIN personnel p ON p.id=s.lead_personnel_id ORDER BY s.departure_time DESC")
 
 @app.post("/sorties")
-def create_sortie(body: SortieCreate, request: Request):
+async def create_sortie(body: SortieCreate, request: Request):
     conn = get_conn()
     now = utc_now()
     sortie_id = body.id or f"SORTIE-{uuid.uuid4().hex[:8]}"
@@ -735,7 +735,7 @@ def create_sortie(body: SortieCreate, request: Request):
             raise HTTPException(400, "buddy_personnel_id required — solo sortie needs solo_override + STATION_LEAD authorization")
         # solo override requires STATION_LEAD+ role
         try:
-            user = await_auth(request)  # type: ignore
+            user = await await_auth(request)
             role = (user or {}).get("role", "VIEWER")
             from .auth import ROLE_HIERARCHY
             if ROLE_HIERARCHY.get(role, 0) < ROLE_HIERARCHY.get("STATION_LEAD", 3):
