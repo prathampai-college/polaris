@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
-import { toWire, fromWire, ulid, sizeReport, MAX_WIRE_SIZE, deltaFrameSchema } from '@polaris/shared';
+import { toWire, fromWire, ulid, sizeReport, MAX_WIRE_SIZE, deltaFrameSchema, syncInitSchema } from '@polaris/shared';
 import type { DownstreamDeltaFrame, SyncInitFrame, SyncInitRespFrame, AckFrame } from '@polaris/shared';
 import { ackStatusFor } from './ack.js';
 
@@ -61,7 +61,9 @@ function broadcastDownstream(delta: DownstreamDeltaFrame): number {
 
   for (const [ws, meta] of clients.entries()) {
     if (ws.readyState === WebSocket.OPEN) {
-      if (!delta.station_id || delta.station_id === 'ALL' || !meta.stationId || meta.stationId === delta.station_id) {
+      // A client with no stationId yet (pre-SYNC_INIT) is scoped to nothing —
+      // it must not be treated as a match-all and see every station's deltas.
+      if (!delta.station_id || delta.station_id === 'ALL' || meta.stationId === delta.station_id) {
         try {
           ws.send(wire);
           recipientCount++;
@@ -222,7 +224,12 @@ wss.on('connection', (ws: WebSocket) => {
 
     // Handle SYNC_INIT handshake from field tablet on connect/reconnect
     if (f.type === 'SYNC_INIT') {
-      const initFrame = f as unknown as SyncInitFrame;
+      const parsedInit = syncInitSchema.safeParse(f);
+      if (!parsedInit.success) {
+        log('warn', 'invalid sync init frame', { issues: parsedInit.error.issues.slice(0, 3) });
+        return;
+      }
+      const initFrame = parsedInit.data as SyncInitFrame;
       const meta = clients.get(ws);
       if (meta) {
         meta.deviceId = initFrame.device_id;

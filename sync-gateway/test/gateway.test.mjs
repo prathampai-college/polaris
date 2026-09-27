@@ -48,7 +48,8 @@ assert.equal(ackStatusFor(429, { detail: 'rate limited' }), 'RETRY');
 assert.equal(ackStatusFor(null, { message: 'ECONNREFUSED' }), 'RETRY');
 assert.equal(ackStatusFor(400, { detail: 'unsupported entity' }), 'FAILED');
 assert.equal(ackStatusFor(404, { detail: 'asset not found' }), 'FAILED');
-console.log('✓ ack mapping: 5xx/429/network → RETRY, 4xx → FAILED');
+assert.equal(ackStatusFor(200, {}), 'APPLIED', '2xx with an empty/unparsed body is a success, not a RETRY');
+console.log('✓ ack mapping: 5xx/429/network → RETRY, 4xx → FAILED, 2xx+empty body → APPLIED');
 
 console.log('sync-gateway PASS');
 
