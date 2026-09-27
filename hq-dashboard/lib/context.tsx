@@ -153,8 +153,11 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         } catch {}
       }) as EventListener);
       es.onerror = () => {
+        // Don't close(): EventSource auto-reconnects on its own after an error, and
+        // closing it here would kill that retry, stranding the dashboard on polling
+        // until selectedStation changes. onopen flips sseStatus back to 'live' once
+        // the reconnect succeeds.
         setSseStatus('polling');
-        es?.close();
         if (!pollRef.current) pollRef.current = setInterval(fetchLatest, 8000);
       };
     } catch {
