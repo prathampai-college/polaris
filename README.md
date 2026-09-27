@@ -151,11 +151,15 @@ A **sync drawer** shows `sent / acked / deduped / saving %`, plus DTN custody co
 
 **Login:** pick a station, enter device ID + PIN (`BHARATI-2024`). New devices start as `FIELD_OP`; `STATION_LEAD`/`NCPOR_ADMIN` requires a device ID containing `ADMIN`, `LEAD`, `TEST`, or `HQ`.
 
-### HQ dashboard — `:3001` (7 tabs)
+### HQ dashboard — `:3001` (Next.js App Router, 10 routes)
 
-- **Fleet Overview** + **Thermo Forecast** — five KPIs, a physics+residual burn card (42 → 18 days in a blizzard), and per-station cards backed by `GET /stations/overview` and `GET /forecast/snn/{station}`.
-- **Inventory / Indent Workbench / Trends / Procurement / Audit** — honest empty states (no dummy chart), database-driven `need = max(0, target − qty)` needs with cost, indent approval with automatic vessel attachment, and an append-only audit feed.
-- **3D Twin + Vessel Tracker** — Leaflet map that probes tiles and falls back to a schematic with an ETA pill when offline. Vessel rows show `LIVE AIS · Ns ago` / `MOCK SCHEDULE` badges. SSE on `/telemetry/stream` with an 8 s poll fallback keeps it live.
+Real routes under `app/(dashboard)/`, sharing a persistent shell (`Topbar` + `Sidebar` + a global emergency banner) — no more hash-tab single page: `/` (fleet overview), `/forecast`, `/stations`, `/inventory`, `/indents`, `/personnel`, `/expeditions`, `/audit`, `/locate`, `/command`.
+
+- **Fleet Overview** (`/`) + **Forecast** (`/forecast`) — a physics+residual burn card (42 → 18 days in a blizzard) and per-station cards backed by `GET /stations/overview` and `GET /forecast/snn/{station}`.
+- **Inventory / Indents / Personnel / Expeditions / Audit** — honest empty states (`TrendChart` no longer fabricates fallback data when telemetry fields are missing), database-driven `need = max(0, target − qty)` needs with cost, indent approval with automatic vessel attachment, and an append-only audit feed.
+- **Locate / Command** — the local (non-GPS) position map and a unified command/timeline feed.
+- **Vessel Tracker** — Leaflet map that probes tiles and falls back to a schematic with an ETA pill when offline. Vessel rows show `LIVE AIS · Ns ago` / `MOCK SCHEDULE` badges. SSE on `/telemetry/stream` with an 8 s poll fallback keeps it live (polling stops once SSE confirms live, instead of both running forever).
+- Same **Polaris Expedition Palette** ("tactical brutalism") design system as `website/` — see `hq-dashboard/README.md`.
 
 ---
 
@@ -261,10 +265,13 @@ shared/            @polaris/shared — schema, codec, DTN, local_map, SNN config
 field/             Next.js PWA :3000 — 5 tabs, OPFS/WAL, fusion loop, DTN QR
 sync-gateway/      Node gateway :8787 — WS + CRC/AES/VC + /sync/ingest + DTN exchange
 hq/                FastAPI :8000 — forecast, procurement, vessels, telemetry, DTN, RBAC
-hq-dashboard/      Next.js SOC :3001 — fleet, trends, procurement, Leaflet vessel map
+hq-dashboard/      Next.js 14 App Router SOC :3001 — 10 routes, fleet/forecast/inventory/indents/
+                   personnel/expeditions/audit/locate/command, tactical-brutalism design system
 ai/                training + ONNX (thermo_residual + thermo_snn) + SNN encoder
 scripts/           m1…m5 + dtn/snn/tracking verifies, harness, provision, import, calibrate
 docs/              ARCHITECTURE.md · API.md · VERIFY_BASELINE.md
+website/           standalone Vite + React marketing/mission-control site — independent of this
+                   workspace, own README (website/README.md), Vercel-deployable
 ```
 
 ---

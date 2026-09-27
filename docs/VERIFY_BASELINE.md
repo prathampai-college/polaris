@@ -1,4 +1,6 @@
-# Verify Baseline — CURRENT 2026-09-16
+# Verify Baseline — CURRENT 2026-09-27
+
+Re-verified 2026-09-27 (working tree, not yet committed): `hq/tests` now **43 passed** (was 34 at the 2026-09-16 capture). The added tests cover the `POST /sorties` solo-override fix — `create_sortie` was a sync function calling an async auth-check helper without `await`, so a solo-sortie `STATION_LEAD` authorization check always failed with `403` regardless of actual role; it is now `async def` with a proper `await`, and `hq/tests/test_personnel_emergency.py::test_sortie_solo_override_requires_station_lead` pins the fix. Test-only deps (`pytest`) now live in `hq/requirements-test.txt`, kept out of the runtime image.
 
 Captured 2026-09-15 after live-data + real-SNN build (14 commits on top of `75a35d7`).
 Re-verified 2026-09-16: `hq/tests` now **34 passed** (was 28 at capture).
