@@ -39,5 +39,16 @@ assert.equal(downBack.type, 'DOWNSTREAM_DELTA');
 assert.equal(downBack.patch.status, 'APPROVED');
 console.log('✓ downstream delta wire CRC+AES');
 
+// ACK mapping: transient HQ failures must be RETRY (resend), never FAILED (dead-letter)
+const { ackStatusFor } = await import('../dist/ack.js');
+assert.equal(ackStatusFor(200, { status: 'APPLIED' }), 'APPLIED');
+assert.equal(ackStatusFor(200, { status: 'APPLIED_LOCAL_WINS' }), 'APPLIED_LOCAL_WINS');
+assert.equal(ackStatusFor(503, {}), 'RETRY');
+assert.equal(ackStatusFor(429, { detail: 'rate limited' }), 'RETRY');
+assert.equal(ackStatusFor(null, { message: 'ECONNREFUSED' }), 'RETRY');
+assert.equal(ackStatusFor(400, { detail: 'unsupported entity' }), 'FAILED');
+assert.equal(ackStatusFor(404, { detail: 'asset not found' }), 'FAILED');
+console.log('✓ ack mapping: 5xx/429/network → RETRY, 4xx → FAILED');
+
 console.log('sync-gateway PASS');
 

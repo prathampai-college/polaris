@@ -108,7 +108,7 @@ export async function verifyJwt(token: string, secretHex: string): Promise<AuthP
     const payload = parseJwtPayload(token);
     if (!payload) return null;
     const now = Math.floor(Date.now() / 1000);
-    if (payload.exp < now) return null;
+    if (typeof payload.exp !== 'number' || payload.exp < now) return null; // `undefined < now` is false — no-exp tokens used to pass
     return payload;
   } catch {
     return null;

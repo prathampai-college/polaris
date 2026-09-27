@@ -24,10 +24,10 @@ export interface Container { id: string; station_id: string; type: ContainerType
 export interface Crate { id: string; container_id: string; coords: string; temp_zone: string; }
 export interface Asset { id: string; sku: string; name: string; category: AssetCategory; qty: number; unit: string; expiry_date: string | null; criticality: Criticality; crate_id: string; barcode: string; updated_at?: string; version?: number; }
 export interface Transaction { id: string; asset_id: string; type: TxnType; qty_delta: number; actor_id: string; ts: string; sync_status: SyncStatus; }
-export interface Indent { id: string; station_id: string; asset_id: string; qty_requested: number; urgency: IndentUrgency; status: IndentStatus; created_by: string; created_at: string; }
+export interface Indent { id: string; station_id: string; asset_id: string; qty_requested: number; urgency: IndentUrgency; status: IndentStatus; created_by: string; created_at: string; vessel_imo?: string | null; sku?: string; name?: string; }
 export interface Telemetry { ts: string; station_id: string; temp_outside: number; wind_speed: number; pressure: number; dg_load: number; }
 export interface AuditLog { id: string; actor_id: string; action: string; entity: string; before: string | null; after: string | null; ts: string; }
-export interface OutboxRow { ulid: string; device_id: string; entity: string; entity_id: string; op: OutboxOp; patch: Uint8Array; base_version: number; retry_count: number; created_at: string; status: OutboxStatus; }
+export interface OutboxRow { ulid: string; device_id: string; entity: string; entity_id: string; op: OutboxOp; patch: Uint8Array; base_version: number; retry_count: number; created_at: string; status: OutboxStatus; vector_clock?: string | null; }
 export interface SyncState { device_id: string; last_acked_ulid: string | null; last_server_version: number; vector_clock?: VectorClock | null; }
 
 export type PersonnelStatus = 'ON_STATION' | 'FIELD_SORTIE' | 'IN_TRANSIT' | 'EVACUATED';
@@ -54,6 +54,8 @@ export interface FieldSortie {
   expected_return_time: string;
   actual_return_time?: string | null;
   safety_status: SortieSafetyStatus;
+  expedition_id?: string | null;
+  buddy_personnel_id?: string | null;
 }
 
 export interface Emergency {
@@ -66,6 +68,7 @@ export interface Emergency {
   location_coord?: string | null;
   assignee?: string | null;
   sortie_id?: string | null;
+  status_entered_ts?: string | null;
 }
 
 export type ExpeditionProgram = 'ANTARCTIC' | 'ARCTIC';
@@ -149,7 +152,8 @@ export interface DeltaFrame {
 export interface AckFrame {
   type?: 'ACK';
   ulid: string;
-  status: 'APPLIED' | 'DEDUPED' | 'CONFLICT_CRITICAL' | 'FAILED';
+  // FAILED = permanent (never resend); RETRY = transient (HQ down/5xx/429 — resend with backoff)
+  status: 'APPLIED' | 'APPLIED_LOCAL_WINS' | 'DEDUPED' | 'CONFLICT_CRITICAL' | 'FAILED' | 'RETRY';
   server_version?: number;
   message?: string;
 }
@@ -178,8 +182,11 @@ export interface SyncInitRespFrame {
   station_id: string;
   server_time: string;
   indents: Indent[];
-  bundles?: unknown[];
 }
+
+/** Plaintext (unencrypted) control frame: the gateway could not decrypt/CRC-verify
+ *  the tablet's frame — almost always a PSK mismatch. */
+export interface KeyMismatchFrame { type: 'KEY_MISMATCH'; }
 
 export type WireFrame = DeltaFrame | AckFrame | DownstreamDeltaFrame | SyncInitFrame | SyncInitRespFrame;
 

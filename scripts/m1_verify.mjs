@@ -130,6 +130,14 @@ const diesel2=hq2.find(a=>a.id==='A1');
 console.log(`   HQ A1 after replay qty=${diesel2.qty} (must stay 4150, no double-apply)`);
 if(diesel2.qty!==4150) throw new Error('double-apply detected!');
 
+console.log('6b) real field op: CONSUME frame (was ACKed APPLIED but never applied before the ingest rewrite) ...');
+acks=[];
+const consume={ ulid: ulid(), device_id: deviceId, entity:'assets', entity_id:'A1', op:'CONSUME', patch:{ qty: 4140, version: 7, updated_at: new Date().toISOString() }, base_version: 6, ts: new Date().toISOString(), vector_clock: { [deviceId]: 6 } };
+ws.send(toWire(consume, PSK_HEX)); await sleep(800);
+const diesel3=(await (await fetch(`http://localhost:${HQ_PORT}/assets`)).json()).find(a=>a.id==='A1');
+console.log(`   ack=${acks[0]?.status} HQ A1 qty=${diesel3.qty} (expect APPLIED / 4140)`);
+if(acks[0]?.status!=='APPLIED' || diesel3.qty!==4140) throw new Error('CONSUME op not applied at HQ');
+
 console.log('7) pessimistic lock: try CONSUME that would go negative ...');
 const badFrame={ ulid: ulid(), device_id: deviceId, entity:'assets', entity_id:'A1', op:'UPSERT', patch:{ qty: -5, version: 999 }, base_version: 999, ts: new Date().toISOString() };
 acks=[];

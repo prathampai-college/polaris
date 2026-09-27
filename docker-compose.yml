@@ -51,6 +51,9 @@ services:
       VESSEL_MODE: "${VESSEL_MODE:-auto}"
       VESSEL_POLL_SEC: "${VESSEL_POLL_SEC:-900}"
       LIVE_AIS_ENABLED: "${LIVE_AIS_ENABLED:-false}"
+      # HQ -> gateway downstream pushes. Default (localhost:8787) is the hq
+      # container itself, so every push silently failed before this was set.
+      GATEWAY_INTERNAL_URL: http://gateway:8787
     depends_on:
       db:
         condition: service_healthy
@@ -95,9 +98,6 @@ services:
     build:
       context: .
       dockerfile: field/Dockerfile
-      args:
-        NEXT_PUBLIC_HQ_URL: "${NEXT_PUBLIC_HQ_URL:-http://localhost:8000}"
-        NEXT_PUBLIC_GATEWAY_URL: "${NEXT_PUBLIC_GATEWAY_URL:-ws://localhost:8787}"
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -108,9 +108,12 @@ services:
         max-file: "3"
     ports: ["3000:3000"]
     environment:
-      NEXT_PUBLIC_GATEWAY_URL: "${NEXT_PUBLIC_GATEWAY_URL:-ws://localhost:8787}"
-      NEXT_PUBLIC_HQ_URL: "${NEXT_PUBLIC_HQ_URL:-http://localhost:8000}"
-      # NEXT_PUBLIC_PSK_HEX intentionally not set — PSK is provisioned via QR into IndexedDB; demo fallback is 'a'*64
+      # Read at RUNTIME by /api/config (NEXT_PUBLIC_* are frozen at build time),
+      # so a deployed image can be re-pointed without a rebuild. "localhost" is
+      # swapped for the tablet's view of this host on the client.
+      HQ_PUBLIC_URL: "${HQ_PUBLIC_URL:-http://localhost:8000}"
+      GATEWAY_PUBLIC_URL: "${GATEWAY_PUBLIC_URL:-ws://localhost:8787}"
+      # No PSK here by design: each tablet is provisioned in Comms (paste/QR, stored on-device); until then it runs on the flagged dev key.
     depends_on:
       gateway:
         condition: service_healthy

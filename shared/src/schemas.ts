@@ -44,7 +44,7 @@ export const downstreamDeltaSchema = z.object({
   type: z.literal('DOWNSTREAM_DELTA'),
   ulid: z.string().length(26),
   station_id: z.string(),
-  entity: z.enum(['indents', 'assets', 'telemetry', 'vessels']),
+  entity: z.enum(['indents', 'assets', 'telemetry', 'vessels', 'personnel', 'field_sorties', 'emergencies', 'expeditions', 'voyage_legs', 'manifests']),
   entity_id: z.string(),
   op: z.enum(['UPSERT', 'STATUS_CHANGE', 'DELETE']),
   patch: z.record(z.unknown()),
