@@ -139,7 +139,10 @@ console.log(`   ack=${acks[0]?.status} HQ A1 qty=${diesel3.qty} (expect APPLIED 
 if(acks[0]?.status!=='APPLIED' || diesel3.qty!==4140) throw new Error('CONSUME op not applied at HQ');
 
 console.log('7) pessimistic lock: try CONSUME that would go negative ...');
-const badFrame={ ulid: ulid(), device_id: deviceId, entity:'assets', entity_id:'A1', op:'UPSERT', patch:{ qty: -5, version: 999 }, base_version: 999, ts: new Date().toISOString() };
+// Vector clock must advance past step 6b's {[deviceId]:6} merge, or this reads as a
+// stale/losing replay and HQ correctly no-ops it as APPLIED_LOCAL_WINS instead of
+// ever evaluating the negative-qty guard (see hq/app/sync_apply.py::_apply_asset).
+const badFrame={ ulid: ulid(), device_id: deviceId, entity:'assets', entity_id:'A1', op:'UPSERT', patch:{ qty: -5, version: 999 }, base_version: 999, ts: new Date().toISOString(), vector_clock: { [deviceId]: 7 } };
 acks=[];
 ws.send(toWire(badFrame, PSK_HEX)); await sleep(600);
 console.log(`   negative qty response: ${acks[0]?.status} ${acks[0]?.message||''}`);

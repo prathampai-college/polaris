@@ -12,6 +12,10 @@ def utc_now() -> str:
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 USE_PG = DATABASE_URL.startswith("postgresql")
 
+def q(sql: str) -> str:
+    """The one PG/SQLite placeholder helper: write `?`, get `%s` on Postgres."""
+    return sql.replace("?", "%s") if USE_PG else sql
+
 def _find_file(*subpaths):
     for sub in subpaths:
         for p in [
@@ -43,78 +47,6 @@ _SEED = _load_seed()
 _local = threading.local()
 _initialized = False
 
-def _ensure_sqlite_schema(conn):
-    """Ensure a SQLite connection targets a fully-initialized DB file.
-
-    Starlette TestClient runs endpoints in worker threads, each opening its
-    own thread-local connection. If the DB file was (re)created after another
-    thread cached its handle, a fresh connection can land on an empty file.
-    This check makes every new connection self-healing: missing schema is
-    created and seed data inserted (both idempotent).
-    """
-    try:
-        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stations'")
-        if cur.fetchone() is not None:
-            return
-    except Exception:
-        pass
-    if SCHEMA_SQL:
-        conn.executescript(SCHEMA_SQL)
-    try:
-        cur = conn.execute("SELECT COUNT(*) FROM stations")
-        if cur.fetchone()[0] == 0:
-            seed_sqlite(conn)
-        else:
-            _ensure_procurement_targets_sqlite(conn)
-            _ensure_physics_params_sqlite(conn)
-            _ensure_vessels_sqlite(conn)
-            _ensure_dtn_sqlite(conn)
-            _ensure_personnel_sqlite(conn)
-            _ensure_expedition_sqlite(conn)
-    except Exception:
-        try:
-            seed_sqlite(conn)
-        except Exception:
-            pass
-
-def get_sqlite():
-    conn = getattr(_local, "conn", None)
-    if conn is None:
-        conn = sqlite3.connect(str(HQ_DB_PATH), timeout=15.0, check_same_thread=False, isolation_level=None)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("PRAGMA foreign_keys=ON;")
-        conn.execute("PRAGMA busy_timeout=15000;")
-        _local.conn = conn
-        # New handle (e.g. TestClient worker thread) may target an empty or
-        # freshly-created file — ensure schema + seed before use.
-        _ensure_sqlite_schema(conn)
-    else:
-        # Detect stale handle: DB file unlinked/recreated after this handle
-        # was cached (e.g. a test deleted hq.db mid-run). If the file is gone
-        # or the handle no longer sees the schema, reopen fresh.
-        try:
-            if not HQ_DB_PATH.exists():
-                raise sqlite3.OperationalError("db file removed")
-            conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stations'").fetchone()
-        except Exception:
-            try:
-                conn.close()
-            except Exception:
-                pass
-            _local.conn = None
-            return get_sqlite()
-    return conn
-
-_PROCUREMENT_FALLBACK = [
-    ("FUEL-DIESEL-001", 5000, 1200, "L", "30d before freeze"),
-    ("O2-CYL-47L-003", 30, 200, "cyl", "30d before freeze"),
-    ("SPARE-BRG-6205-007", 10, 80, "pcs", "30d before freeze"),
-]
-# Single source: shared/seed.json procurement_targets (fallback to hardcoded if missing)
-PROCUREMENT_SEED = [tuple(r) for r in (_SEED.get("procurement_targets") if _SEED else None) or _PROCUREMENT_FALLBACK]
-
 def _load_physics():
     p = _find_file("shared/src/physics.json", "shared/physics.json", "physics.json")
     if p and p.exists():
@@ -126,104 +58,15 @@ def _load_physics():
 
 _PHYSICS = _load_physics()
 
-def _pg_schema_sql():
-    # strip PRAGMA lines which are SQLite-only and convert SQLite types to PG
-    sql = "\n".join(l for l in SCHEMA_SQL.splitlines() if not l.strip().upper().startswith("PRAGMA"))
-    # SQLite BLOB -> PG BYTEA
-    sql = sql.replace(" BLOB", " BYTEA").replace("\tBLOB", "\tBYTEA")
-    return sql
+_PROCUREMENT_FALLBACK = [
+    ("FUEL-DIESEL-001", 5000, 1200, "L", "30d before freeze"),
+    ("O2-CYL-47L-003", 30, 200, "cyl", "30d before freeze"),
+    ("SPARE-BRG-6205-007", 10, 80, "pcs", "30d before freeze"),
+]
+# Single source: shared/seed.json procurement_targets (fallback to hardcoded if missing)
+PROCUREMENT_SEED = [tuple(r) for r in (_SEED.get("procurement_targets") if _SEED else None) or _PROCUREMENT_FALLBACK]
 
-def _ensure_table_seeded(conn, table: str, create_sql: str, seed_fn):
-    """Generic ensure: if table missing create it, if empty seed it."""
-    try:
-        cur = conn.execute(f"SELECT COUNT(*) FROM {table}")
-        if cur.fetchone()[0] == 0:
-            seed_fn(conn)
-            conn.commit()
-    except Exception as e:
-        if "no such table" in str(e).lower():
-            try:
-                conn.executescript(create_sql)
-                seed_fn(conn)
-                conn.commit()
-            except Exception:
-                pass
-
-def _ensure_procurement_targets_sqlite(conn):
-    def _seed(c):
-        for row in PROCUREMENT_SEED:
-            c.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
-    _ensure_table_seeded(conn, "procurement_targets",
-        "CREATE TABLE IF NOT EXISTS procurement_targets (sku TEXT PRIMARY KEY, target_qty REAL NOT NULL, cost_per_unit REAL NOT NULL, unit TEXT NOT NULL, eta TEXT NOT NULL);", _seed)
-
-def _ensure_physics_params_sqlite(conn):
-    def _seed(c):
-        for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
-            c.execute("INSERT OR IGNORE INTO physics_params (station_id, T_INSIDE, BASE, K1, K2, K3) VALUES (?,?,?,?,?,?)",
-                      (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
-    _ensure_table_seeded(conn, "physics_params",
-        "CREATE TABLE IF NOT EXISTS physics_params (station_id TEXT PRIMARY KEY REFERENCES stations(id), T_INSIDE REAL NOT NULL, BASE REAL NOT NULL, K1 REAL NOT NULL, K2 REAL NOT NULL, K3 REAL NOT NULL);", _seed)
-
-def seed_physics_params(cur):
-    for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
-        try:
-            cur.execute("INSERT INTO physics_params (station_id, T_INSIDE, BASE, K1, K2, K3) VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
-                        (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
-        except Exception:
-            cur.execute("INSERT OR IGNORE INTO physics_params VALUES (?,?,?,?,?,?)",
-                        (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
-
-def _ensure_vessels_sqlite(conn):
-    try:
-        conn.execute("SELECT COUNT(*) FROM vessels").fetchone()
-    except Exception as e:
-        if "no such table" in str(e).lower():
-            try:
-                conn.executescript("CREATE TABLE IF NOT EXISTS vessels (imo TEXT PRIMARY KEY, name TEXT, lat REAL, lon REAL, sog REAL, eta TEXT, station_id TEXT REFERENCES stations(id), last_seen TEXT); CREATE INDEX IF NOT EXISTS idx_vessels_station ON vessels(station_id);")
-                conn.commit()
-            except Exception:
-                pass
-    # ensure indents.vessel_imo column
-    try:
-        cur = conn.execute("PRAGMA table_info(indents)")
-        cols = [r[1] for r in cur.fetchall()]
-        if "vessel_imo" not in cols:
-            conn.execute("ALTER TABLE indents ADD COLUMN vessel_imo TEXT REFERENCES vessels(imo)")
-            conn.commit()
-    except Exception:
-        pass
-    try:
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_vessels_station ON vessels(station_id)")
-        conn.commit()
-    except Exception:
-        pass
-
-def _ensure_dtn_sqlite(conn):
-    try:
-        conn.execute("SELECT COUNT(*) FROM dtn_bundles").fetchone()
-    except Exception as e:
-        if "no such table" in str(e).lower():
-            try:
-                conn.executescript("CREATE TABLE IF NOT EXISTS dtn_bundles (bundle_id TEXT PRIMARY KEY, src TEXT, dst_station TEXT, payload BLOB, vc TEXT, custody INTEGER DEFAULT 1, created_at TEXT, ttl INTEGER DEFAULT 86400); CREATE INDEX IF NOT EXISTS idx_dtn_bundles_dst ON dtn_bundles(dst_station, created_at); CREATE TABLE IF NOT EXISTS asset_positions (asset_id TEXT PRIMARY KEY, x REAL, y REAL, theta REAL, conf REAL, last_sensor_ts TEXT, station_id TEXT REFERENCES stations(id)); CREATE INDEX IF NOT EXISTS idx_asset_positions_station ON asset_positions(station_id); CREATE TABLE IF NOT EXISTS snn_state (device_id TEXT PRIMARY KEY, last_features TEXT, spike_count INTEGER DEFAULT 0, last_infer_ts TEXT, total_saved_mw REAL DEFAULT 0);")
-                conn.commit()
-            except Exception:
-                pass
-    # ensure vector_clock cols (incl. sync_state for offline VC resume)
-    for tbl, col in [("assets","vector_clock"), ("outbox","vector_clock"), ("outbox","local_coord"), ("assets","local_coord"), ("sync_state","vector_clock")]: 
-        try:
-            cur = conn.execute(f"PRAGMA table_info({tbl})")
-            cols = [r[1] for r in cur.fetchall()]
-            if col not in cols:
-                conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} TEXT")
-                conn.commit()
-        except Exception:
-            pass
-    # allow BUNDLED in outbox status
-    try:
-        # sqlite check constraint needs table rebuild; skip strict check — BUNDLED used via app logic
-        pass
-    except Exception:
-        pass
+STATIONS = ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]
 
 DEFAULT_PERSONNEL = [
     ("PER-BHA-01", "ST-BHARATI", "Dr. Rajesh Sharma", "Station Leader & Glaciologist", "O+", "+91-9876543210", "ON_STATION"),
@@ -235,7 +78,7 @@ DEFAULT_PERSONNEL = [
     ("PER-MAI-02", "ST-MAITRI", "Dr. Neha Verma", "Medical Officer & Medic", "O+", "+91-9876543216", "ON_STATION"),
     ("PER-MAI-03", "ST-MAITRI", "Harpreet Singh", "Heavy Vehicle Tech", "B+", "+91-9876543217", "ON_STATION"),
     ("PER-HIM-01", "ST-HIMADRI", "Dr. Arvind Joshi", "Arctic Mission Leader", "A-", "+91-9876543218", "ON_STATION"),
-    ("PER-HIM-02", "ST-HIMADRI", "Meera Pillai", "Marine Biologist", "O+", "+91-9876543219", "ON_STATION")
+    ("PER-HIM-02", "ST-HIMADRI", "Meera Pillai", "Marine Biologist", "O+", "+91-9876543219", "ON_STATION"),
 ]
 
 DEFAULT_EXPEDITIONS = [
@@ -251,394 +94,190 @@ DEFAULT_LEGS = [
     ("LEG-ARC-01", "EXP-ARC-26", 1, "GOA", "HIMADRI", "AIR", None, None, None, "PLANNED"),
 ]
 
-def _ensure_expedition_sqlite(conn):
-    try:
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS expeditions (
-            id TEXT PRIMARY KEY, program TEXT CHECK(program IN ('ANTARCTIC','ARCTIC')) DEFAULT 'ANTARCTIC',
-            name TEXT, season TEXT,
-            status TEXT CHECK(status IN ('PLANNED','STUFFING','IN_TRANSIT','DELIVERED','WINTER_OVER','COMPLETE')) DEFAULT 'PLANNED',
-            created_by TEXT, created_at TEXT, vector_clock TEXT);
-        CREATE TABLE IF NOT EXISTS voyage_legs (
-            id TEXT PRIMARY KEY, expedition_id TEXT REFERENCES expeditions(id), seq INTEGER DEFAULT 0,
-            from_point TEXT, to_point TEXT, mode TEXT CHECK(mode IN ('SEA','AIR','TRAVERSE')) DEFAULT 'SEA',
-            vessel_imo TEXT, eta_depart TEXT, eta_arrive TEXT,
-            status TEXT CHECK(status IN ('PLANNED','DEPARTED','ARRIVED','DELAYED')) DEFAULT 'PLANNED');
-        CREATE TABLE IF NOT EXISTS manifests (
-            id TEXT PRIMARY KEY, expedition_id TEXT REFERENCES expeditions(id),
-            owner_org TEXT, project_code TEXT, destination_station TEXT,
-            sku TEXT, description TEXT, qty REAL, unit TEXT, weight_kg REAL, hazmat_class TEXT,
-            temp_zone TEXT CHECK(temp_zone IN ('AMBIENT','COLD','HAZMAT')) DEFAULT 'AMBIENT',
-            customs_status TEXT CHECK(customs_status IN ('PENDING','CLEARED','EXEMPT')) DEFAULT 'PENDING',
-            biosecurity_status TEXT CHECK(biosecurity_status IN ('PENDING','CLEARED','EXEMPT')) DEFAULT 'PENDING',
-            labelling_code TEXT UNIQUE, container_id TEXT, crate_id TEXT,
-            stage TEXT CHECK(stage IN ('GOA','MUMBAI','CAPETOWN','VESSEL','STATION','CRATE')) DEFAULT 'GOA',
-            vector_clock TEXT);
-        CREATE TABLE IF NOT EXISTS decision_overrides (
-            id TEXT PRIMARY KEY, ref_type TEXT, ref_id TEXT, station_id TEXT,
-            actor_id TEXT, stated_risk TEXT, action TEXT, ts TEXT);
-        CREATE TABLE IF NOT EXISTS personnel_positions (
-            personnel_id TEXT PRIMARY KEY, x REAL, y REAL, theta REAL, conf REAL,
-            last_sensor_ts TEXT, station_id TEXT);
-        CREATE INDEX IF NOT EXISTS idx_expeditions_program ON expeditions(program, status);
-        CREATE INDEX IF NOT EXISTS idx_legs_expedition ON voyage_legs(expedition_id, seq);
-        CREATE INDEX IF NOT EXISTS idx_manifests_expedition ON manifests(expedition_id, destination_station, stage);
-        CREATE INDEX IF NOT EXISTS idx_overrides_station ON decision_overrides(station_id, ts);
-        CREATE INDEX IF NOT EXISTS idx_personnel_positions_station ON personnel_positions(station_id);
-        """)
-        conn.commit()
-    except Exception:
-        pass
-    # triage migration: rebuild emergencies if old CHECK without ACK
-    try:
-        row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='emergencies'").fetchone()
-        sql = (row[0] if row else "") or ""
-        if "ACK" not in sql:
-            conn.executescript("""
-            ALTER TABLE emergencies RENAME TO emergencies_old;
-            CREATE TABLE emergencies (
-                id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id),
-                type TEXT CHECK(type IN ('SOS_MEDICAL','SOS_FIRE','SOS_WHITEOUT','SOS_POWER','SOS_VEHICLE')),
-                reported_by TEXT,
-                status TEXT CHECK(status IN ('ACTIVE','ACK','RESPONDING','RESOLVED')) DEFAULT 'ACTIVE',
-                ts TEXT, location_coord TEXT, assignee TEXT, sortie_id TEXT REFERENCES field_sorties(id));
-            INSERT OR IGNORE INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord)
-                SELECT id, station_id, type, reported_by, status, ts, location_coord FROM emergencies_old;
-            DROP TABLE emergencies_old;
-            CREATE INDEX IF NOT EXISTS idx_emergencies_station ON emergencies(station_id, status);
-            """)
-            conn.commit()
-    except Exception:
-        pass
-    for col in ["assignee", "sortie_id", "status_entered_ts"]:
-        try:
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(emergencies)").fetchall()]
-            if col not in cols:
-                conn.execute(f"ALTER TABLE emergencies ADD COLUMN {col} TEXT")
-                conn.commit()
-        except Exception:
-            pass
-    for col, ddl in [
-        ("expedition_id", "ALTER TABLE field_sorties ADD COLUMN expedition_id TEXT"),
-        ("buddy_personnel_id", "ALTER TABLE field_sorties ADD COLUMN buddy_personnel_id TEXT"),
-        ("program", "ALTER TABLE personnel ADD COLUMN program TEXT DEFAULT 'BOTH'"),
-    ]:
-        try:
-            cols = [r[1] for r in conn.execute(f"PRAGMA table_info({col == 'program' and 'personnel' or 'field_sorties'})").fetchall()]
-            if col not in cols:
-                conn.execute(ddl)
-                conn.commit()
-        except Exception:
-            pass
-    # triage_sla + freight_rates + lots
-    try:
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS triage_sla (from_status TEXT, to_status TEXT, due_minutes INTEGER NOT NULL, PRIMARY KEY (from_status, to_status));
-        CREATE TABLE IF NOT EXISTS freight_rates (mode TEXT PRIMARY KEY, cost_per_kg REAL NOT NULL, base_cost REAL NOT NULL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS lots (id TEXT PRIMARY KEY, asset_sku TEXT NOT NULL, lot_code TEXT UNIQUE NOT NULL, qty REAL NOT NULL, expiry_date TEXT, crate_id TEXT, received_ts TEXT, vector_clock TEXT);
-        CREATE INDEX IF NOT EXISTS idx_lots_sku ON lots(asset_sku, expiry_date);
-        CREATE INDEX IF NOT EXISTS idx_sorties_buddy ON field_sorties(buddy_personnel_id);
-        """)
-        conn.commit()
-    except Exception:
-        pass
-    try:
-        cur = conn.execute("SELECT COUNT(*) FROM triage_sla")
-        if cur.fetchone()[0] == 0:
-            for r in [("ACTIVE","ACK",15),("ACK","RESPONDING",30),("RESPONDING","RESOLVED",240)]:
-                conn.execute("INSERT OR IGNORE INTO triage_sla VALUES (?,?,?)", r)
-            conn.commit()
-    except Exception:
-        pass
-    try:
-        cur = conn.execute("SELECT COUNT(*) FROM freight_rates")
-        if cur.fetchone()[0] == 0:
-            for r in [("SEA", 2.5, 5000), ("AIR", 18.0, 12000), ("TRAVERSE", 1.2, 2000)]:
-                conn.execute("INSERT OR IGNORE INTO freight_rates VALUES (?,?,?)", r)
-            conn.commit()
-    except Exception:
-        pass
-    try:
-        conn.execute("UPDATE personnel SET program='ARCTIC' WHERE id LIKE 'PER-HIM-%' AND (program IS NULL OR program='BOTH')")
-        conn.execute("UPDATE personnel SET program='BOTH' WHERE id LIKE 'PER-BHA-%' AND program IS NULL")
-        conn.execute("UPDATE personnel SET program='BOTH' WHERE id LIKE 'PER-MAI-%' AND program IS NULL")
-        conn.commit()
-    except Exception:
-        pass
-    try:
-        cur = conn.execute("SELECT COUNT(*) FROM lots")
-        if cur.fetchone()[0] == 0:
-            for a in conn.execute("SELECT sku, qty, expiry_date, crate_id FROM assets").fetchall():
-                sku, qty, exp, crate = a[0], a[1], a[2], a[3]
-                conn.execute("INSERT OR IGNORE INTO lots VALUES (?,?,?,?,?,?,?,?)", (f"LOT-{sku}-0", sku, f"{sku}-L0", qty, exp, crate, conn.execute("SELECT datetime('now')").fetchone()[0], None))
-            conn.commit()
-    except Exception:
-        pass
-    # seed expeditions + legs idempotently
-    try:
-        cur = conn.execute("SELECT COUNT(*) FROM expeditions")
-        if cur.fetchone()[0] == 0:
-            for r in DEFAULT_EXPEDITIONS:
-                conn.execute("INSERT OR IGNORE INTO expeditions VALUES (?,?,?,?,?,?,?,?)", (*r, None))
-            for r in DEFAULT_LEGS:
-                conn.execute("INSERT OR IGNORE INTO voyage_legs VALUES (?,?,?,?,?,?,?,?,?,?)", r)
-            conn.commit()
-    except Exception:
-        pass
+DEFAULT_TRIAGE_SLA = [("ACTIVE", "ACK", 15), ("ACK", "RESPONDING", 30), ("RESPONDING", "RESOLVED", 240)]
+DEFAULT_FREIGHT_RATES = [("SEA", 2.5, 5000), ("AIR", 18.0, 12000), ("TRAVERSE", 1.2, 2000)]
 
-def _ensure_personnel_sqlite(conn):
+# Columns added to a table after its CREATE TABLE first shipped. shared/sql/schema.sql
+# already declares them for a brand-new database; these ALTERs backfill one created
+# from an older revision of that file (dev machines, an existing PG deployment).
+_MIGRATIONS = [
+    ("assets", "vector_clock", "TEXT"),
+    ("assets", "local_coord", "TEXT"),
+    ("outbox", "vector_clock", "TEXT"),
+    ("outbox", "local_coord", "TEXT"),
+    ("sync_state", "vector_clock", "TEXT"),
+    ("emergencies", "assignee", "TEXT"),
+    ("emergencies", "sortie_id", "TEXT"),
+    ("emergencies", "status_entered_ts", "TEXT"),
+    ("field_sorties", "expedition_id", "TEXT"),
+    ("field_sorties", "buddy_personnel_id", "TEXT"),
+    ("personnel", "program", "TEXT DEFAULT 'BOTH'"),
+    ("indents", "vessel_imo", "TEXT"),
+]
+
+def _pg_schema_sql():
+    # PRAGMA lines are SQLite-only; BLOB has no PG equivalent (use BYTEA).
+    sql = "\n".join(l for l in SCHEMA_SQL.splitlines() if not l.strip().upper().startswith("PRAGMA"))
+    return sql.replace(" BLOB", " BYTEA").replace("\tBLOB", "\tBYTEA")
+
+def _run_schema(execute_one, is_pg: bool):
+    """Apply shared/sql/schema.sql. Every CREATE is IF NOT EXISTS, so this is safe
+    to re-run against an existing database — it only ever adds what's missing."""
+    if not is_pg:
+        execute_one.executescript(SCHEMA_SQL)  # sqlite3 supports multi-statement scripts
+        return
+    # psycopg won't reliably run a multi-statement string, so split and execute one at
+    # a time. Two-pass: a forward FK reference (e.g. field_sorties -> expeditions,
+    # declared before expeditions in the file) fails on the first pass in table
+    # creation order — retry failures once after every CREATE has had a chance to run.
+    stmts = [s.strip() for s in _pg_schema_sql().split(";") if s.strip()]
+    deferred = []
+    for stmt in stmts:
+        try:
+            execute_one.execute(stmt)
+        except Exception as e:
+            if "already exists" not in str(e).lower():
+                deferred.append((stmt, e))
+    for stmt, first_err in deferred:
+        try:
+            execute_one.execute(stmt)
+        except Exception as e:
+            if "already exists" not in str(e).lower():
+                logger.warning(f"[hq] PG schema stmt failed (non-fatal): {first_err} / retry: {e} :: {stmt[:120]}")
+
+def _run_migrations(cur, is_pg: bool):
+    for table, col, coltype in _MIGRATIONS:
+        try:
+            if is_pg:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {coltype}")
+            else:
+                cols = [r[1] for r in cur.execute(f"PRAGMA table_info({table})").fetchall()]
+                if col not in cols:
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
+        except Exception as e:
+            logger.debug(f"[hq] migration {table}.{col} skipped: {e}")
+
+def _seed_if_empty(cur, is_pg: bool):
+    """Idempotent: every insert is ON CONFLICT DO NOTHING and every table is only
+    seeded while it's empty, so this runs safely on every boot."""
+    def count(table):
+        return cur.execute(q(f"SELECT COUNT(*) FROM {table}")).fetchone()[0]
+    def run(sql, params=()):
+        cur.execute(q(sql), params)
+
+    if count("stations") == 0:
+        s = _SEED or {"stations": [("ST-BHARATI", "Bharati", "69°24′S 76°11′E", 24)], "containers": [], "crates": [], "assets": []}
+        for r in s["stations"]: run("INSERT INTO stations VALUES (?,?,?,?) ON CONFLICT DO NOTHING", r)
+        for r in s["containers"]: run("INSERT INTO containers VALUES (?,?,?,?) ON CONFLICT DO NOTHING", r)
+        for r in s["crates"]: run("INSERT INTO crates VALUES (?,?,?,?) ON CONFLICT DO NOTHING", r)
+        now = utc_now()
+        for a in s["assets"]:
+            run("INSERT INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?) ON CONFLICT (id) DO NOTHING", (*a, now))
+    if count("procurement_targets") == 0:
+        for row in PROCUREMENT_SEED:
+            run("INSERT INTO procurement_targets VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING", row)
+    if count("physics_params") == 0:
+        for sid in STATIONS:
+            run("INSERT INTO physics_params (station_id, T_INSIDE, BASE, K1, K2, K3) VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
+    if count("personnel") == 0:
+        for p in DEFAULT_PERSONNEL:
+            run("INSERT INTO personnel (id, station_id, name, role, blood_group, emergency_contact, status) VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING", p)
+    if count("expeditions") == 0:
+        for r in DEFAULT_EXPEDITIONS:
+            run("INSERT INTO expeditions VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING", (*r, None))
+        for r in DEFAULT_LEGS:
+            run("INSERT INTO voyage_legs VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING", r)
+    if count("triage_sla") == 0:
+        for r in DEFAULT_TRIAGE_SLA:
+            run("INSERT INTO triage_sla VALUES (?,?,?) ON CONFLICT DO NOTHING", r)
+    if count("freight_rates") == 0:
+        for r in DEFAULT_FREIGHT_RATES:
+            run("INSERT INTO freight_rates VALUES (?,?,?) ON CONFLICT DO NOTHING", r)
+    if count("lots") == 0:
+        rows = cur.execute(q("SELECT id, sku, qty, expiry_date, crate_id FROM assets")).fetchall()
+        now = utc_now()
+        for aid, sku, qty, exp, crate in rows:
+            run("INSERT INTO lots (id, asset_sku, lot_code, qty, expiry_date, crate_id, received_ts) VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                (f"LOT-{sku}-0", sku, f"{sku}-L0", qty, exp, crate, now))
+
+def _ensure_sqlite_schema(conn):
+    """Self-heal a new/empty thread-local connection (see get_sqlite): Starlette's
+    TestClient runs each request in a worker thread, each opening its own
+    connection, and a fresh one can land on an empty file if another thread
+    (re)created it after this one cached its handle."""
     try:
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS personnel (
-            id TEXT PRIMARY KEY,
-            station_id TEXT REFERENCES stations(id),
-            name TEXT,
-            role TEXT,
-            blood_group TEXT,
-            emergency_contact TEXT,
-            status TEXT CHECK(status IN ('ON_STATION','FIELD_SORTIE','IN_TRANSIT','EVACUATED')) DEFAULT 'ON_STATION',
-            program TEXT DEFAULT 'BOTH'
-        );
-        CREATE TABLE IF NOT EXISTS field_sorties (
-            id TEXT PRIMARY KEY,
-            station_id TEXT REFERENCES stations(id),
-            lead_personnel_id TEXT REFERENCES personnel(id),
-            destination TEXT,
-            departure_time TEXT,
-            expected_return_time TEXT,
-            actual_return_time TEXT,
-            safety_status TEXT CHECK(safety_status IN ('PLANNED','ACTIVE','RETURNED','OVERDUE','EMERGENCY')) DEFAULT 'PLANNED',
-            expedition_id TEXT,
-            buddy_personnel_id TEXT REFERENCES personnel(id)
-        );
-        CREATE TABLE IF NOT EXISTS emergencies (
-            id TEXT PRIMARY KEY,
-            station_id TEXT REFERENCES stations(id),
-            type TEXT CHECK(type IN ('SOS_MEDICAL','SOS_FIRE','SOS_WHITEOUT','SOS_POWER','SOS_VEHICLE')),
-            reported_by TEXT,
-            status TEXT CHECK(status IN ('ACTIVE','ACK','RESPONDING','RESOLVED')) DEFAULT 'ACTIVE',
-            ts TEXT,
-            location_coord TEXT,
-            assignee TEXT,
-            sortie_id TEXT,
-            status_entered_ts TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_personnel_station ON personnel(station_id);
-        CREATE INDEX IF NOT EXISTS idx_sorties_station ON field_sorties(station_id);
-        CREATE INDEX IF NOT EXISTS idx_emergencies_station ON emergencies(station_id, status);
-        """)
-        conn.commit()
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stations'")
+        if cur.fetchone() is not None:
+            return
     except Exception:
         pass
-    try:
-        cur = conn.execute("SELECT COUNT(*) FROM personnel")
-        if cur.fetchone()[0] == 0:
-            for p in DEFAULT_PERSONNEL:
-                conn.execute("INSERT OR IGNORE INTO personnel VALUES (?,?,?,?,?,?,?)", p)
-            conn.commit()
-    except Exception:
-        pass
+    _run_schema(conn, is_pg=False)
+    _run_migrations(conn, is_pg=False)
+    _seed_if_empty(conn, is_pg=False)
+    conn.commit()
+
+def get_sqlite():
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        conn = sqlite3.connect(str(HQ_DB_PATH), timeout=15.0, check_same_thread=False, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA foreign_keys=ON;")
+        conn.execute("PRAGMA busy_timeout=15000;")
+        _local.conn = conn
+        _ensure_sqlite_schema(conn)
+    else:
+        # Detect a stale handle: the DB file was unlinked/recreated after this
+        # handle was cached (e.g. a test deleted hq.db mid-run). Reopen fresh.
+        try:
+            if not HQ_DB_PATH.exists():
+                raise sqlite3.OperationalError("db file removed")
+            conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stations'").fetchone()
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            _local.conn = None
+            return get_sqlite()
+    return conn
 
 def init_db():
+    global _initialized
     if USE_PG:
         import psycopg
         with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
             with conn.cursor() as cur:
                 try: cur.execute("CREATE EXTENSION IF NOT EXISTS timescaledb;")
                 except Exception: pass
-                # psycopg may not allow multi-statement execute; split and run one by one.
-                # Two-pass: first pass may hit forward FK refs on older schema.sql
-                # revisions (e.g. field_sorties REFERENCES expeditions before it
-                # exists) — retry failures once after all tables exist.
-                stmts = [s.strip() for s in _pg_schema_sql().split(";") if s.strip()]
-                deferred: list = []
-                for stmt in stmts:
-                    try:
-                        cur.execute(stmt)
-                    except Exception as e:
-                        msg = str(e).lower()
-                        if "already exists" in msg:
-                            continue
-                        deferred.append((stmt, e))
-                for stmt, first_err in deferred:
-                    try:
-                        cur.execute(stmt)
-                    except Exception as e:
-                        msg = str(e).lower()
-                        if "already exists" in msg:
-                            continue
-                        logger.warning(f"[hq] PG schema stmt failed (non-fatal): {first_err} / retry: {e} :: {stmt[:120]}")
+                _run_schema(cur, is_pg=True)
+                _run_migrations(cur, is_pg=True)
                 try:
-                    cur.execute("SELECT COUNT(*) FROM stations")
-                    _n_stations = cur.fetchone()[0]
+                    _seed_if_empty(cur, is_pg=True)
                 except Exception as e:
-                    logger.warning(f"[hq] PG stations check failed (non-fatal): {e}")
-                    _n_stations = 1  # skip seeding, keep app bootable for /health
-                if _n_stations == 0:
-                    try:
-                        seed(cur)
-                    except Exception as e:
-                        logger.warning(f"[hq] PG seed failed (non-fatal, /health stays up): {e}")
-                # Idempotent ensure-block: runs on EVERY boot (was `else:` — so a fresh
-                # PG got stations but no personnel/lots/expeditions until a 2nd restart).
-                # ensure procurement_targets seeded even on existing DB (Phase 1 migration)
-                try:
-                    cur.execute("SELECT COUNT(*) FROM procurement_targets")
-                    if cur.fetchone()[0] == 0:
-                        seed_procurement_targets(cur)
-                except Exception:
-                    pass
-                try:
-                    cur.execute("SELECT COUNT(*) FROM physics_params")
-                    if cur.fetchone()[0] == 0:
-                        seed_physics_params(cur)
-                except Exception:
-                    pass
-                # Phase 4: vessels + indents.vessel_imo
-                try:
-                    cur.execute("SELECT COUNT(*) FROM vessels")
-                except Exception as e:
-                    if "does not exist" in str(e).lower() or "no such table" in str(e).lower():
-                        cur.execute("CREATE TABLE IF NOT EXISTS vessels (imo TEXT PRIMARY KEY, name TEXT, lat REAL, lon REAL, sog REAL, eta TEXT, station_id TEXT REFERENCES stations(id), last_seen TEXT)")
-                        cur.execute("CREATE INDEX IF NOT EXISTS idx_vessels_station ON vessels(station_id)")
-                try:
-                    cur.execute("SELECT vessel_imo FROM indents LIMIT 0")
-                except Exception as e:
-                    if "does not exist" in str(e).lower() or "no such column" in str(e).lower() or "column" in str(e).lower():
-                        try: cur.execute("ALTER TABLE indents ADD COLUMN vessel_imo TEXT REFERENCES vessels(imo)")
-                        except Exception: pass
-                # DTN tables + VC cols
-                for ddl in [
-                    "CREATE TABLE IF NOT EXISTS dtn_bundles (bundle_id TEXT PRIMARY KEY, src TEXT, dst_station TEXT, payload BYTEA, vc TEXT, custody INTEGER DEFAULT 1, created_at TEXT, ttl INTEGER DEFAULT 86400)",
-                    "CREATE TABLE IF NOT EXISTS asset_positions (asset_id TEXT PRIMARY KEY, x DOUBLE PRECISION, y DOUBLE PRECISION, theta DOUBLE PRECISION, conf DOUBLE PRECISION, last_sensor_ts TEXT, station_id TEXT REFERENCES stations(id))",
-                    "CREATE TABLE IF NOT EXISTS snn_state (device_id TEXT PRIMARY KEY, last_features TEXT, spike_count INTEGER DEFAULT 0, last_infer_ts TEXT, total_saved_mw DOUBLE PRECISION DEFAULT 0)",
-                    "CREATE TABLE IF NOT EXISTS personnel (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), name TEXT, role TEXT, blood_group TEXT, emergency_contact TEXT, status TEXT DEFAULT 'ON_STATION')",
-                    "CREATE TABLE IF NOT EXISTS field_sorties (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), lead_personnel_id TEXT, destination TEXT, departure_time TEXT, expected_return_time TEXT, actual_return_time TEXT, safety_status TEXT DEFAULT 'PLANNED', expedition_id TEXT)",
-                    "CREATE TABLE IF NOT EXISTS emergencies (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), type TEXT, reported_by TEXT, status TEXT DEFAULT 'ACTIVE', ts TEXT, location_coord TEXT, assignee TEXT, sortie_id TEXT)",
-                    "CREATE TABLE IF NOT EXISTS expeditions (id TEXT PRIMARY KEY, program TEXT DEFAULT 'ANTARCTIC', name TEXT, season TEXT, status TEXT DEFAULT 'PLANNED', created_by TEXT, created_at TEXT, vector_clock TEXT)",
-                    "CREATE TABLE IF NOT EXISTS voyage_legs (id TEXT PRIMARY KEY, expedition_id TEXT REFERENCES expeditions(id), seq INTEGER DEFAULT 0, from_point TEXT, to_point TEXT, mode TEXT DEFAULT 'SEA', vessel_imo TEXT, eta_depart TEXT, eta_arrive TEXT, status TEXT DEFAULT 'PLANNED')",
-                    "CREATE TABLE IF NOT EXISTS manifests (id TEXT PRIMARY KEY, expedition_id TEXT REFERENCES expeditions(id), owner_org TEXT, project_code TEXT, destination_station TEXT, sku TEXT, description TEXT, qty DOUBLE PRECISION, unit TEXT, weight_kg DOUBLE PRECISION, hazmat_class TEXT, temp_zone TEXT DEFAULT 'AMBIENT', customs_status TEXT DEFAULT 'PENDING', biosecurity_status TEXT DEFAULT 'PENDING', labelling_code TEXT UNIQUE, container_id TEXT, crate_id TEXT, stage TEXT DEFAULT 'GOA', vector_clock TEXT)",
-                    "CREATE TABLE IF NOT EXISTS decision_overrides (id TEXT PRIMARY KEY, ref_type TEXT, ref_id TEXT, station_id TEXT, actor_id TEXT, stated_risk TEXT, action TEXT, ts TEXT)",
-                    "CREATE TABLE IF NOT EXISTS personnel_positions (personnel_id TEXT PRIMARY KEY, x DOUBLE PRECISION, y DOUBLE PRECISION, theta DOUBLE PRECISION, conf DOUBLE PRECISION, last_sensor_ts TEXT, station_id TEXT)",
-                ]:
-                    try: cur.execute(ddl)
-                    except Exception: pass
-                for alter in [
-                    "ALTER TABLE assets ADD COLUMN IF NOT EXISTS vector_clock TEXT",
-                    "ALTER TABLE assets ADD COLUMN IF NOT EXISTS local_coord TEXT",
-                    "ALTER TABLE outbox ADD COLUMN IF NOT EXISTS vector_clock TEXT",
-                    "ALTER TABLE outbox ADD COLUMN IF NOT EXISTS local_coord TEXT",
-                    "ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS vector_clock TEXT",
-                    "ALTER TABLE emergencies ADD COLUMN IF NOT EXISTS assignee TEXT",
-                    "ALTER TABLE emergencies ADD COLUMN IF NOT EXISTS sortie_id TEXT",
-                    "ALTER TABLE field_sorties ADD COLUMN IF NOT EXISTS expedition_id TEXT",
-                    "ALTER TABLE field_sorties ADD COLUMN IF NOT EXISTS buddy_personnel_id TEXT",
-                    "ALTER TABLE emergencies ADD COLUMN IF NOT EXISTS status_entered_ts TEXT",
-                    "ALTER TABLE personnel ADD COLUMN IF NOT EXISTS program TEXT DEFAULT 'BOTH'",
-                ]:
-                    try: cur.execute(alter)
-                    except Exception: pass
-                # seed expeditions on PG when empty
-                try:
-                    cur.execute("SELECT COUNT(*) FROM expeditions")
-                    if cur.fetchone()[0] == 0:
-                        for r in DEFAULT_EXPEDITIONS:
-                            try: cur.execute("INSERT INTO expeditions VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING", (*r, None))
-                            except Exception: pass
-                        for r in DEFAULT_LEGS:
-                            try: cur.execute("INSERT INTO voyage_legs VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING", r)
-                            except Exception: pass
-                except Exception:
-                    pass
-                try:
-                    cur.execute("SELECT COUNT(*) FROM personnel")
-                    if cur.fetchone()[0] == 0:
-                        for p in DEFAULT_PERSONNEL:
-                            cur.execute("INSERT INTO personnel (id, station_id, name, role, blood_group, emergency_contact, status) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING", p)
-                except Exception as e:
-                    logger.warning(f"[hq] PG personnel seed failed: {e}")
-                # Opening lot per asset — same ids as the SQLite seed and the field tablet
-                # seed (LOT-{sku}-0 / {sku}-L0) so FEFO consumes converge on both sides.
-                try:
-                    cur.execute("SELECT COUNT(*) FROM lots")
-                    if cur.fetchone()[0] == 0:
-                        cur.execute("INSERT INTO lots (id, asset_sku, lot_code, qty, expiry_date, crate_id, received_ts) SELECT 'LOT-' || sku || '-0', sku, sku || '-L0', qty, expiry_date, crate_id, now()::text FROM assets ON CONFLICT DO NOTHING")
-                except Exception as e:
-                    logger.warning(f"[hq] PG lots seed failed: {e}")
+                    logger.warning(f"[hq] PG seed failed (non-fatal, /health stays up): {e}")
         print(f"[hq] Postgres init ok {DATABASE_URL.split('@')[-1]}")
     else:
-        # Drop any cached handle first: it may point at an unlinked inode if
-        # the DB file was removed between runs. get_sqlite() then reopens the
-        # current file and self-heals schema + seed.
+        # Drop any cached handle first: it may point at an unlinked inode if the
+        # DB file was removed between runs. get_sqlite() then reopens the current
+        # file and self-heals schema + seed.
         try:
             old = getattr(_local, "conn", None)
             if old is not None:
-                try:
-                    old.close()
-                except Exception:
-                    pass
+                try: old.close()
+                except Exception: pass
                 _local.conn = None
         except Exception:
             pass
         conn = get_sqlite()
-        if SCHEMA_SQL:
-            conn.executescript(SCHEMA_SQL)
-        cur = conn.execute("SELECT COUNT(*) FROM stations")
-        if cur.fetchone()[0] == 0:
-            seed_sqlite(conn)
-        else:
-            _ensure_procurement_targets_sqlite(conn)
-            _ensure_physics_params_sqlite(conn)
-            _ensure_vessels_sqlite(conn)
-            _ensure_dtn_sqlite(conn)
-        _ensure_personnel_sqlite(conn)
-        _ensure_expedition_sqlite(conn)
-        print(f"[hq] SQLite init ok {HQ_DB_PATH} (fallback, no Docker)")
-
-def seed_procurement_targets(cur):
-    for row in PROCUREMENT_SEED:
-        try:
-            cur.execute("INSERT INTO procurement_targets VALUES (%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING", row)
-        except Exception:
-            cur.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
-
-def seed(cur):
-    s = _SEED
-    if s:
-        for r in s["stations"]: cur.execute("INSERT INTO stations VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING", r)
-        for r in s["containers"]: cur.execute("INSERT INTO containers VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING", r)
-        for r in s["crates"]: cur.execute("INSERT INTO crates VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING", r)
-        for a in s["assets"]: cur.execute("INSERT INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1,now()) ON CONFLICT (id) DO NOTHING", a)
-        seed_procurement_targets(cur)
-        seed_physics_params(cur)
-        return
-    # fallback (should not happen)
-    for r in [("ST-BHARATI","Bharati","69°24′S 76°11′E",24)]: cur.execute("INSERT INTO stations VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING", r)
-    seed_procurement_targets(cur)
-
-def seed_sqlite(conn):
-    s = _SEED
-    if s:
-        for r in s["stations"]: conn.execute("INSERT OR IGNORE INTO stations VALUES (?,?,?,?)", r)
-        for r in s["containers"]: conn.execute("INSERT OR IGNORE INTO containers VALUES (?,?,?,?)", r)
-        for r in s["crates"]: conn.execute("INSERT OR IGNORE INTO crates VALUES (?,?,?,?)", r)
-        import datetime
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        for a in s["assets"]: conn.execute("INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (*a, 1, now))
-        for row in PROCUREMENT_SEED:
-            conn.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
-        for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
-            conn.execute("INSERT OR IGNORE INTO physics_params VALUES (?,?,?,?,?,?)", (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
-        _ensure_personnel_sqlite(conn)
-        _ensure_expedition_sqlite(conn)
+        _run_schema(conn, is_pg=False)
+        _run_migrations(conn, is_pg=False)
+        _seed_if_empty(conn, is_pg=False)
         conn.commit()
-        return
-    # ensure procurement even without seed
-    for row in PROCUREMENT_SEED:
-        conn.execute("INSERT OR IGNORE INTO procurement_targets VALUES (?,?,?,?,?)", row)
-    for sid in ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]:
-        conn.execute("INSERT OR IGNORE INTO physics_params VALUES (?,?,?,?,?,?)", (sid, _PHYSICS["T_INSIDE"], _PHYSICS["BASE"], _PHYSICS["K1"], _PHYSICS["K2"], _PHYSICS["K3"]))
-    conn.commit()
+        print(f"[hq] SQLite init ok {HQ_DB_PATH} (fallback, no Docker)")
+    _initialized = True
 
 _pool = None  # type: ignore
 _pool_failed = False
