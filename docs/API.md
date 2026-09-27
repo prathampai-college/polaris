@@ -1,216 +1,187 @@
-# API — POLARIS HQ (FastAPI :8000) — Production, Extreme-Edge
+# API — POLARIS HQ (FastAPI :8000) and sync gateway (:8787)
 
-> **Problem Statement (exact):** "Develop a centralized digital platform for expedition
-> planning, cargo tracking, inventory management, personnel movement and emergency response."
+The HQ base URL is `http://localhost:8000` (`hq:8000` inside Docker). The API is JSON and its routes are in `hq/app/main.py`. CORS comes from `ALLOWED_ORIGINS`: `*` is dropped automatically when `DATABASE_URL` is set, falling back to the localhost allowlist. Errors use FastAPI's `{detail}` shape.
 
-Base: `http://localhost:8000` (or `hq:8000` in Docker). All JSON. CORS via `ALLOWED_ORIGINS` env (default `*` in dev, restrict in prod). See `hq/app/main.py:156` for `health`.
+> **Auth coverage, stated plainly:** only 5 routes enforce a role (`Depends(require_role(...))`):
+> - `PATCH /indents/{id}` (STATION_LEAD)
+> - `PUT /freight_rates/{mode}` (DISPATCH)
+> - `POST /expeditions/{id}/manifests/bulk` (NCPOR_ADMIN)
+> - `PUT /procurement/targets/{sku}` (STATION_LEAD)
+> - `POST /assets/bulk` (NCPOR_ADMIN)
+>
+> The solo branch of `POST /sorties` also checks for STATION_LEAD+. Every other route, including `/sync/ingest` and `/dtn/*`, accepts requests without a token. This is a known gap, not a secret.
 
-> **100% PS coverage:** `GET /lots` + lot FEFO consume (field) & bulk `lot_code`, `GET /freight_rates` + `PUT` + `GET /expeditions/{id}/cost` + `readiness.cost_inr`, leg chain/date/vessel overlap validation, personnel `program` + per-program sortie check, triage SLA (`GET /emergencies` `sla_*`, watchdog `TRIAGE_SLA_BREACH`), medevac sortie on medical `ACK`, manifest cold-chain blocking (`override_temp`), printable labels, buddy-pair enforcement, `personnel_positions` local frame (`POST/GET /tracking/personnel`).
+## Health and auth
 
-## Health
+- `GET /health`: `{status:"ok", db:"postgres"|"sqlite-fallback", ts}`.
+- `POST /auth/login` takes `{device_id, pin, station_id, role?}` and returns `{token, role, station_id, device_id}`.
+  - PINs are per station (`hq/app/config.py` `STATION_PINS`: `BHARATI-2024`, `MAITRI-2024`, `HIMADRI-2024`) and compared with `hmac.compare_digest`.
+  - Rate limits: 40 requests/min per IP and 20/min per device, otherwise `429`.
+  - A requested elevated role is granted only in these cases, and otherwise downgraded to `FIELD_OP`:
+    - the device_id starts with `NCPOR-ADMIN-`, `HQ-COMMAND-` or `TEST-HQ` (any elevated role);
+    - the device_id starts with `LEAD-` or `STATION-LEAD-` (STATION_LEAD or DISPATCH only);
+    - the pin equals the `ADMIN_KEY` / `ADMIN_PIN` env var.
+  - The token is an HS256 JWT signed with `SECRET_KEY` (falls back to `PSK_HEX`). It lasts 8 h by default (`TOKEN_EXPIRY_HOURS`, or `TOKEN_EXPIRY_DAYS`).
+- `GET /rbac/me` returns `{role, station_id, device_id, permissions}`. With no bearer token it returns `VIEWER`. The hierarchy (`hq/app/auth.py`) is `NCPOR_ADMIN 5 > HQ_LOGISTICS 4 > DISPATCH 3 = STATION_LEAD 3 > FIELD_OP 2 > VIEWER 1`.
 
-`GET /health` → `{status:"ok", db:"postgres"|"sqlite-fallback", ts}` (+ PG `pool: {size,waiting}` when pooled)
+## Assets, lots and audit
 
-## Assets
+- `GET /assets`: every asset joined with crate → container, adding `station_id` and `container_id`. The field tablet filters it by station for "pull stock from HQ".
+- `GET /assets/bulk/template` (alias `/assets/template.csv`): a CSV header plus an example row.
+- `POST /assets/bulk` (NCPOR_ADMIN) takes `{rows:[{sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,id?}]}` and returns `{inserted, updated}`. It accepts at most 500 rows, requires `qty >= 0`, and validates the category and criticality enums. `scripts/import_inventory.mjs` uses it.
+- `GET /lots`: lot-level stock.
+- `GET /audit?limit=`: the append-only audit log, limit clamped to 1–200.
 
-`GET /assets` → `Asset[] {id, sku, name, category, qty, unit, expiry_date, criticality, crate_id, barcode, version, updated_at, station_id, container_id, vector_clock, local_coord}` via `LEFT JOIN crates→containers` `hq/app/main.py:193`.
+## Indents
 
-`GET /assets/bulk/template` → `text/csv` `sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode` + example `hq/app/main.py:539`.
+- `GET /indents?station_id=`: newest first, joined with `sku` / `name`, and including `vessel_imo`.
+- `POST /indents` takes `{station_id, asset_id, qty_requested, urgency, created_by, status=DRAFT}`.
+- `PATCH /indents/{id}` (STATION_LEAD) takes `{status, actor_id, vessel_imo?}`.
+  - Transitions follow `DRAFT → APPROVED → DISPATCHED → RECEIVED`. The handler still tolerates a direct `DRAFT → RECEIVED`.
+  - `vessel_imo` must exist in `vessels`, otherwise `404`.
+  - Each change is audited and pushed to tablets through the gateway.
+- Field-created indents and field RECEIVED updates arrive through the sync path (`entity=indents`, `op=UPSERT`, see below). That path writes the fields present in the patch and does not re-check the state machine; the tablet only moves DISPATCHED → RECEIVED.
 
-`POST /assets/bulk` body `BulkAssetRequest {rows:[{sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,id?}]}` → `{inserted, updated}` RBAC `NCPOR_ADMIN` `hq/app/main.py:562` (`INSERT ... ON CONFLICT(sku) DO UPDATE`, validates `category` `FUEL_DIESEL|…|SCIENTIFIC` and `criticality` `CRITICAL|HIGH|LOW`, max 500 rows, `qty>=0`). Used by `scripts/import_inventory.mjs` + `scripts/template_inventory.csv`.
+## Stations, forecast and physics
 
-## Audit
+- `GET /stations/overview`: per-station counts, `days_to_stockout` and `forecast_ci`.
+- `GET /forecast/{station_id}?asset_sku=FUEL-DIESEL-001` returns `{qty, physics, residual, total_per_day, days_to_stockout, ci, ci_source:"placeholder_15pct", used_model, tele, pure_physics_days}`.
+  - `tele.source` is `live` or `stale_cache` when telemetry exists (with `fetched_at` / `age_sec`).
+  - With no telemetry row, it is **`assumed_default`** (−15 °C, 5 m/s, 1013 hPa, 0.7 load), so clients never show nominal values as measured.
+  - The field Brief reads this endpoint.
+- `GET /forecast/snn/{station_id}` has the same shape with `snn_residual`, `snn_active`, `spike_count`, `saved_pct`, `saved_pct_source` and `model`, and also flags `assumed_default`.
+- `GET /physics/{station_id}` (alias `/physics/params/{station_id}`): per-station `T_INSIDE, BASE, K1, K2, K3`, or the global fallback.
 
-`GET /audit?limit=20` → `AuditLog[] {id, actor_id, action, entity, before, after, ts}` immutable append-only. `limit` clamped 1–200 `hq/app/main.py:198`. Includes `vector_clock` merges + `dtn_bundles` custody.
+## Procurement
 
-## Indents (Indent Workflow)
+- `GET /procurement/targets` / `PUT /procurement/targets/{sku}` (STATION_LEAD).
+- `GET /procurement/{station_id}`: `need = max(0, target − qty)` with cost.
+- `GET /procurement/mutual-aid`: suggested surplus → need transfers.
 
-`GET /indents?station_id=ST-BHARATI` → `Indent[] {id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo}` + `sku/name` join, ordered `created_at DESC` `hq/app/main.py:209`. Includes `vessel_imo` when `DISPATCHED`.
+## Vessels
 
-`POST /indents` body `IndentCreate {station_id, asset_id, qty_requested, urgency:LOW|MEDIUM|CRITICAL, created_by, status=DRAFT}` → `{id, status}`. Used by HQ; field creates via sync outbox `entity=indents, op=UPSERT, vector_clock VC`. 9-col `vessel_imo` defaults NULL `hq/app/main.py:243`.
-
-`PATCH /indents/{id}` body `IndentPatch {status, actor_id, vessel_imo?}` → `{id, old, new}`. Status must follow the strict machine `DRAFT → APPROVED → DISPATCHED → RECEIVED` (`hq/app/main.py:281` still tolerates a direct `DRAFT → RECEIVED` step for offline field demos). Requires `Authorization: Bearer <JWT>` with `STATION_LEAD`+ (`require_role("STATION_LEAD")`), validates `vessel_imo` exists in `vessels` `hq/app/main.py:283`, returns `404 vessel not found` if invalid, `401`/`403` otherwise. Appends `audit_log`; triggers `notify_gateway` with `X-PSK` for downstream push (`vessel_imo` included). SQLite fallback still enforces strict.
-
-## Stations & Forecast
-
-`GET /stations/overview` → `Station[] {id,name,winter_crew_count, containers, assets, critical_low, open_indents, days_to_stockout, forecast_ci:[low,high]}`. Computes `predict_total(..., station_id)` per-station physics `hq/app/main.py:323`.
-
-`GET /forecast/{station_id}?asset_sku=FUEL-DIESEL-001` →
-
-```json
-{
-  "station_id":"ST-BHARATI", "asset_sku":"FUEL-DIESEL-001", "qty":4200,
-  "physics":163.5, "residual":2.59, "total_per_day":166.0,
-  "days_to_stockout":42, "ci":[38,47], "used_model":true,
-  "tele":{"temp_outside":-15,"wind_speed":5,"pressure":1013,"dg_load":0.7},
-  "pure_physics_days":25.6
-}
-// blizzard tele -38,22,960 → days 18 ci[15,22] pure 18.4
-```
-
-Uses `load_physics(station_id)` `hq/app/forecast.py:7` per-station `physics_params` DB else global `shared/src/physics.json`. `hq/app/main.py:484`.
-
-`GET /forecast/snn/{station_id}?asset_sku=FUEL-DIESEL-001` →
-
-```json
-{
-  "station_id":"ST-BHARATI", "asset_sku":"FUEL-DIESEL-001", "qty":4200,
-  "physics":163.5, "snn_residual":1.8, "total_per_day":165.3,
-  "days_to_stockout":42, "ci":[38,47], "ci_source":"placeholder_15pct",
-  "snn_active":true, "spike_count":47, "saved_pct":90.0, "saved_pct_source":"spike-proportional estimate", "model":"lif-5-32-16-1",
-  "tele":{"temp_outside":-15,"wind_speed":5,"pressure":1013,"dg_load":0.7}
-}
-```
-
-SNN LIF event-gated `hq/app/snn_forecast.py:1` `predict_snn_total()` — numpy mirror bit-exact vs `thermo_snn.onnx` (diff <1e-6) — if `|Δnorm|<0.12` idle `snn_active:false` **residual = cached `_last_residual` (not zero)** `saved 99%`, `model: lif-5-32-16-1`. `hq/app/main.py:917`.
-
-`GET /physics/{station}` → `{station_id, T_INSIDE, BASE, K1, K2, K3}` per-station `hq/app/main.py:499` or `global_fallback` + `source` flag. Used by `scripts/calibrate_physics.py`.
-
-## Procurement (DB-driven)
-
-`GET /procurement/targets` → `ProcurementTarget[] {sku,target_qty,cost_per_unit,unit,eta}` `hq/app/main.py:513`.
-
-`PUT /procurement/targets/{sku}` body `ProcurementTargetUpsert {sku,target_qty,cost_per_unit,unit,eta}` → upsert RBAC `STATION_LEAD` `hq/app/main.py:525` `INSERT ... ON CONFLICT DO UPDATE`.
-
-`GET /procurement/{station}` → DB-driven `need=max(0,target-qty)` `₹cost` `hq/app/main.py:541`; `[]` if no targets.
-
-## Vessels (AIS Adaptive)
-
-`GET /vessels?station_id=ST-BHARATI` → `Vessel[] {imo,name,lat,lon,sog,eta,station_id,last_seen,source:live|mock}` `hq/app/main.py:517` filter by station, `source` from `vessel_poller.get_status()` (`mock` when no `AIS_API_KEY` or `429`, `live` when AISHub succeeds). Poller `hq/app/vessel_poller.py:11` every 15m (`VESSEL_POLL_SEC`), cache `/tmp/ais_cache.json`.
-
-`GET /vessels/{imo}` → single vessel `hq/app/main.py:533` with `source`.
-
-`PATCH /indents/{id}` supports `vessel_imo` as above (validated). Dispatch flow: HQ `POST /indents` `DRAFT` → `PATCH APPROVED` → `PATCH DISPATCHED {vessel_imo:9734567}` (Sagar Nidhi) → field `DOWNSTREAM_DELTA vessels` → offline ETA `field/lib/db.ts:278`.
-
-`GET /vessels/sources` → poller health `{mode, poll_interval_sec, ais_configured, live_enabled, cache, last}` `hq/app/main.py:533` `hq/app/vessel_poller.py:11` (`LIVE_AIS_ENABLED` gate, `VESSEL_MODE`).
-
-`GET /sync/state/{device_id}` → `{device_id, last_acked_ulid, last_server_version, vector_clock}` `hq/app/main.py:683` (VC convergence via `hq/app/_vc.py:1`, DDL `sync_state.vector_clock` `shared/sql/schema.sql`).
-
-`POST /vessels/poll` → manual trigger `hq/app/main.py:541` `poll_once()`.
+- `GET /vessels?station_id=`: each vessel carries `source: live|mock`.
+- `GET /vessels/{imo}`, `GET /vessels/sources` (poller health), `POST /vessels/poll` (manual poll).
+- The poller is in `hq/app/vessel_poller.py`. It tries AISHub when `LIVE_AIS_ENABLED` is set and `AIS_API_KEY` is present. Otherwise it interpolates `shared/vessel_schedule.json`.
 
 ## Telemetry
 
-`POST /telemetry` body `TelemetryIn {ts,station_id,temp_outside,wind_speed,pressure,dg_load,acoustic_anomaly?}` → `{ok:true}` + triggers `check_and_escalate` (if `qty/total ≤20` creates `CRITICAL` diesel indent 500 units, `FORECAST_AUTO`; if `acoustic_anomaly > 0.90` creates `CRITICAL` bearing indent 4 pcs, `ACOUSTIC_AI`) + SSE broadcast to `/telemetry/stream` `hq/app/main.py:41`. Also resets SNN event gate `hq/app/snn_forecast.py:1`.
+- `POST /telemetry` takes `{ts, station_id, temp_outside, wind_speed, pressure, dg_load, acoustic_anomaly?}`. It runs `check_and_escalate` and broadcasts on SSE. The escalation tiers are:
+  - ≤20 days of diesel left: `FORECAST_AUTO`, CRITICAL, 500 L;
+  - ≤60 days: `FORECAST_60D`, MEDIUM, 250 L;
+  - acoustic anomaly > 0.90: `ACOUSTIC_AI`, 4 bearings.
+- `GET /telemetry/latest?station_id=`, `GET /telemetry/history?station_id=&days=`, `GET /telemetry/sources`, `GET /telemetry/stream` (SSE).
 
-`GET /telemetry/latest?station_id=ST-BHARATI` → last row or `{}` `hq/app/main.py:346`.
+## Tracking (local frame, no GPS)
 
-`GET /telemetry/history?station_id=ST-BHARATI&days=30` → `[{day, avg_temp, avg_load}]` aggregated history `hq/app/main.py:351`.
+- `POST /tracking/update` takes `{asset_id, x, y, theta?, conf?, station_id}` and upserts `asset_positions`.
+- `GET /tracking/positions?station_id=`.
+- `POST /tracking/personnel` / `GET /tracking/personnel?station_id=`.
+- The field tablet posts to `/tracking/update` only from Locate's drill-mode **simulated** fix panel, when that is switched on.
 
-`GET /telemetry/sources` → poller health `{source_setting:both|sim|imd|openmeteo, poll_interval_sec, coords, imd_configured, live_enabled, last_poll:{ts,results,error}}` `hq/app/main.py:354` `hq/app/telemetry_poller.py:11` (Open-Meteo free + optional IMD, `TELEMETRY_SOURCE` + `LIVE_WEATHER_ENABLED=true` default).
+## Personnel, sorties and emergencies
 
-`GET /telemetry/stream` → SSE `text/event-stream` (`event: telemetry`) `hq/app/main.py:363` `asyncio.Queue` 100 keepalive 30s.
+- `GET /personnel?station_id=` / `POST /personnel` (roster upsert).
+- `GET /sorties?station_id=`.
+- `POST /sorties` needs a distinct buddy who is ON_STATION. A solo sortie needs `solo_override` and a STATION_LEAD+ bearer token, otherwise `403`.
+- `PATCH /sorties/{id}`: RETURNED restores both people to ON_STATION.
+- `POST /sorties/check-overdue` also runs every 60 s. An overdue sortie that is more than 30 minutes late auto-raises `SOS_WHITEOUT`.
+- `GET /emergencies` includes `sla_*` fields. `POST /emergency/sos` takes a type of `SOS_MEDICAL|FIRE|WHITEOUT|POWER|VEHICLE`.
+- `PATCH /emergency/{id}` moves `ACTIVE → ACK → RESPONDING → RESOLVED`. Regressions return `400`, and every transition writes `decision_overrides`.
+- `GET /overrides` (decision audit) and `GET /timeline` (unified command feed).
 
-## Tracking (Vision-Fused Local)
+## Expeditions and cargo
 
-`POST /tracking/update` body `{asset_id, x, y, theta?, conf?, station_id}` → `{asset_id, x, y, conf}` `hq/app/main.py:1089` `INSERT ... ON CONFLICT(asset_id) DO UPDATE SET x,y,theta,conf,last_sensor_ts,station_id` (`hq/app/main.py:1091`). Called by `fusion.ts:1` every 3s; local frame meters; **SIM-LIDAR** badge (`LocateTab`).
+- `GET/POST /expeditions`, `PATCH /expeditions/{id}` (forward-only status).
+- `GET/POST /expeditions/{id}/legs`: route, dates and vessel overlap are validated.
+- `GET/POST /expeditions/{id}/manifests` and `PATCH /expeditions/{id}/manifests/{mid}`: custody moves `GOA → MUMBAI → CAPETOWN → VESSEL → STATION → CRATE`, gated by customs and biosecurity checks. A regression returns `400`.
+- `POST /expeditions/{id}/manifests/bulk` (NCPOR_ADMIN, ≤500 rows), `GET /expeditions/manifests/template`.
+- `POST /expeditions/{id}/auto-pack`, `GET /expeditions/{id}/readiness`, `GET /expeditions/{id}/cost`.
+- `GET /freight_rates`, `PUT /freight_rates/{mode}` (DISPATCH).
+- The field Cargo screen pulls `/expeditions` and `/expeditions/{id}/manifests?destination_station=`, and sends stage advances back through sync.
 
-`GET /tracking/positions?station_id=ST-BHARATI` → `AssetPosition[] {asset_id, x, y, theta, conf, last_sensor_ts, station_id, sku, name}` via join `hq/app/main.py:917`.
+## Sync — one apply path
 
-Whiteout demo: `visibility 0.8m` → camera `[]`, LiDAR still tracks `err <0.8m` `scripts/tracking_verify.mjs:1`. GPS `Unavailable` UI but `LOCAL` grid shows.
+`hq/app/sync_apply.py` `apply_frame()` is the only place an upstream field write is applied. It works on both the SQLite and Postgres dialects, and the caller owns the transaction. Three endpoints use it.
 
-`POST /tracking/personnel` body `{personnel_id, x, y, theta?, conf?, station_id}` → upserts `personnel_positions` (same GPS-denied local frame).
+### `POST /sync/ingest`
 
-`GET /tracking/personnel?station_id=` → personnel positions joined with `name`.
+The gateway forwards each validated WS frame here. The body is a `DeltaFrame`:
 
-## Personnel, Sorties & Emergency (Triage)
+```
+{ulid(26), device_id, entity, entity_id, op, patch, base_version, ts, vector_clock?, local_coord?}
+```
 
-`GET /personnel?station_id=` / `POST /personnel` (upsert roster). `GET /sorties?station_id=` / `POST /sorties` (checkout sets lead `FIELD_SORTIE`) / `PATCH /sorties/{id}` (`RETURNED` restores `ON_STATION`).
+- **Rate limit:** 600 requests/min per `device_id`, otherwise `429`. A patch over 2 KB returns `413`, and a ULID that is not 26 characters returns `400`.
+- **Dedupe:** the ULID is inserted into `dedupe` first (`ON CONFLICT DO NOTHING`). A replay returns `{status:"DEDUPED"}`, even if the same ULID arrived over DTN.
+- **`assets`:** any of `UPSERT|CONSUME|IN|OUT|ADJUST` applies the absolute `qty` from the patch.
+  - A negative qty returns `{status:"CONFLICT_CRITICAL"}` and the write is rolled back.
+  - When the vector clocks compare as `gt`, or are concurrent and the patch `updated_at` is not newer, HQ keeps its copy and answers `APPLIED_LOCAL_WINS` ("local" here means HQ's copy; the frame is ACKed but not applied).
+  - Otherwise the qty is applied, the vector clocks are merged, and HQ answers `APPLIED`.
+  - An unknown asset returns `404`.
+- **Other entities:** `indents, personnel, field_sorties, emergencies, expeditions, voyage_legs, manifests, lots` accept `UPSERT` only.
+  - An existing row updates **only the columns present in the patch**.
+  - A new row needs that entity's required columns, otherwise `400`.
+  - A `lots` write recomputes `assets.qty` as the sum of the asset's lots.
+  - Changes to personnel, field_sorties and emergencies are pushed to the station's other tablets through the gateway.
+- **Errors:** an unknown entity or op returns `400`.
+- Every write is audited as `SYNC_<ENTITY>_<status|op>` and advances `sync_state`.
 
-`POST /sorties/check-overdue` → `{marked_overdue[], auto_sos[]}`; also runs every 60 s via lifespan. `OVERDUE` + 30 min late auto-creates `SOS_WHITEOUT` linked to the sortie (`scripts/watchdog_verify.mjs`).
+### `POST /dtn/ingest_bulk`
 
-`GET /emergencies` / `POST /emergency/sos` (`SOS_MEDICAL/FIRE/WHITEOUT/POWER/VEHICLE`; medical auto-reserves O₂). `PATCH /emergency/{id}` triage `ACTIVE → ACK → RESPONDING → RESOLVED` — regressions and unknown states `400`; every transition writes `decision_overrides`.
+Takes `{bundles:[{bundleId, src, dstStation, vectorClock, createdAt, ttlSec, payload:{entity, entity_id, op, patch}}]}` and returns `{results:[{bundleId, status, ...}], count}`.
 
-`GET /overrides` → decision audit trail. `GET /timeline` → unified command feed.
+`hq/app/dtn.py` `ingest_bundle()` applies each bundle through `apply_frame` inside its own `SAVEPOINT`, so one bad bundle never aborts the batch. Per-bundle status is one of:
 
-Escalation tiers on `POST /telemetry`: ≤20 d `FORECAST_AUTO` CRITICAL 500 L; ≤60 d `FORECAST_60D` MEDIUM two-month watch 250 L; acoustic >0.90 `ACOUSTIC_AI` 4 bearings.
+- `APPLIED`, `DEDUPED`, `APPLIED_LOCAL_WINS` or `CONFLICT_CRITICAL`;
+- `FAILED` (permanently rejected);
+- `RETRY` (DB error: the sender keeps custody);
+- `EXPIRED` (the TTL from `createdAt` has passed).
 
-## Expedition Planning (Centralized Platform)
+The field sets `bundleId` to the outbox ULID, so a write sent over both WS and DTN applies once. Applied bundles are recorded in `dtn_bundles`.
 
-`GET/POST /expeditions` (`program: ANTARCTIC|ARCTIC`), `PATCH /expeditions/{id}` (forward-only `PLANNED→…→COMPLETE`). `GET/POST /expeditions/{id}/legs` (Goa→Mumbai→CapeTown→station SEA legs + Arctic AIR; `vessel_imo` validated). `GET/POST /expeditions/{id}/manifests`, `PATCH …/manifests/{mid}` custody `GOA→MUMBAI→CAPETOWN→VESSEL→STATION→CRATE` (customs/biosecurity gate, regression `400`). `POST …/manifests/bulk` (NCPOR_ADMIN, ≤500 rows). `GET /expeditions/manifests/template` (generic AL-1403-style CSV, `scripts/template_manifest.csv`). `POST …/auto-pack` (temp-zone stowage into station containers). `GET …/readiness` (per-station staged % + fuel days + 60-day watch, all 3 stations). `GET /procurement/mutual-aid` (surplus→need transfers). Sync entities extended: `expeditions, voyage_legs, manifests` (`scripts/expedition_verify.mjs`).
+### `POST /dtn/exchange` (HQ)
 
-## DTN (Delay-Tolerant Muling)
+Takes `{bundles:[…]}` (or a single `bundle`) and returns `{results}`, using the same path. The HQ route itself is unauthenticated; the gateway's route of the same name requires `X-PSK`.
 
-`POST /dtn/ingest_bulk` body `{bundles:[{bundleId, src, dstStation, vectorClock, payload:{entity,entity_id,op,patch}}]}` → `{results:[{bundleId,status,cmp}]}`, `count` `hq/app/main.py:844`. The handler `hq/app/dtn.py:1` (`ingest_bundle()`) compares vector clocks for `assets` — `gt` answers `APPLIED_LOCAL_WINS`, `concurrent` breaks ties on wall-clock timestamps, and anything else merges with `merge_vc` into `UPDATE assets vector_clock`. Every bundle is deduplicated by `bundleId` and audited into `dtn_bundles`. Mule batches are not rate-limited.
+### Other sync reads
 
-`GET /dtn/bundles?dst_station=ST-BHARATI&limit=50` → `DtnBundle[] {bundle_id, src, dst_station, vc, custody, created_at, ttl}` `hq/app/main.py:844`.
+- `GET /dtn/bundles?dst_station=&limit=`.
+- `GET /dtn/conflicts?limit=`: recent `SYNC_%` audit rows.
+- `GET /sync/state/{device_id}`: `{device_id, last_acked_ulid, last_server_version}`.
 
-`GET /dtn/conflicts?limit=20` → recent `audit_log` where `action LIKE 'SYNC_%'` `hq/app/main.py:854` (proxy for VC concurrent `APPLIED_LOCAL_WINS`).
+## Sync gateway (`sync-gateway/src/gateway.ts`, :8787)
 
-`POST /dtn/exchange` body `{bundles:[...]}` → same as `ingest_bulk` but via peer exchange `hq/app/main.py:860` (also proxied via `sync-gateway/src/gateway.ts:57` `POST /dtn/exchange` → `HQ /dtn/ingest_bulk`).
-
-Field mule: `field/lib/dtn/mule.ts:1` `createAndSaveMuleBundle()` when `ws !== OPEN` `status BUNDLED`, `BroadcastChannel('polaris-mule')` sim BLE, `exportBundleToQR()` `bundleToBase64()` `shared/src/dtn/bundle.ts:1` for QR handoff, `pushBundlesToHQ()` `POST /dtn/ingest_bulk` when online, `pushBundlesToHQ(HQ_URL)` called in `field/lib/sync.ts:13` `drain()`.
-
-Gateway: `POST /dtn/exchange` → `HQ /dtn/ingest_bulk` `sync-gateway/src/gateway.ts:57`.
-
-## Sync (PolarNet Micro-Gateway)
-
-`GET /sync/state/{device_id}` → `{device_id, last_acked_ulid, last_server_version}` `hq/app/main.py:683`.
-
-`POST /sync/ingest` body `DeltaFrame {ulid(26), device_id, entity:assets|indents|vessels|telemetry|stations|containers|crates, entity_id, op:UPSERT|CONSUME|IN|OUT|ADJUST|DELETE, patch:Record, base_version:int, ts, vector_clock?:VC, local_coord?:[x,y,theta]}` `hq/app/main.py:718`.
-
-- At the wire level, `PSK_HEX` is validated as 64 hex characters (32 bytes) through `hexToBytes`/`assertKeyHex` — odd-length or non-hex input is rejected — and every `DataView` access is `byteOffset`-safe. `toWire` = `[4B CRC BE][12B nonce||ciphertext||16B tag]` msgpack+AES-GCM (GCM tag is integrity, CRC is framing). A frame over 2 KB returns `{status: "FAILED", message: "frame >2048"}` instead of being silently dropped (`sync-gateway/src/gateway.ts:6`).
-- Deduplication: when the `ulid` already exists in `dedupe`, the response is `{status: "DEDUPED", server_version}`.
-- Assets: a negative `qty` returns `{status: "CONFLICT_CRITICAL", server_version, message: "would go negative"}`; otherwise the patch merges `qty`, `version`, and `vector_clock` through `compare_vc`/`merge_vc` (LWW plus vector clocks, `hq/app/dtn.py:1`) and returns `APPLIED` or `APPLIED_LOCAL_WINS` (`hq/app/main.py:782`). Replays return `DEDUPED`.
-- Indents arrive as full-row upserts or strict status-plus-`vessel_imo` patches, deduplicated and audited as `SYNC_INDENT_*` (`hq/app/main.py:734`); `DeltaFrame` may carry `vessel_imo` and `vector_clock`.
-- Vessel positions flow downstream as `DOWNSTREAM_DELTA vessels` through `applyDownstreamVessel` (`field/lib/db.ts:278`).
-- SNN state needs no separate sync — it travels inside `forecast/snn`.
-- Gateway validates CRC+decrypt+zod before `POST /sync/ingest`, returns `toWire({ulid,status,server_version,reason})`, logs `jsonBytes vs msgpackBytes` via `sizeReport` (shared).
-
-Errors: `400` ulid length / entity / op allowlist, `404 asset/vessel not found`, `413 patch >2KB`, `500` with rollback.
-
-`POST /sync/ingest` is rate-limited to 600 requests per minute per `device_id` (an in-memory `_rate_store` bounded at 1,000 keys, `hq/app/main.py:689`).
-
-`GET /sync/state/{device_id}` also includes `vector_clock` convergence.
-
-## Auth & RBAC
-
-`POST /auth/login` body `{device_id, pin, station_id, role?}` → `{token, role, station_id, device_id}`. `pin` per-station (`ST-BHARATI: BHARATI-2024` `hq/app/config.py:22`). **`role` is ignored** unless `device_id` contains `ADMIN`/`LEAD`/`TEST`/`HQ` — otherwise always `FIELD_OP` `hq/app/main.py:176`. Prevents PIN-holder escalation to `NCPOR_ADMIN`. Token is HMAC-SHA256 JWT, `64 hex` secret hex-decoded to 32B (`hexToBytes`/`bytes.fromhex`), compact JSON (`separators=(',',':')`) cross-verified Node ↔ Python, `exp` 8h (`TOKEN_EXPIRY_HOURS`, overridable via `TOKEN_EXPIRY_DAYS`).
-
-**Coverage, stated plainly:** of ~66 HQ routes, exactly 5 are gated with `Depends(require_role(...))`: `PATCH /indents/{id}` (`STATION_LEAD`), `PUT /freight_rates/{mode}` (`DISPATCH`), `POST /expeditions/{id}/manifests/bulk` (`NCPOR_ADMIN`), `PUT /procurement/targets/{sku}` (`STATION_LEAD`), `POST /assets/bulk` (`NCPOR_ADMIN`). Every other route — including `GET /assets`, `POST /sorties`, `POST /emergency/sos`, `POST /dtn/ingest_bulk`, etc. — has no server-side role check yet; a valid JWT isn't even required. This is a known, flagged gap for a later pass, not an oversight to hide.
-
-`GET /rbac/me` → `{role, station_id, device_id, permissions}`. Requires `Authorization: Bearer <JWT>`; when absent returns `{role:"VIEWER", permissions:["READ"]}` (not `FIELD_OP`). Roles `NCPOR_ADMIN(5)>HQ_LOGISTICS(4)>DISPATCH(3)=STATION_LEAD(3)>FIELD_OP(2)>VIEWER(1)` `hq/app/auth.py:8`. Row-level: `device_id→station_id` at provisioning; queries `WHERE station_id=:mine`.
-
-`GET /internal/broadcast_delta` (gateway, HQ→field push) → requires header `X-PSK: <PSK_HEX>` equal to gateway `PSK_HEX` `sync-gateway/src/gateway.ts:73`, else `401`. Broadcasts `DOWNSTREAM_DELTA` `ulid, station_id, entity, entity_id, op, patch, vector_clock` to `station_id` tablets.
-
-`POST /dtn/exchange` gateway also requires `X-PSK` if present (mule batch).
-
-## Errors
-
-Errors follow the standard FastAPI shape: `HTTPException` rendered as JSON `{detail, request_id}`. Security headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `CSP default-src 'self'`, `Cache-Control: no-store`. All writes append `audit_log` + `dedupe` + `vector_clock`. Idempotency via `ulid` + `dedupe` + `vector_clock` merge.
-
-## Wire
-
-The field `SyncWorker` (`field/lib/sync.ts:13`) holds the full-duplex socket open: `connect()` sends an encrypted `SYNC_INIT` wire frame; `drain()` runs every 2 s, marking `outbox` rows `BUNDLED` while offline and sending them over the socket when online; `pushBundlesToHQ()` flushes pending `dtn_bundles`; and `onmessage` handles `DOWNSTREAM_DELTA` (assets, indents, vessels), `SYNC_INIT_RESP` (indents plus bundles), and acknowledgments (`APPLIED`, `DEDUPED`, `APPLIED_LOCAL_WINS`, `CONFLICT_CRITICAL`, `FAILED`) — updating `outbox` to `ACKED`, advancing `sync_state`, and merging assets through `applyDownstreamAsset`. `PING`/`PONG` keepalive runs every 30 s. The verify scripts reuse the same `toWire`/`fromWire` helpers with the demo key `PSK_HEX = "a" * 64` plus vector clocks.
+- **WebSocket frames:** `[4 B CRC32][12 B nonce ‖ AES-GCM ciphertext ‖ 16 B tag]` over msgpack, using the shared `PSK_HEX` (`shared/src/codec.ts`). A frame over 2048 B gets a FAILED ACK.
+- **Key mismatch:** if a frame will not decrypt, the gateway replies with plaintext `{"type":"KEY_MISMATCH"}`, since it cannot encrypt a reply without the right key.
+- **`SYNC_INIT`:** records the device and station and replies with `SYNC_INIT_RESP` carrying that station's indents from HQ.
+- **Delta frames:** validated with zod (`deltaFrameSchema`). An invalid frame gets a FAILED ACK. Valid frames are forwarded to `HQ /sync/ingest` **one at a time, in order, per connection**. The HQ response maps to an ACK status (`sync-gateway/src/ack.ts`):
+  - 2xx with a known status: that status;
+  - 5xx, 429, a network error or a 10 s timeout: `RETRY`;
+  - other 4xx: `FAILED`.
+- **`POST /dtn/exchange`** requires `X-PSK` (compared timing-safe) and caps the body at 512 KB. It proxies to `HQ /dtn/ingest_bulk`.
+- **`POST /internal/broadcast_delta`** requires `X-PSK`. HQ calls it via `GATEWAY_INTERNAL_URL` (httpx, 1 s timeout, fire-and-forget). It sends an encrypted `DOWNSTREAM_DELTA` to connected tablets of that `station_id`.
+- **`GET /health`.** Ping/pong keepalive runs every 30 s.
+- `INTERNAL_PSK_HEX` can override the key used for the `X-PSK` checks.
 
 ## Example curl
 
 ```bash
 curl http://localhost:8000/health
-curl http://localhost:8000/forecast/ST-BHARATI
-curl http://localhost:8000/forecast/snn/ST-BHARATI | jq
-curl http://localhost:8000/assets | jq '.[0] | {sku,qty,station_id,vector_clock}'
-curl http://localhost:8000/vessels | jq '.[0] | {imo,name,lat,source}'
-curl http://localhost:8000/dtn/bundles | jq
-curl http://localhost:8000/tracking/positions | jq
+curl http://localhost:8000/forecast/ST-BHARATI | jq '.days_to_stockout, .tele.source'
+curl http://localhost:8000/assets | jq '.[0] | {sku,qty,station_id}'
 curl -X POST http://localhost:8000/auth/login -H "Content-Type: application/json" \
-  -d '{"device_id":"BHARATI-TABLET-01","pin":"BHARATI-2024","station_id":"ST-BHARATI"}'
-# → {token, role:"FIELD_OP", ...}  (requesting role:"NCPOR_ADMIN" without ADMIN device_id still returns FIELD_OP)
+  -d '{"device_id":"TAB-01","pin":"BHARATI-2024","station_id":"ST-BHARATI","role":"STATION_LEAD"}'
+# → role:"FIELD_OP" (device id lacks a LEAD-/admin prefix)
 TOKEN=$(curl -s http://localhost:8000/auth/login -H "Content-Type: application/json" \
-  -d '{"device_id":"HQ-ADMIN-01","pin":"BHARATI-2024","station_id":"ST-BHARATI","role":"NCPOR_ADMIN"}' | jq -r .token)
-curl http://localhost:8000/assets/bulk/template
+  -d '{"device_id":"NCPOR-ADMIN-01","pin":"BHARATI-2024","station_id":"ST-BHARATI","role":"NCPOR_ADMIN"}' | jq -r .token)
 curl -X POST http://localhost:8000/assets/bulk -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"rows":[{"sku":"TEST-SKU-999","name":"Test","category":"FOOD","qty":42,"unit":"packs","criticality":"HIGH","crate_id":"C1-K1"}]}'
-curl http://localhost:8000/telemetry/sources | jq
-curl http://localhost:8000/physics/ST-BHARATI | jq
-curl -H "Authorization: Bearer $TOKEN" -X PATCH http://localhost:8000/indents/$ID \
-  -H "Content-Type: application/json" -d '{"status":"DISPATCHED","actor_id":"LEAD_01","vessel_imo":"9734567"}'
 curl -X POST http://localhost:8000/telemetry -H "Content-Type: application/json" \
   -d '{"ts":"2026-08-27T00:00:00","station_id":"ST-BHARATI","temp_outside":-38,"wind_speed":22,"pressure":960,"dg_load":0.9}'
-# gateway internal push (requires X-PSK)
-curl -X POST http://localhost:8787/internal/broadcast_delta -H "X-PSK: $PSK_HEX" -H "Content-Type: application/json" \
-  -d '{"station_id":"ST-BHARATI","entity":"indents","entity_id":"...","op":"STATUS_CHANGE","patch":{"status":"APPROVED"}}'
-# DTN mule bulk (via HQ or gateway)
+# DTN bundle straight to HQ (ULID-shaped bundleId; entity_id must exist)
 curl -X POST http://localhost:8000/dtn/ingest_bulk -H "Content-Type: application/json" \
-  -d '{"bundles":[{"bundleId":"01...","src":"TAB-A","dstStation":"ST-BHARATI","vectorClock":{"TAB-A":1},"payload":{"entity":"assets","entity_id":"A1","op":"UPSERT","patch":{"qty":4000}}}]}'
+  -d '{"bundles":[{"bundleId":"01J0000000000000000000TEST","src":"TAB-A","dstStation":"ST-BHARATI","vectorClock":{"TAB-A":1},"payload":{"entity":"assets","entity_id":"A1","op":"CONSUME","patch":{"qty":4000}}}]}'
+# via the gateway (needs the PSK)
+curl -X POST http://localhost:8787/dtn/exchange -H "X-PSK: $PSK_HEX" -H "Content-Type: application/json" -d '{"bundles":[]}'
 ```
-

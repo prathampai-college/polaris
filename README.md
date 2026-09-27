@@ -1,312 +1,233 @@
 # POLARIS — Polar Logistics & Survival Engine
 
-> **Problem Statement (exact):** "Develop a centralized digital platform for expedition planning, cargo tracking, inventory management, personnel movement and emergency response."
+> **Problem statement (exact):** "Develop a centralized digital platform for expedition planning, cargo tracking, inventory management, personnel movement and emergency response."
 
-**SIH26062 · Integrated Polar Expedition Logistics for NCPOR/MoES** — Bharati (69°24′S 76°11′E), Maitri (70°45′S 11°44′E), Himadri (78°55′N 11°56′E). Built to run when everything else struggles: −40°C, months of winter isolation, and 20–50 kbps Iridium links that drop for hours.
+**SIH26062 · Integrated Polar Expedition Logistics for NCPOR/MoES.** Covers Bharati (69°24′S 76°11′E), Maitri (70°45′S 11°44′E) and Himadri (78°55′N 11°56′E). It is built for stations that spend months in isolation on 20–50 kbps satellite links that drop for hours.
 
-`docker compose up` brings up field tablets, the sync gateway, and HQ dashboards. Turn WiFi off and it still works. `PITCH_DECK.md` has the 3.5-minute demo walkthrough.
-
----
-
-## Why POLARIS
-
-Antarctic and Arctic stations cannot afford a missed shipment. A stockout of diesel or oxygen during polar night is not an inventory issue — it is a survival issue. NCPOR teams plan from Goa and depend on the same system to track every crate from port to station, know what is low before it is critical, keep crews safe outside, and respond fast when something goes wrong.
-
-POLARIS replaces spreadsheets, scattered trackers, and informal radio checks with one place to:
-
-- **Plan expeditions centrally** — Antarctic and Arctic programs, voyage legs, shipment manifests, and stowage, all offline-capable.
-- **Track every crate** — from Goa through Mumbai and Cape Town to the right station and container bay, with cold-chain and customs checks that actually block.
-- **Know what to order** — database-driven targets, per-station burn models, and a clear 60-day watch window.
-- **Keep people safe** — field sorties in buddy pairs, live local positions without GPS, and a triage flow that never loses track of an emergency.
-- **Keep data moving without internet** — store-and-forward bundles that travel by person or vehicle and sync when a link returns.
-
-If you run a station, dispatch from HQ, or lead a field party, POLARIS is designed for you.
+`docker compose up` starts the field tablet app, the sync gateway, HQ, the HQ dashboard and the database. The tablet keeps working with no link and syncs when one returns. `PITCH_DECK.md` has the demo walkthrough.
 
 ---
 
 ## What it covers
 
-| Need | How POLARIS helps |
-|------|-------------------|
-| **Expedition planning** | Create ANTARCTIC/ARCTIC expeditions, add voyage legs (validated for route, dates, and vessel overlap), import AL-1403-style manifests, run auto-pack stowage, and check readiness + cost before sailing. |
-| **Cargo tracking** | Custody flows Goa → Mumbai → Cape Town → Vessel → Station → Crate. Cold and hazmat goods are blocked if sent to the wrong container. Every item prints a scannable label. |
-| **Inventory** | Lot-level stock with earliest-expiry-first (FEFO) consumption. Bulk import via CSV, synced across stations even offline. `GET /lots` shows what is really on the shelf. |
-| **Personnel movement** | Station rosters tagged ANTARCTIC/ARCTIC/BOTH. Sorties require a buddy (solo needs a STATION_LEAD override and leaves an audit trail). Positions show as live dots on a local map that does not need GPS. |
-| **Emergency response** | One-tap SOS through ACTIVE → ACK → RESPONDING → RESOLVED with SLA timers, watchdog alerts, and automatic medevac tasking for medical cases. Every override is logged. |
-
-All five areas work offline first, stay audited, and converge cleanly when links return.
+| Need | How POLARIS handles it |
+|------|------------------------|
+| **Expedition planning** | ANTARCTIC and ARCTIC expeditions, voyage legs (route, dates and vessel overlap validated), manifest import, auto-pack stowage, readiness and cost (HQ dashboard + API). |
+| **Cargo tracking** | Manifest custody GOA → MUMBAI → CAPETOWN → VESSEL → STATION → CRATE, with customs and biosecurity gates at HQ. The tablet's Cargo screen advances stages and prints QR labels. |
+| **Inventory** | Lot-level stock with earliest-expiry-first (FEFO) consumption on the tablet. Expired stock is blocked for CONSUME unless a station lead overrides it. Bulk CSV import at HQ. |
+| **Personnel movement** | Station rosters and a muster board. Sorties need a buddy; a solo sortie needs a STATION_LEAD override and is audited. The HQ watchdog flags overdue sorties and auto-raises an SOS once one is 30 minutes late. |
+| **Emergency response** | Hold-to-transmit SOS with a required location, logged on the tablet first. Triage runs ACTIVE → ACK → RESPONDING → RESOLVED, with SLA timers at HQ. Other tablets at the station are alerted when the SOS reaches HQ. |
 
 ---
 
 ## Architecture at a glance
 
 ```
-ANTARCTICA — field tablet (offline-first)          thin satellite / DTN           INDIA — HQ
-┌──────────────────────────────┐                   msgpack + AES-GCM + VC        ┌────────────────────────┐
-│ Next.js PWA · Workbox cache  │ ◄────────── websocket / DTN mule ───────────► │ FastAPI + Postgres     │
-│ SQLite WASM (OPFS/WAL)       │  deltas + custody bundles + vector clocks     │ TimescaleDB · RBAC     │
-│  outbox · dtn_bundles ·      │ ─────────────────────────────────────────────► │ procurement targets    │
-│  asset_positions · lots      │ ◄────────── downstream deltas ─────────────── │ physics · vessels ·    │
-│  local fusion 40×40 2m/grid  │                                               │ SNN · forecasting      │
-└──────────────────────────────┘                                                 └────────────────────────┘
-         ▲ sensors: LiDAR 360pt + camera → Kalman → local [x,y]                   ▲ pollers: weather
-         └ SNN 0.8mW idle · DTN bundle QR/BroadcastChannel                          └ AIS · burn model
+FIELD TABLET (offline-first PWA)            SYNC GATEWAY :8787                 HQ :8000
+┌───────────────────────────────┐   WS     ┌────────────────────┐  HTTP   ┌──────────────────────┐
+│ Next.js 14 routes             │ ◀──────▶ │ CRC32 + AES-GCM    │ ──────▶ │ FastAPI              │
+│ Web Worker:                   │ msgpack  │ zod validation     │         │ sync_apply.apply_    │
+│  sqlite-wasm on OPFS          │ ≤2 KB    │ ordered forwarding │ ◀────── │   frame (one path)   │
+│  outbox → sync engine         │          │ ACK: 5xx→RETRY     │ push    │ Postgres/Timescale   │
+│  DTN bundles (QR / Broadcast- │          │      4xx→FAILED    │         │ (SQLite fallback)    │
+│  Channel) when offline        │ ───────▶ │ POST /dtn/exchange │ ──────▶ │ /dtn/ingest_bulk     │
+└───────────────────────────────┘          └────────────────────┘         └──────────────────────┘
 ```
 
-- **One language at the edge** — TypeScript on the tablet, gateway, and SNN engine. Python stays at HQ and training where it makes sense.
-- **One schema everywhere** — `shared/sql/schema.sql` is the source of truth, mirrored into the browser bundle (`field/lib/db.ts`) and adapted for Postgres in `hq/app/db.py`.
-- **No hidden mocks** — every fallback (AIS schedule, physics residual, weather cache) shows a badge with age and reason: `LIVE · 12s` / `STALE · 4h` / `MOCK SCHEDULE` / `OFFLINE`.
+- **One apply path at HQ.** WS frames (`POST /sync/ingest`) and DTN bundles (`POST /dtn/ingest_bulk`, `POST /dtn/exchange`) all go through `hq/app/sync_apply.py`. A write carries one ULID on every channel and applies exactly once.
+- **Local-first tablet.** Every write commits to on-device SQLite with an audit row and an outbox frame. Screens re-render from per-table change events, not polling.
+- **Honest labels.** The tablet's status strip only shows real state: link, unsynced and failed counts, last ACK, EPHEMERAL storage, INSECURE HTTP, DEV KEY. HQ forecasts flag `tele.source = "assumed_default"` when no telemetry exists.
 
-Details live in `docs/ARCHITECTURE.md` and `docs/API.md`.
-
-### Three edge pillars
-
-1. **Local tracking without GPS** (`field/lib/sensors/fusion.ts`, `shared/src/local_map.ts`) — 2D LiDAR + camera fused on a 40×40 grid (2 m cells) into a Kalman-filtered `[x,y,theta]`. Camera goes blind in whiteout; LiDAR keeps tracking. Error stays under 0.8 m.
-2. **Neuromorphic forecasting** (`field/lib/snn/engine.ts`, `hq/app/snn_forecast.py`) — snnTorch LIF `5→32→16→1` with rate-coded spikes (`T=20`). It only fires when inputs change meaningfully, idling near 0.8 mW. A watts pill in the UI shows what it saved.
-3. **Delay-tolerant sync** (`field/lib/dtn/mule.ts`, `shared/src/dtn/vector_clock.ts`) — bundles with custody travel over BroadcastChannel or QR codes, ingested via `POST /dtn/ingest_bulk`, merged with vector-clock + wall-clock LWW. Nothing is lost during blackouts.
+Details: `docs/ARCHITECTURE.md`, `docs/API.md`, `field/README.md`, `hq-dashboard/README.md`.
 
 ---
 
 ## Quick start
 
-**Requirements:** Node 20+, Python 3.11+, Docker Desktop (optional but recommended). No cloud account needed.
+**Requirements:** Node 20+ (Node 22.18+ to run the field core test), Python 3.11+, and Docker Desktop (recommended).
 
 ### 1. Install
 
 ```powershell
-git clone https://github.com/prathampai-college/polaris.git; cd polaris
 npm install --prefix shared; npm run build --prefix shared
 npm install --prefix sync-gateway
 npm install --prefix field
 npm install --prefix hq-dashboard
-pip install -r hq/requirements.txt
-# optional: SNN training (CPU) — skip and the JS fallback still works
-pip install -r ai/requirements.txt; python ai/snn/train_snn.py
+pip install -r hq/requirements.txt -r hq/requirements-test.txt
 ```
 
 ### 2. Configure
 
 ```powershell
 Copy-Item .env.example .env
-# generate a per-station key + QR:
-node scripts/provision_station.mjs ST-BHARATI --qr
+node scripts/provision_station.mjs ST-BHARATI --qr   # generates a 64-hex key (+ QR)
 ```
 
-Key settings in `.env` (all have safe defaults for local dev):
-
-| Variable | What it does |
-|----------|--------------|
-| `PSK_HEX` | 32-byte hex wire key (AES-GCM). Keep it unique per station. |
-| `SECRET_KEY` | 32-byte hex JWT key. Must differ from `PSK_HEX` in production. |
-| `DATABASE_URL` | Postgres URL. Leave empty for the SQLite fallback `hq/app/hq.db`. |
-| `NEXT_PUBLIC_HQ_URL` / `NEXT_PUBLIC_GATEWAY_URL` | Tablet → HQ / gateway addresses. Runtime falls back to `window.location.hostname` on LAN. |
-| `TELEMETRY_SOURCE` | `both` (Open-Meteo free + optional IMD), `openmeteo`, `imd`, or `sim`. |
-| `LIVE_WEATHER_ENABLED` / `LIVE_AIS_ENABLED` | Master switches for live feeds. Off still works with cached data. |
-| `AIS_API_KEY` / `VESSEL_MODE` | AISHub key and `auto`/`live`/`mock` mode. |
-
-In production, remove `NEXT_PUBLIC_PSK_HEX` — tablets receive the key by scanning a QR code into IndexedDB.
+| Variable | Used by | What it does |
+|----------|---------|--------------|
+| `PSK_HEX` | hq, gateway | A 64-hex (32-byte) AES-GCM wire key. **One key is shared** by the gateway and every tablet. Tablets receive it in Comms (paste or QR); until then they run on the dev key `'a'*64` and show DEV KEY. |
+| `SECRET_KEY` | hq | The JWT signing key. Falls back to `PSK_HEX`; set a distinct value in production. |
+| `DATABASE_URL` | hq | A Postgres URL. Leave it empty to use the SQLite fallback `hq/app/hq.db`. |
+| `HQ_PUBLIC_URL` / `GATEWAY_PUBLIC_URL` | field | Read at runtime by `field/app/api/config/route.ts`. `localhost` is swapped on the client for the host the tablet loaded the page from. |
+| `GATEWAY_INTERNAL_URL` | hq | Where HQ pushes downstream deltas. Compose sets `http://gateway:8787`. |
+| `ALLOWED_ORIGINS` | hq | CORS allowlist. `*` is dropped when `DATABASE_URL` is set. |
+| `TELEMETRY_SOURCE`, `LIVE_WEATHER_ENABLED`, `IMD_API_KEY` | hq | Weather poller: Open-Meteo (free) plus optional IMD, or `sim`. |
+| `AIS_API_KEY`, `VESSEL_MODE`, `LIVE_AIS_ENABLED` | hq | Vessel poller. Without a key it falls back to schedule interpolation, labelled `mock`. |
+| `TOKEN_EXPIRY_HOURS` | hq | JWT lifetime, 8 h by default. |
+| `ADMIN_KEY` | hq | Optional. A PIN equal to this grants an elevated role at login. |
 
 ### 3a. Run with Docker (recommended)
 
 ```powershell
-docker compose up --build
+docker compose up -d --build --wait
 # field       → http://localhost:3000
 # dashboard   → http://localhost:3001
 # gateway     → ws://localhost:8787
 # HQ API      → http://localhost:8000
-# turn WiFi off and the PWA keeps working — Workbox cache + OPFS + DTN custody
 ```
 
-### 3b. Run without Docker (SQLite fallback, good for CI)
+### 3b. Run without Docker (SQLite fallback)
 
 ```powershell
 python -m uvicorn hq.app.main:app --port 8000
-$env:HQ_URL="http://localhost:8000"; $env:GATEWAY_PORT="8787"; node sync-gateway/dist/gateway.js
+npm --prefix sync-gateway run build; $env:HQ_URL="http://localhost:8000"; node sync-gateway/dist/gateway.js
 npm --prefix field run dev          # :3000
 npm --prefix hq-dashboard run dev   # :3001
 ```
 
-### 4. Import inventory
+**Tablets on a LAN** need a secure context. The camera, OPFS storage and WebCrypto only work over HTTPS or on `localhost`. On plain `http://<LAN-IP>:3000`, storage falls back to memory (EPHEMERAL), sign-in cannot store the offline PIN hash, and the strip shows INSECURE HTTP. Put the field app behind TLS for real devices.
+
+### 4. Import inventory (optional)
 
 ```powershell
-curl http://localhost:8000/assets/bulk/template -o template.csv
 node scripts/import_inventory.mjs --file scripts/template_inventory.csv --hq http://localhost:8000 --pin BHARATI-2024
 ```
 
-Or POST as `NCPOR_ADMIN` to `/assets/bulk` (see API below). The 20-SKU seed is only used when the database is empty.
+Or POST to `/assets/bulk` as NCPOR_ADMIN. The seed is only loaded into an empty database.
 
 ---
 
 ## Using it
 
-### Field tablet — `:3000` (5 tabs)
+### Field tablet — `:3000`
 
-- **Today** — forecast days-to-stockout with confidence bands, SNN watts pill, freshness badge, vessel ETA, and three telemetry buttons (calm / blizzard / acoustic anomaly) that push to `/telemetry`.
-- **Inventory** — searchable by SKU, name, crate, or barcode. `CONSUME` uses `BEGIN IMMEDIATE` and lot-level FEFO, so the earliest-expiring lot is used first. Expired medical/oxygen/food needs an explicit override.
-- **Scan** — `html5-qrcode` at 12 fps + manual entry + preset chips. Scans resolve locally via `getAssetByBarcode`.
-- **Indents** — create `DRAFT` requests, follow `DRAFT → APPROVED → DISPATCHED → RECEIVED` strictly, and see vessel linkage when dispatched. Downstream pushes arrive via `SYNC_INIT_RESP` and `DOWNSTREAM_DELTA`.
-- **Locate** — toggle `LOCAL` vs `GPS`. `GPS` intentionally shows "Unavailable — ionospheric whiteout." `LOCAL` shows the occupancy canvas, fused position dots (cyan = personnel, teal/amber = cargo confidence), and buddy lines. Fusion loops every 3 s with a 15% whiteout chance to prove LiDAR carries tracking alone.
+Real routes under `field/app/(field)/`, sharing a shell of a status strip, a nav rail or bottom bar, a global SOS sheet, a global asset sheet and a hardware-scanner catcher:
 
-A **sync drawer** shows `sent / acked / deduped / saving %`, plus DTN custody counts with Export QR, Import QR, and Push Bundles.
+- **Brief** (`/`): the action queue, sorted by severity.
+- **Scan**: camera or typed code, then quick IN / CONSUME.
+- **Stock** (`/inventory`): stock with FEFO lots.
+- **Muster**: triage, sorties and the muster board.
+- **Indents**: create DRAFT indents and receive DISPATCHED ones.
+- **Cargo** (`/expeditions`): manifest custody and printable QR labels.
+- **Locate**: 2D store plan and 3D twin. Simulated LiDAR appears only in drill mode.
+- **Comms**: custody ledger, frame retry and discard, PSK provisioning, DTN bundle QR export and import, pull stock from HQ.
+- **Settings**: Day / Glare or Polar Night theme, glove mode, larger text, drill mode, lock or forget sign-in, wipe.
 
-**Login:** pick a station, enter device ID + PIN (`BHARATI-2024`). New devices start as `FIELD_OP`; `STATION_LEAD`/`NCPOR_ADMIN` requires a device ID containing `ADMIN`, `LEAD`, `TEST`, or `HQ`.
+See `field/README.md`.
 
-### HQ dashboard — `:3001` (Next.js App Router, 10 routes)
+**Sign-in:** pick a station, device ID and PIN (`BHARATI-2024` / `MAITRI-2024` / `HIMADRI-2024`). The first sign-in must reach HQ; after that the same tablet can unlock offline with that PIN. HQ grants STATION_LEAD only to device IDs starting with `LEAD-` or `STATION-LEAD-` (or an admin prefix). Everyone else signs in as FIELD_OP.
 
-Real routes under `app/(dashboard)/`, sharing a persistent shell (`Topbar` + `Sidebar` + a global emergency banner) — no more hash-tab single page: `/` (fleet overview), `/forecast`, `/stations`, `/inventory`, `/indents`, `/personnel`, `/expeditions`, `/audit`, `/locate`, `/command`.
+### HQ dashboard — `:3001`
 
-- **Fleet Overview** (`/`) + **Forecast** (`/forecast`) — a physics+residual burn card (42 → 18 days in a blizzard) and per-station cards backed by `GET /stations/overview` and `GET /forecast/snn/{station}`.
-- **Inventory / Indents / Personnel / Expeditions / Audit** — honest empty states (`TrendChart` no longer fabricates fallback data when telemetry fields are missing), database-driven `need = max(0, target − qty)` needs with cost, indent approval with automatic vessel attachment, and an append-only audit feed.
-- **Locate / Command** — the local (non-GPS) position map and a unified command/timeline feed.
-- **Vessel Tracker** — Leaflet map that probes tiles and falls back to a schematic with an ETA pill when offline. Vessel rows show `LIVE AIS · Ns ago` / `MOCK SCHEDULE` badges. SSE on `/telemetry/stream` with an 8 s poll fallback keeps it live (polling stops once SSE confirms live, instead of both running forever).
-- Same **Polaris Expedition Palette** ("tactical brutalism") design system as `website/` — see `hq-dashboard/README.md`.
+A Next.js 14 App Router app with 10 routes under `hq-dashboard/app/(dashboard)/`:
 
----
+- `/` fleet overview
+- `/forecast`
+- `/stations`
+- `/inventory`
+- `/indents`
+- `/personnel`
+- `/expeditions`
+- `/audit`
+- `/locate`
+- `/command`
 
-## Configuration reference
-
-All variables are documented in `.env.example` and validated on startup (`hq/app/config.py`).
-
-```
-PSK_HEX=...            # 64 hex chars, per-station wire key
-SECRET_KEY=...         # 64 hex chars, JWT HMAC (≠ PSK_HEX in prod)
-DATABASE_URL=          # postgres://… or empty → SQLite WAL
-TELEMETRY_SOURCE=both
-LIVE_WEATHER_ENABLED=true
-IMD_API_KEY=           # optional
-AIS_API_KEY=           # optional, else schedule interpolation
-VESSEL_MODE=auto       # auto|live|mock
-LIVE_AIS_ENABLED=false
-VESSEL_POLL_SEC=900
-TELEMETRY_POLL_SEC=900
-NEXT_PUBLIC_HQ_URL=http://localhost:8000
-NEXT_PUBLIC_GATEWAY_URL=ws://localhost:8787
-ALLOWED_ORIGINS=*      # restrict in prod
-TOKEN_EXPIRY_HOURS=8
-```
+The vessel map (Leaflet) falls back to a schematic when map tiles cannot be reached. Telemetry arrives over SSE, with a polling fallback. See `hq-dashboard/README.md`.
 
 ---
 
 ## API quick reference
 
-Base `http://localhost:8000` (`hq:8000` in Docker). Full spec in `docs/API.md`.
+The base URL is `http://localhost:8000`. The full reference is `docs/API.md`.
 
 | Area | Endpoints |
 |------|-----------|
-| **Health / auth** | `GET /health` · `POST /auth/login` · `GET /rbac/me` |
-| **Assets / lots** | `GET /assets` · `GET /assets/bulk/template` · `POST /assets/bulk` · `GET /lots` |
-| **Indents** | `GET /indents?station_id=` · `POST /indents` · `PATCH /indents/{id}` |
-| **Stations / forecast** | `GET /stations/overview` · `GET /forecast/{station}` · `GET /forecast/snn/{station}` · `GET /physics/{station}` |
-| **Procurement** | `GET /procurement/targets` · `PUT /procurement/targets/{sku}` · `GET /procurement/{station}` · `GET /procurement/mutual-aid` |
-| **Vessels** | `GET /vessels?station_id=` · `GET /vessels/{imo}` · `GET /vessels/sources` |
-| **Telemetry** | `POST /telemetry` · `GET /telemetry/latest` · `GET /telemetry/history` · `GET /telemetry/sources` · `GET /telemetry/stream` (SSE) |
-| **Tracking** | `POST /tracking/update` · `GET /tracking/positions` · `POST /tracking/personnel` · `GET /tracking/personnel` |
-| **People & safety** | `GET/POST /personnel` · `GET/POST /sorties` · `PATCH /sorties/{id}` · `POST /sorties/check-overdue` · `GET /emergencies` · `POST /emergency/sos` · `PATCH /emergency/{id}` |
-| **Expeditions** | `GET/POST /expeditions` · `PATCH /expeditions/{id}` · `GET/POST /expeditions/{id}/legs` · `GET/POST /expeditions/{id}/manifests` · `PATCH /expeditions/{id}/manifests/{mid}` · `POST /expeditions/{id}/manifests/bulk` · `POST /expeditions/{id}/auto-pack` · `GET /expeditions/{id}/readiness` · `GET /expeditions/{id}/cost` · `GET /expeditions/manifests/template` · `GET /freight_rates` · `PUT /freight_rates/{mode}` |
-| **DTN / sync** | `POST /dtn/ingest_bulk` · `GET /dtn/bundles` · `GET /dtn/conflicts` · `POST /dtn/exchange` · `POST /sync/ingest` · `GET /sync/state/{device_id}` · `GET /timeline` · `GET /overrides` |
-
-Examples:
-
-```bash
-curl http://localhost:8000/health
-curl http://localhost:8000/assets | jq '.[0] | {sku,qty,station_id}'
-curl http://localhost:8000/forecast/snn/ST-BHARATI | jq '.days_to_stockout, .snn_active'
-curl http://localhost:8000/vessels?station_id=ST-BHARATI | jq
-curl http://localhost:8000/dtn/bundles | jq
-```
-
-Every write is appended to `audit_log` and deduplicated by ULID + vector clock.
-
----
-
-## How it stays reliable
-
-- **Sync wire** (`shared/src/wire.ts`, `shared/src/codec.web.ts`) — msgpack + CRC32 framing + AES-GCM (`[CRC][nonce‖cipher‖tag]`), ULID + vector clock, `MAX_WIRE_SIZE` 2048. Patch-only updates save ~95% vs full rows; `SyncWorker` drains `PENDING|SENT|BUNDLED` every 2 s with `PING/PONG` keepalive. Offline writes become `BUNDLED` custody and are retried on reconnect.
-- **Forecasting** (`hq/app/forecast.py`) — per-station `physics_params` + ONNX residual (`ai/thermo_residual.onnx` 2 KB, <200 ms). Falls back to `5*dg + 0.3*crew − 2` if the model is absent. `scripts/calibrate_physics.py` fits coefficients over 30 days of burn.
-- **Vessels** (`hq/app/vessel_poller.py`) — tries AISHub (`data.aishub.net`) then interpolates `shared/vessel_schedule.json` on `429`/no-key. HQ pushes `DOWNSTREAM_DELTA vessels` through the gateway; the field applies it offline.
-- **Weather** (`hq/app/telemetry_poller.py`) — Open-Meteo (free, no key) with optional IMD, every 15 min. `GET /telemetry/sources` shows health; `LIVE_WEATHER_ENABLED=false` forces sim mode. Ranges drive the forecast (calm −15°C → ~42 days, blizzard −38°C → ~18 days, both checked by `m3_verify`).
+| Health / auth | `GET /health` · `POST /auth/login` · `GET /rbac/me` |
+| Assets / lots | `GET /assets` · `GET /assets/bulk/template` · `POST /assets/bulk` · `GET /lots` · `GET /audit` |
+| Indents | `GET /indents?station_id=` · `POST /indents` · `PATCH /indents/{id}` |
+| Stations / forecast | `GET /stations/overview` · `GET /forecast/{station}` · `GET /forecast/snn/{station}` · `GET /physics/{station}` |
+| Procurement | `GET /procurement/targets` · `PUT /procurement/targets/{sku}` · `GET /procurement/{station}` · `GET /procurement/mutual-aid` |
+| Vessels | `GET /vessels` · `GET /vessels/{imo}` · `GET /vessels/sources` · `POST /vessels/poll` |
+| Telemetry | `POST /telemetry` · `GET /telemetry/latest` · `GET /telemetry/history` · `GET /telemetry/sources` · `GET /telemetry/stream` |
+| Tracking | `POST /tracking/update` · `GET /tracking/positions` · `POST/GET /tracking/personnel` |
+| People & safety | `GET/POST /personnel` · `GET/POST /sorties` · `PATCH /sorties/{id}` · `POST /sorties/check-overdue` · `GET /emergencies` · `POST /emergency/sos` · `PATCH /emergency/{id}` · `GET /overrides` · `GET /timeline` |
+| Expeditions | `GET/POST /expeditions` · `PATCH /expeditions/{id}` · legs · manifests (+ `bulk`, `template`) · `auto-pack` · `readiness` · `cost` · `GET/PUT /freight_rates` |
+| Sync / DTN | `POST /sync/ingest` · `GET /sync/state/{device_id}` · `POST /dtn/ingest_bulk` · `POST /dtn/exchange` · `GET /dtn/bundles` · `GET /dtn/conflicts` |
 
 ---
 
 ## Testing
 
 ```powershell
-# fast — no Docker needed
-python -m pytest hq/tests -q                 # 42 tests, SQLite fallback
-npm --prefix shared test                     # codec roundtrip + schema
-npm --prefix sync-gateway test               # wire + throttle
-npx tsc -p shared/tsconfig.json --noEmit; npx tsc -p field/tsconfig.json --noEmit
+python -m pytest hq/tests -q          # 51 passed (SQLite fallback)
+npm --prefix shared test              # codec, wire, schemas
+npm --prefix sync-gateway test        # wire, throttle, ACK mapping (5xx/429→RETRY, 4xx→FAILED)
+node field/lib/db/core.test.ts        # field data core (FEFO, ACK machine, downstream, DTN, buddy rule)
+npm run typecheck                     # shared, sync-gateway, field, hq-dashboard
 
-# chaos + edge pillars
-node scripts/m1_verify.mjs   # offline WAL → dedupe + replay + budgets
-node scripts/m2_verify.mjs   # QR → consume → indent lifecycle + vessel
-node scripts/m3_verify.mjs   # ONNX <2MB <200ms, 42→18d, auto indent
-node scripts/m4_verify.mjs   # 20kbps/500ms/5% throttle, RBAC, AES, WAL
-node scripts/m5_verify.mjs   # air-gapped compliance
-node scripts/dtn_verify.mjs && node scripts/snn_verify.mjs && node scripts/tracking_verify.mjs
-
-# all at once
-npm run verify              # m1→m5
-npm run verify:extreme      # shared + hq + dtn/snn/tracking
-npm run verify:all          # everything
-
-# Docker E2E
-docker compose up --build; pytest hq/tests -k e2e; docker compose down -v
+node scripts/m1_verify.mjs            # HQ + gateway chaos: offline replay, dedupe, budgets
+npm run verify                        # m1..m5
+npm run verify:extreme                # shared + hq + dtn/snn/tracking verifies
 ```
 
-Budgets enforced in CI: polaris.db <5 MB at 10k transactions, wire frames <2 KB, ONNX <2 MB, throttle convergence <5 s.
+The latest results are recorded in `docs/VERIFY_BASELINE.md`.
 
 ---
 
 ## Project layout
 
 ```
-shared/            @polaris/shared — schema, codec, DTN, local_map, SNN config
-field/             Next.js PWA :3000 — 5 tabs, OPFS/WAL, fusion loop, DTN QR
-sync-gateway/      Node gateway :8787 — WS + CRC/AES/VC + /sync/ingest + DTN exchange
-hq/                FastAPI :8000 — forecast, procurement, vessels, telemetry, DTN, RBAC
-hq-dashboard/      Next.js 14 App Router SOC :3001 — 10 routes, fleet/forecast/inventory/indents/
-                   personnel/expeditions/audit/locate/command, tactical-brutalism design system
-ai/                training + ONNX (thermo_residual + thermo_snn) + SNN encoder
-scripts/           m1…m5 + dtn/snn/tracking verifies, harness, provision, import, calibrate
-docs/              ARCHITECTURE.md · API.md · VERIFY_BASELINE.md
-website/           standalone Vite + React marketing/mission-control site — independent of this
-                   workspace, own README (website/README.md), Vercel-deployable
+shared/        @polaris/shared — wire codec (msgpack+AES-GCM+CRC), zod schemas, seed, expiry, DTN types
+field/         Next.js 14 PWA :3000 — routes in app/(field)/, DB+sync Web Worker in lib/db/, sw.js
+sync-gateway/  Node WS gateway :8787 — gateway.ts (WS, /dtn/exchange, /internal/broadcast_delta), ack.ts
+hq/            FastAPI :8000 — main.py routes, sync_apply.py, dtn.py, forecast/SNN, pollers, db init
+hq-dashboard/  Next.js 14 HQ console :3001
+ai/            training + ONNX models (thermo_residual, thermo_snn)
+scripts/       m1..m5 + dtn/snn/tracking verifies, provisioning, inventory import, calibration
+docs/          ARCHITECTURE.md · API.md · VERIFY_BASELINE.md
+website/       standalone Vite marketing site (own README)
 ```
-
----
-
-## Production deployment
-
-- `docker compose up --build` — TimescaleDB + HQ + gateway + field + dashboard. First boot seeds procurement targets, physics params, 20 SKUs, and 3 vessels.
-- **Air-gapped:** Workbox precaches the PWA, Leaflet falls back to a schematic ETA pill, `/tmp/ais_cache.json` keeps last vessel positions, and DTN bundles survive restarts in WAL.
-- **Data plane is always real:** procurement reads `procurement_targets`, weather comes from live polling (or cached stale), physics is per-station (`GET /physics/{station}`), vessels are live or honestly labeled `MOCK SCHEDULE`, and trends show an empty state instead of dummy data.
-- **LAN tablets:** build with `NEXT_PUBLIC_HQ_URL=http://<LAN-IP>:8000` or rely on `window.location.hostname` fallback.
 
 ---
 
 ## Troubleshooting
 
-| You see | What it means | Fix |
-|---------|---------------|-----|
-| `station_id` missing on assets | Old `hq/app/hq.db` before migration | Delete `hq/app/hq.db*` and restart HQ — `init_db` recreates and seeds. |
-| Empty chart / no telemetry | No data yet | POST one row to `/telemetry` or wait 15 min for the poller. |
-| `403` on `PUT /procurement/targets` or `POST /assets/bulk` | Need `STATION_LEAD` / `NCPOR_ADMIN` | Log in with a device containing `ADMIN` or `LEAD` (e.g. `HQ-ADMIN-01`). |
-| `GET /vessels` is `source:mock` | No live AIS | Check `GET /vessels/sources` reason (`no_key`/`429`/`forced_mock`), set `AIS_API_KEY` + `LIVE_AIS_ENABLED=true` if you want live data. |
-| Field says synced but HQ empty | PSK mismatch | Make sure field, gateway, and HQ share the same 64-hex `PSK_HEX`. |
-| SNN never `active` | No significant input change | Post blizzard telemetry (`-38,22,960`) — calm repeats staying idle means the event gate is working. |
-| GPS card always red | Whiteout mode | Toggle to `LOCAL` — LiDAR tracks alone at `err <0.8m`. |
-
-Logs: HQ tags requests with `X-Request-ID`, the gateway logs `jsonBytes vs mpBytes` and vector clocks, and the field sync drawer shows `sent / acked / deduped / bundled`.
+| You see | Meaning | Fix |
+|---------|---------|-----|
+| Strip shows **KEY MISMATCH** | The tablet's PSK differs from the gateway's `PSK_HEX` | Comms → paste or scan the station key. The link turns LIVE. |
+| **EPHEMERAL · LOST ON RELOAD** | OPFS is unavailable: another POLARIS tab is open, or the page is not in a secure context | Close other tabs and reload, and serve over HTTPS or localhost. |
+| **INSECURE HTTP** | Plain http on a LAN IP | Put the field app behind TLS. |
+| **DTN STORE-FWD** | No link; writes are held as bundles | Wait for the link, or hand bundles off by QR in Comms. |
+| Frames stuck **FAILED** | HQ rejected them permanently (4xx, negative stock, invalid) | Comms → read the error, then retry or discard (discards are audited). |
+| No downstream pushes | HQ cannot reach the gateway | Check `GATEWAY_INTERNAL_URL` (compose: `http://gateway:8787`). |
+| Forecast `tele.source: assumed_default` | No telemetry row yet | POST `/telemetry`, or wait for the poller. |
+| `403` on bulk import or targets | The role is not elevated | Sign in with an `NCPOR-ADMIN-…` / `LEAD-…` device ID. |
 
 ---
 
-## Feasibility & pitch
+## Known limits
 
-- `COST_FEASIBILITY.md` — reuses the tablet, HQ VM, and Iridium link already on station. No new hardware.
-- `PITCH_DECK.md` — the 3.5-minute story: a blizzard cut (bundle QR vs websocket), a stockout cut (42→18 days + SNN watts), and a vessel cut (mock-to-live with ETA pill).
+- Most HQ endpoints are **unauthenticated**. Only 5 routes plus the solo-sortie branch check roles.
+- There is a **single shared PSK**. No per-device keys or rotation.
+- The DTN "mesh" is a same-origin `BroadcastChannel`. There is **no radio transport**; hand-off between devices is by QR or text.
+- Tablets need a **secure context** for the camera, OPFS and WebCrypto.
+- Locate positioning is simulated and only shown in drill mode. `dg_load` is synthetic unless a meter is configured. Forecast `ci` is a placeholder ±15 % band.
+
+## Feasibility and pitch
+
+- `COST_FEASIBILITY.md`: reuses the tablet, HQ VM and satellite link already on station.
+- `PITCH_DECK.md`: the demo storyline.
 
 ## License
 
 MIT — for NCPOR/MoES evaluation.
-
