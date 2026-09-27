@@ -156,16 +156,16 @@ The base URL is `http://localhost:8000`. The full reference is `docs/API.md`.
 | Area | Endpoints |
 |------|-----------|
 | Health / auth | `GET /health` · `POST /auth/login` · `GET /rbac/me` |
-| Assets / lots | `GET /assets` · `GET /assets/bulk/template` · `POST /assets/bulk` · `GET /lots` · `GET /audit` |
+| Assets | `GET /assets` · `GET /assets/bulk/template` · `POST /assets/bulk` · `GET /audit` · `GET /audit/verify` |
 | Indents | `GET /indents?station_id=` · `POST /indents` · `PATCH /indents/{id}` |
-| Stations / forecast | `GET /stations/overview` · `GET /forecast/{station}` · `GET /forecast/snn/{station}` · `GET /physics/{station}` |
+| Stations / forecast | `GET /stations/overview` · `GET /forecast/{station}` · `GET /forecast/snn/{station}` · `GET /physics/params/{station}` |
 | Procurement | `GET /procurement/targets` · `PUT /procurement/targets/{sku}` · `GET /procurement/{station}` · `GET /procurement/mutual-aid` |
 | Vessels | `GET /vessels` · `GET /vessels/{imo}` · `GET /vessels/sources` · `POST /vessels/poll` |
 | Telemetry | `POST /telemetry` · `GET /telemetry/latest` · `GET /telemetry/history` · `GET /telemetry/sources` · `GET /telemetry/stream` |
 | Tracking | `POST /tracking/update` · `GET /tracking/positions` · `POST/GET /tracking/personnel` |
 | People & safety | `GET/POST /personnel` · `GET/POST /sorties` · `PATCH /sorties/{id}` · `POST /sorties/check-overdue` · `GET /emergencies` · `POST /emergency/sos` · `PATCH /emergency/{id}` · `GET /overrides` · `GET /timeline` |
-| Expeditions | `GET/POST /expeditions` · `PATCH /expeditions/{id}` · legs · manifests (+ `bulk`, `template`) · `auto-pack` · `readiness` · `cost` · `GET/PUT /freight_rates` |
-| Sync / DTN | `POST /sync/ingest` · `GET /sync/state/{device_id}` · `POST /dtn/ingest_bulk` · `POST /dtn/exchange` · `GET /dtn/bundles` · `GET /dtn/conflicts` |
+| Expeditions | `GET/POST /expeditions` · `PATCH /expeditions/{id}` · legs · manifests · `auto-pack` · `readiness` · `cost` |
+| Sync / DTN | `POST /sync/ingest` · `POST /dtn/ingest_bulk` · `POST /dtn/exchange` · `GET /dtn/bundles` |
 
 ---
 

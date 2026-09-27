@@ -2,10 +2,8 @@
 
 The HQ base URL is `http://localhost:8000` (`hq:8000` inside Docker). The API is JSON and its routes are in `hq/app/main.py`. CORS comes from `ALLOWED_ORIGINS`: `*` is dropped automatically when `DATABASE_URL` is set, falling back to the localhost allowlist. Errors use FastAPI's `{detail}` shape.
 
-> **Auth coverage, stated plainly:** only 5 routes enforce a role (`Depends(require_role(...))`):
+> **Auth coverage, stated plainly:** only 3 routes enforce a role (`Depends(require_role(...))`):
 > - `PATCH /indents/{id}` (STATION_LEAD)
-> - `PUT /freight_rates/{mode}` (DISPATCH)
-> - `POST /expeditions/{id}/manifests/bulk` (NCPOR_ADMIN)
 > - `PUT /procurement/targets/{sku}` (STATION_LEAD)
 > - `POST /assets/bulk` (NCPOR_ADMIN)
 >
@@ -18,9 +16,10 @@ The HQ base URL is `http://localhost:8000` (`hq:8000` inside Docker). The API is
   - PINs are per station (`hq/app/config.py` `STATION_PINS`: `BHARATI-2024`, `MAITRI-2024`, `HIMADRI-2024`) and compared with `hmac.compare_digest`.
   - Rate limits: 40 requests/min per IP and 20/min per device, otherwise `429`.
   - A requested elevated role is granted only in these cases, and otherwise downgraded to `FIELD_OP`:
-    - the device_id starts with `NCPOR-ADMIN-`, `HQ-COMMAND-` or `TEST-HQ` (any elevated role);
-    - the device_id starts with `LEAD-` or `STATION-LEAD-` (STATION_LEAD or DISPATCH only);
-    - the pin equals the `ADMIN_KEY` / `ADMIN_PIN` env var.
+    - the pin equals the `ADMIN_KEY` / `ADMIN_PIN` env var;
+    - the device_id starts with `NCPOR-ADMIN-`, `HQ-COMMAND-` or `TEST-HQ` (any elevated role) — this is the demo shortcut the HQ dashboard's own PIN login relies on (it always sends `device_id=HQ-COMMAND-...`, `role=NCPOR_ADMIN`);
+    - the device_id starts with `LEAD-` or `STATION-LEAD-` (STATION_LEAD or DISPATCH only).
+  - Set `DISABLE_DEMO_ELEVATION=1` to turn off the two device-id-prefix shortcuts above and require `ADMIN_KEY` for every elevated login — do this only after giving the dashboard/tablets a real admin PIN, since with it unset the dashboard's login stops granting any role above `FIELD_OP`.
   - The token is an HS256 JWT signed with `SECRET_KEY` (falls back to `PSK_HEX`). It lasts 8 h by default (`TOKEN_EXPIRY_HOURS`, or `TOKEN_EXPIRY_DAYS`).
 - `GET /rbac/me` returns `{role, station_id, device_id, permissions}`. With no bearer token it returns `VIEWER`. The hierarchy (`hq/app/auth.py`) is `NCPOR_ADMIN 5 > HQ_LOGISTICS 4 > DISPATCH 3 = STATION_LEAD 3 > FIELD_OP 2 > VIEWER 1`.
 
@@ -29,8 +28,8 @@ The HQ base URL is `http://localhost:8000` (`hq:8000` inside Docker). The API is
 - `GET /assets`: every asset joined with crate → container, adding `station_id` and `container_id`. The field tablet filters it by station for "pull stock from HQ".
 - `GET /assets/bulk/template` (alias `/assets/template.csv`): a CSV header plus an example row.
 - `POST /assets/bulk` (NCPOR_ADMIN) takes `{rows:[{sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,id?}]}` and returns `{inserted, updated}`. It accepts at most 500 rows, requires `qty >= 0`, and validates the category and criticality enums. `scripts/import_inventory.mjs` uses it.
-- `GET /lots`: lot-level stock.
-- `GET /audit?limit=`: the append-only audit log, limit clamped to 1–200.
+- `GET /audit?limit=`: the audit log, limit clamped to 1–200.
+- `GET /audit/verify?limit=`: recomputes the hash chain every `write_audit` insert extends (`hq/app/db.py`) and returns `{verified, checked, total}`, or `{verified:false, broken_at, broken_ts}` for the first row whose hash no longer matches — an edited or deleted row breaks every hash after it. Chained by `ts` order; good enough to catch tampering in a single-writer demo, not a substitute for a real append-only ledger under heavy concurrent writes.
 
 ## Indents
 
@@ -50,7 +49,7 @@ The HQ base URL is `http://localhost:8000` (`hq:8000` inside Docker). The API is
   - With no telemetry row, it is **`assumed_default`** (−15 °C, 5 m/s, 1013 hPa, 0.7 load), so clients never show nominal values as measured.
   - The field Brief reads this endpoint.
 - `GET /forecast/snn/{station_id}` has the same shape with `snn_residual`, `snn_active`, `spike_count`, `saved_pct`, `saved_pct_source` and `model`, and also flags `assumed_default`.
-- `GET /physics/{station_id}` (alias `/physics/params/{station_id}`): per-station `T_INSIDE, BASE, K1, K2, K3`, or the global fallback.
+- `GET /physics/params/{station_id}`: per-station `T_INSIDE, BASE, K1, K2, K3`, or the global fallback.
 
 ## Procurement
 
@@ -95,9 +94,7 @@ The HQ base URL is `http://localhost:8000` (`hq:8000` inside Docker). The API is
 - `GET/POST /expeditions`, `PATCH /expeditions/{id}` (forward-only status).
 - `GET/POST /expeditions/{id}/legs`: route, dates and vessel overlap are validated.
 - `GET/POST /expeditions/{id}/manifests` and `PATCH /expeditions/{id}/manifests/{mid}`: custody moves `GOA → MUMBAI → CAPETOWN → VESSEL → STATION → CRATE`, gated by customs and biosecurity checks. A regression returns `400`.
-- `POST /expeditions/{id}/manifests/bulk` (NCPOR_ADMIN, ≤500 rows), `GET /expeditions/manifests/template`.
-- `POST /expeditions/{id}/auto-pack`, `GET /expeditions/{id}/readiness`, `GET /expeditions/{id}/cost`.
-- `GET /freight_rates`, `PUT /freight_rates/{mode}` (DISPATCH).
+- `POST /expeditions/{id}/auto-pack`, `GET /expeditions/{id}/readiness`, `GET /expeditions/{id}/cost` (reads `freight_rates` — no endpoint to edit it, seeded from `hq/app/db.py::DEFAULT_FREIGHT_RATES`).
 - The field Cargo screen pulls `/expeditions` and `/expeditions/{id}/manifests?destination_station=`, and sends stage advances back through sync.
 
 ## Sync — one apply path
@@ -147,8 +144,7 @@ Takes `{bundles:[…]}` (or a single `bundle`) and returns `{results}`, using th
 ### Other sync reads
 
 - `GET /dtn/bundles?dst_station=&limit=`.
-- `GET /dtn/conflicts?limit=`: recent `SYNC_%` audit rows.
-- `GET /sync/state/{device_id}`: `{device_id, last_acked_ulid, last_server_version}`.
+- Recent conflicts/dedupes: filter `GET /audit?limit=` for `action LIKE 'SYNC_%'`.
 
 ## Sync gateway (`sync-gateway/src/gateway.ts`, :8787)
 

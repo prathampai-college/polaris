@@ -117,8 +117,12 @@ check_and_escalate(): ≤20 d → CRITICAL indent · ≤60 d → MEDIUM watch ·
 
 ## HQ database init (`hq/app/db.py`)
 
-- **SQLite (no `DATABASE_URL`):** `hq/app/hq.db` in WAL mode. `_ensure_*` migrations add newer tables and columns.
-- **Postgres:** `init_db()` runs the schema in two passes, deferring statements that hit forward foreign-key references. On first boot it seeds stations, containers, crates, assets, procurement targets, physics params, **personnel, expeditions, and opening lots** (`LOT-{sku}-0` / `{sku}-L0`, the same ids the tablet seeds, so FEFO lot frames converge).
+`shared/sql/schema.sql` is the single schema source for both dialects — every `CREATE` is `IF NOT EXISTS`, so re-applying it against an existing database only ever adds what's missing. `init_db()` runs the same three steps on both:
+- **`_run_schema`** applies `schema.sql` (SQLite: one `executescript`; Postgres: statement-by-statement, retrying once for forward foreign-key references, e.g. `field_sorties` → `expeditions`).
+- **`_run_migrations`** backfills a short explicit `ALTER TABLE ADD COLUMN` list — columns added to a table after its `CREATE TABLE` first shipped, for a database created from an older revision of `schema.sql`.
+- **`_seed_if_empty`** seeds stations, containers, crates, assets, procurement targets, physics params, personnel, expeditions, and opening lots (`LOT-{sku}-0` / `{sku}-L0`, the same ids the tablet seeds, so FEFO lot frames converge) — one insert list per table, each `ON CONFLICT DO NOTHING`, run only while that table is empty.
+
+**SQLite (no `DATABASE_URL`):** `hq/app/hq.db` in WAL mode; `get_sqlite()` self-heals a thread-local connection that lands on an empty file by re-running the three steps above.
 
 ## Security
 
@@ -150,4 +154,6 @@ check_and_escalate(): ≤20 d → CRITICAL indent · ≤60 d → MEDIUM watch ·
 - The DTN "mesh" is a same-origin `BroadcastChannel`. There is no radio transport. Hand-off between devices is by QR or text.
 - Locate's LiDAR/camera positioning is simulated (`field/lib/sensors/`) and only visible in drill mode.
 - A secure context is required on tablets.
-- The HQ sync path does not re-check the indent state machine (the tablet only moves DISPATCHED → RECEIVED).
+- Vector-clock merge (concurrent-edit resolution) applies to asset quantities only; every other synced table (personnel, sorties, emergencies, expeditions, manifests) is last-write-wins by timestamp.
+- `/tracking/personnel` and `/tracking/positions` exist and are written to, but no HQ dashboard page renders them yet — there's no live personnel-position map.
+- The Stations 3D view and vessel map fetch once on load; they are not push-updated between visits (personnel/sorties/emergencies are — see the "Entities other tablets... must see promptly" set in `hq/app/sync_apply.py`).

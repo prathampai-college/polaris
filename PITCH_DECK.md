@@ -36,7 +36,7 @@
 
 > "The tablet keeps working. Staff keep logging inventory, keep filing a critical fuel request — completely offline. That part isn't the trick. The trick is what happens next: instead of waiting for a signal, a person physically carries that data to where a link exists — a QR handoff, like a USB stick made of light. We call this data muling, and it means the network is never really down, because people and vehicles *are* the network.
 >
-> When it reconnects, every update lands exactly once — no duplicates, no lost updates — even if two tablets edited the same record while both were offline. That's a hard distributed-systems problem, and we solved it with vector-clock conflict resolution, not a coin flip."
+> When it reconnects, every update lands exactly once — no duplicates — even if the same write travels back over two different channels. And if two tablets touched the same stock count while both were offline, we don't just take whichever one shows up last: stock quantities carry a vector clock, so HQ can tell which edit actually came first and keeps it, instead of a coin flip."
 
 **[Screen, after the live moment: pre-recorded/screenshotted sync drawer showing Pending → Bundled → Acked, dedupe counter, size-saving numbers as captions.]**
 
@@ -72,9 +72,9 @@
 >
 > **Expedition planner, live** — centralized ISEA Antarctic + Himadri Arctic programs with voyage legs (chain/date/vessel-overlap validated), AL-1403-style manifests (cold-chain blocking, printable labels), custody stages, auto-pack stowage, per-station readiness **plus voyage cost rollup** (`GET /expeditions/{id}/cost`). Field tablets plan offline; DTN carries the plan home.
 >
-> **Personnel live on the map + buddy rule, live** — every sortie is a buddy pair (solo needs STATION_LEAD audit), roster is per-program (ANTARCTIC/ARCTIC/BOTH), and personnel dots + buddy lines ride the same GPS-denied local grid as cargo (`POST /tracking/personnel`).
+> **Buddy rule, live** — every sortie is a buddy pair (solo needs STATION_LEAD audit), roster is per-program (ANTARCTIC/ARCTIC/BOTH). Personnel positions ride the same GPS-denied local grid as cargo (`POST /tracking/personnel`) — the API and storage are live; a rendered map of it is roadmap.
 >
-> **Lot-level FEFO, live** — inventory is lot-tracked with earliest-expiry-first consume, `GET /lots` + `lot_code` in bulk import, synced via DTN.
+> **Lot-level FEFO, live** — inventory is lot-tracked with earliest-expiry-first consume, `lot_code` in bulk import, synced via DTN.
 >
 > **Watchdog + triage + SLA, live** — overdue sorties auto-escalate to SOS after 30 minutes; distress follows `ACTIVE → ACK → RESPONDING → RESOLVED` with SLA breach `TRIAGE_SLA_BREACH` watchdog and every override audited; medical `ACK` auto-tasks a medevac sortie.
 >

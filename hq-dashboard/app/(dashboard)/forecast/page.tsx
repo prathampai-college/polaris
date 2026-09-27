@@ -73,7 +73,7 @@ export default function ForecastPage() {
               Calm
             </button>
             <button onClick={() => sendTelemetry('blizzard')} className="border border-structure bg-flare px-3.5 py-1.5 font-mono text-xs font-bold text-white hover:bg-structure">
-              Blizzard (42→18d)
+              Blizzard
             </button>
             <button onClick={() => sendTelemetry('acoustic')} className="border border-structure bg-amber-500 px-3.5 py-1.5 font-mono text-xs font-bold text-black hover:bg-structure hover:text-white">
               Bearing anomaly

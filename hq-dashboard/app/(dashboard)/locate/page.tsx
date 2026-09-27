@@ -26,8 +26,10 @@ export default function LocatePage() {
 
   useEffect(() => {
     let cancelled = false;
-    api.get<AssetRow[]>('/assets').then((a) => !cancelled && setAssets(a || [])).catch((e: ApiError) => !cancelled && setError(e.message));
-    return () => { cancelled = true; };
+    const load = () => api.get<AssetRow[]>('/assets').then((a) => !cancelled && setAssets(a || [])).catch((e: ApiError) => !cancelled && setError(e.message));
+    load();
+    const id = setInterval(load, 15_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
   return (
@@ -47,7 +49,7 @@ export default function LocatePage() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="display text-base text-ink">3D Digital Twin — Fleet Container Bay</h2>
-            <p className="text-xs text-slate">Real-time crate synchronization mirroring field operations</p>
+            <p className="text-xs text-slate">Crate positions refresh every 15s from HQ inventory</p>
           </div>
           <span className="text-xs font-mono text-cobalt">{stationName}</span>
         </div>

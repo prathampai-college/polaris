@@ -26,7 +26,7 @@ export const INVENTORY: InvRow[] = [
 export type Vessel = { imo: string; name: string; sog: number; etaH: number; lat: number; lon: number; source: string; reason: string };
 export const VESSELS: Vessel[] = [
   { imo: '9734567', name: 'SAGAR NIDHI', sog: 11.2, etaH: 14, lat: -62.4, lon: 48.2, source: 'MOCK SCHEDULE', reason: 'no_key' },
-  { imo: '9788110', name: 'SAGAR KANYA', sog: 9.6, etaH: 62, lat: -54.1, lon: 32.8, source: 'MOCK SCHEDULE', reason: 'no_key' },
+  { imo: '9788110', name: 'VASILIY GOLOVNIN', sog: 9.6, etaH: 62, lat: -54.1, lon: 32.8, source: 'MOCK SCHEDULE', reason: 'no_key' },
   { imo: '9799001', name: 'POLAR SUPPLY', sog: 12.4, etaH: 96, lat: -48.9, lon: 20.4, source: 'STALE · 3h', reason: '429' },
 ];
 
