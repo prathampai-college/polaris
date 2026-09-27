@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
-console.log('=== M5 VERIFY: Polish & Pitch ===');
+// Artifact presence check only — behaviour is verified by m1–m4, hq/tests and field/lib/db/core.test.ts.
+console.log('=== M5 VERIFY: deliverables present ===');
 const checks=[
   ['HQ TrendChart', 'hq-dashboard/components/TrendChart.tsx'],
-  ['HQ Dashboard forecast', 'hq-dashboard/app/page.tsx'],
-  ['Field forecast widget', 'field/app/page.tsx'],
+  ['HQ Dashboard overview', 'hq-dashboard/app/(dashboard)/page.tsx'],
+  ['Field brief (forecast card)', 'field/app/(field)/page.tsx'],
+  ['Field service worker', 'field/public/sw.js'],
   ['Cost slide', 'COST_FEASIBILITY.md'],
   ['Pitch deck', 'PITCH_DECK.md'],
   ['Fallback script', 'scripts/record_fallback.ps1'],
   ['ONNX model', 'ai/thermo_residual.onnx'],
-  ['Synthetic CSV', 'ai/training/weather_fuel_history.csv'],
   ['Scaler', 'ai/scaler.json'],
   ['Docker compose', 'docker-compose.yml'],
   ['Field Dockerfile', 'field/Dockerfile'],
@@ -28,16 +29,5 @@ const deck=fs.readFileSync('PITCH_DECK.md','utf8');
 console.log(` deck sections: problem=${deck.includes('Problem')?'✓':'✗'} blizzard=${deck.includes('Blizzard')?'✓':'✗'} forecast=${deck.includes('Stockout Forecast')?'✓':'✗'} architecture=${deck.includes('Architecture')?'✓':'✗'} feasibility=${deck.includes('Feasibility')?'✓':'✗'}`);
 const cost=fs.readFileSync('COST_FEASIBILITY.md','utf8');
 console.log(` cost hardware reuse ${cost.includes('₹0')?'PASS':'FAIL'}`);
-console.log(`\nCompliance §10 checklist:`);
-const comp=[
-  'Zero Cloud / Air-Gapped: docker-compose.yml + Workbox PWA + OPFS polaris.db',
-  'Offline Data Integrity: WAL + outbox replay + dedupe (m1/m4)',
-  'Bandwidth: msgpack 70.9% (patch vs row) + frame <2KB + DB <5MB@10k (m4)',
-  'Sync Correctness: 5 offline + CONFLICT_CRITICAL + dedupe (m1/m4)',
-  'Embedded ML: ONNX 2.0KB <2MB, ort <200ms (m3/m4), fallback physics',
-  'Security: RBAC /rbac/me + audit_log + AES-GCM PSK+CRC + at-rest OPFS',
-  'Domain: QR html5-qrcode + expiry <30d + indent DRAFT→RECEIVED (m2)',
-  'Demo Resilience: fallback video script + PWA cached + polaris.db',
-];
-for(const c of comp) console.log(` ✓ ${c}`);
-console.log(`\n=== M5 VERIFY PASS === ${ok?'All artifacts present':'MISSING'}`);
+console.log(`\n=== M5 ${ok?'PASS — all artifacts present':'FAIL — artifacts missing'} ===`);
+if(!ok) process.exit(1);
