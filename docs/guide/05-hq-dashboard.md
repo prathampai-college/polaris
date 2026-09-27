@@ -17,7 +17,7 @@
 | `app/(dashboard)/inventory/` | **Inventory** — all stock at HQ's view |
 | `app/(dashboard)/indents/` | **Indents** — approve → dispatch (attach a vessel) → track |
 | `app/(dashboard)/personnel/` | **Personnel** — rosters, sorties, emergency triage |
-| `app/(dashboard)/expeditions/` | **Expeditions** — voyages, manifests, mutual aid |
+| `app/(dashboard)/expeditions/` | **Expeditions** — create an expedition, select one to plan: add voyage legs, add and advance cargo manifests through customs/cold-chain gates, auto-pack, per-station readiness + cost, mutual aid |
 | `app/(dashboard)/locate/` | **Locate** — ship map and container view |
 | `app/(dashboard)/audit/` | **Audit** — append-only log of every change |
 | `app/(dashboard)/command/` | **Command** — timeline and decision overrides |
@@ -38,7 +38,7 @@
 | Stations, Inventory | `/assets` |
 | Indents | `/indents`, `/assets`, `/vessels`, `PATCH /indents/{id}` |
 | Personnel | `/personnel`, `/sorties`, `/emergencies`, `PATCH /emergency/{id}` |
-| Expeditions | `/expeditions`, `/procurement/mutual-aid` |
+| Expeditions | `/expeditions`, `PATCH /expeditions/{id}`, `/expeditions/{id}/legs`, `/expeditions/{id}/manifests`, `PATCH .../manifests/{mid}`, `.../auto-pack`, `.../readiness`, `/procurement/mutual-aid` |
 | Locate | `/assets` (+ vessels inside `VesselMap`) |
 | Audit | `/audit` |
 | Command | `/timeline`, `/overrides` |
