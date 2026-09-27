@@ -33,7 +33,7 @@ for(let i=0;i<5;i++){
   const newQty=row.qty-10, newVer=row.version+1, patch={qty:newQty, version:newVer, updated_at:new Date().toISOString()}, u=ulid(), ts=new Date().toISOString();
   db.exec('BEGIN'); db.prepare('UPDATE assets SET qty=?,version=?,updated_at=? WHERE id=?').run(newQty,newVer,patch.updated_at,'A1');
   db.prepare('INSERT INTO transactions VALUES (?,?,?,?,?,?,?)').run(ulid(),'A1','CONSUME',-10,'FIELD_OP_01',ts,'PENDING');
-  db.prepare('INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)').run(ulid(),'FIELD_OP_01','CONSUME','assets',JSON.stringify({qty:row.qty}),JSON.stringify(patch),ts);
+  db.prepare('INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)').run(ulid(),'FIELD_OP_01','CONSUME','assets',JSON.stringify({qty:row.qty}),JSON.stringify(patch),ts);
   db.prepare('INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, retry_count, created_at, status) VALUES (?,?,?,?,?,?,?,?,?,?)').run(u,'DEV-01','assets','A1','UPSERT',encode(patch),row.version,0,ts,'PENDING');
   db.exec('COMMIT'); frames.push({ulid:u, device_id:'DEV-01', entity:'assets', entity_id:'A1', op:'UPSERT', patch, base_version:row.version, ts});
 }
@@ -59,7 +59,7 @@ tdb.exec(`INSERT OR IGNORE INTO containers VALUES ('C1','ST-BHARATI','ISO_20ft',
 tdb.prepare('INSERT OR IGNORE INTO assets (id,sku,name,category,qty,unit,expiry_date,criticality,crate_id,barcode,version,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run('A1','FUEL-DIESEL-001','Diesel','FUEL_DIESEL',4200,'L',null,'CRITICAL','C1-K1','FUEL-DIESEL-001',1,new Date().toISOString());
 for(let i=0;i<10000;i++){
   tdb.prepare('INSERT INTO transactions VALUES (?,?,?,?,?,?,?)').run(ulid(),'A1','CONSUME',-1,'OP',new Date().toISOString(),'PENDING');
-  if(i%1000===0) tdb.prepare('INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)').run(ulid(),'OP','CONSUME','assets','{}','{}',new Date().toISOString());
+  if(i%1000===0) tdb.prepare('INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)').run(ulid(),'OP','CONSUME','assets','{}','{}',new Date().toISOString());
 }
 tdb.close();
 const tenkSize=fs.statSync(tmpDB).size;

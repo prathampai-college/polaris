@@ -59,7 +59,7 @@ for(let i=0;i<5;i++){
   try{
     fieldDb.prepare('UPDATE assets SET qty=?, version=?, updated_at=? WHERE id=?').run(newQty, newVersion, patch.updated_at, assetId);
     fieldDb.prepare('INSERT INTO transactions VALUES (?,?,?,?,?,?,?)').run(ulid(), assetId, 'CONSUME', -10, 'FIELD_OP_01', ts, 'PENDING');
-    fieldDb.prepare('INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)').run(ulid(), 'FIELD_OP_01', 'CONSUME', 'assets', JSON.stringify({qty:row.qty}), JSON.stringify(patch), ts);
+    fieldDb.prepare('INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)').run(ulid(), 'FIELD_OP_01', 'CONSUME', 'assets', JSON.stringify({qty:row.qty}), JSON.stringify(patch), ts);
     fieldDb.prepare('INSERT INTO outbox (ulid, device_id, entity, entity_id, op, patch, base_version, retry_count, created_at, status) VALUES (?,?,?,?,?,?,?,?,?,?)').run(outboxUlid, deviceId, 'assets', assetId, 'UPSERT', patchBytes, row.version, 0, ts, 'PENDING');
     fieldDb.exec('COMMIT');
   }catch(e){ fieldDb.exec('ROLLBACK'); throw e; }
