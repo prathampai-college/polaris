@@ -1,7 +1,7 @@
 'use client';
 // Sim-only LiDAR/camera — no hardware dependency. Every output carries source:'sim-lidar' provenance.
-import { polarToCart } from '@shared/local_map.js';
-import type { Point } from '@shared/local_map.js';
+import { polarToCart } from '@polaris/shared/local_map';
+import type { Point } from '@polaris/shared/local_map';
 
 const CONTAINERS: Array<{ id: string; x: number; y: number }> = [
   { id: 'C1', x: -18, y: 12 }, { id: 'C2', x: -6, y: 12 }, { id: 'C3', x: 6, y: 12 },
