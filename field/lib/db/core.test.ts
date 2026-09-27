@@ -1,7 +1,7 @@
 // Run: node field/lib/db/core.test.ts   (Node ≥22.18 strips types natively)
 import assert from 'node:assert/strict';
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
-import { initSchema, seedIfEmpty, mutations, queries, applyAck, applyDownstream, bundleOffline, nextFrames, markSent, type Sqlite } from './core.ts';
+import { initSchema, seedIfEmpty, mutations, queries, applyAck, applyDownstream, bundleOffline, exportOwnBundles, nextFrames, markSent, type Sqlite } from './core.ts';
 
 const sqlite3 = await sqlite3InitModule();
 const db = new sqlite3.oo1.DB(':memory:', 'c') as unknown as Sqlite;
@@ -52,10 +52,30 @@ assert.equal(applyDownstream(db, 'assets', 'A2', { qty: 1500 }), true);
 assert.equal(qty('A2'), 1500);
 assert.equal(Number(db.selectValue("SELECT SUM(qty) FROM lots WHERE asset_sku='FUEL-KERO-JP8-002'")), 1500);
 
+// HQ write-off bigger than the opening lot spreads across lots FEFO-first instead
+// of clamping to zero on the opening lot alone and quietly dropping the shortfall
+db.exec("UPDATE outbox SET status='ACKED' WHERE entity_id='A1'");
+mutations.recordTx(db, ctx, { assetId: 'A1', type: 'IN', qty: 45 }); // A1 now has 2 lots: opening (~4180) + a 45-qty lot
+db.exec("UPDATE outbox SET status='ACKED' WHERE entity_id='A1'");
+assert.equal(applyDownstream(db, 'assets', 'A1', { qty: 10 }), true);
+assert.equal(qty('A1'), 10);
+assert.equal(Number(db.selectValue("SELECT SUM(qty) FROM lots WHERE asset_sku='FUEL-DIESEL-001'")), 10);
+assert.ok(Number(db.selectValue("SELECT qty FROM lots WHERE id='LOT-FUEL-DIESEL-001-0'")) >= 0, 'no lot goes negative');
+
 // Offline custody: bundle id is the outbox ULID (HQ dedupes WS vs DTN)
 const bundles = bundleOffline(db, 'ST-BHARATI');
 assert.ok(bundles.length > 0);
 assert.equal(db.selectValue('SELECT status FROM outbox WHERE ulid=?', [bundles[0].bundleId]), 'BUNDLED');
+
+// A permanently-rejected frame's DTN bundle must not keep circulating after FAILED/discard
+assert.ok(exportOwnBundles(db, 'TAB-TEST').length > 0, 'bundle is exported while still live');
+assert.equal(applyAck(db, { ulid: bundles[0].bundleId, status: 'REJECTED' }), true);
+assert.equal(db.selectValue('SELECT COUNT(*) FROM dtn_bundles WHERE bundle_id=?', [bundles[0].bundleId]), 0, 'FAILED ack must drop the orphaned dtn_bundles row');
+if (bundles[1]) {
+  applyAck(db, { ulid: bundles[1].bundleId, status: 'REJECTED' });
+  mutations.discardFailed(db, ctx, bundles[1].bundleId);
+  assert.equal(db.selectValue('SELECT COUNT(*) FROM dtn_bundles WHERE bundle_id=?', [bundles[1].bundleId]), 0, 'discardFailed must drop the orphaned dtn_bundles row');
+}
 
 // Station scoping: Maitri sees none of Bharati's stock
 assert.equal(queries.listAssets(db, { ...ctx, stationId: 'ST-MAITRI' }).length, 0);

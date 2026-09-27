@@ -106,9 +106,9 @@ export function AssetSheet() {
             <section className="border-b border-structure p-5">
               <h3 className="eyebrow mb-2 flex items-center gap-2"><Layers size={14} aria-hidden />Lots · first-expiry first-out</h3>
               <ul className="divide-y divide-structure/20 border border-structure">
-                {data.lots.map((l, i) => (
+                {data.lots.map((l) => (
                   <li key={l.id} className={cn('flex flex-wrap items-center justify-between gap-2 px-3 py-2', l.qty <= 0 && 'opacity-50')}>
-                    <span className="font-mono text-sm">{i === 0 && l.qty > 0 ? <b className="mr-2 text-cobalt">NEXT</b> : null}{l.lot_code}</span>
+                    <span className="font-mono text-sm">{l.id === data.lots.find((x) => x.qty > 0)?.id ? <b className="mr-2 text-cobalt">NEXT</b> : null}{l.lot_code}</span>
                     <span className="flex items-center gap-2"><ExpiryBadge date={l.expiry_date} /><span className="num font-mono text-sm font-semibold">{l.qty} {a.unit}</span></span>
                   </li>
                 ))}

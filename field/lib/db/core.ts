@@ -416,6 +416,7 @@ export const mutations = {
       const r = one(db, "SELECT entity, entity_id, op, last_error FROM outbox WHERE ulid=? AND status='FAILED'", [id]);
       if (!r) throw new Error('Only FAILED frames can be discarded');
       run(db, 'DELETE FROM outbox WHERE ulid=?', [id]);
+      run(db, 'DELETE FROM dtn_bundles WHERE bundle_id=?', [id]);
       audit(db, ctx, 'SYNC_FRAME_DISCARDED', r.entity, r, null);
       return true;
     });
@@ -494,13 +495,28 @@ function applyAssetDown(db: Sqlite, id: string, patch: Row): boolean {
   }
   if (patch.qty === undefined) return false;
   return withTx(db, () => {
-    // HQ sends absolute qty (stock-take / bulk import). Keep lots summing to it by
-    // correcting the opening lot, never going negative.
+    // HQ sends absolute qty (stock-take / bulk import). Keep lots summing to it.
     const sum = Number(db.selectValue('SELECT COALESCE(SUM(qty),0) FROM lots WHERE asset_sku=?', [a.sku]));
     const diff = Number(patch.qty) - sum;
-    if (diff !== 0) {
+    if (diff > 0) {
+      // Surplus found: fold into the opening lot rather than inventing a lot identity.
       const lotId = ensureOpeningLot(db, a);
-      run(db, 'UPDATE lots SET qty=MAX(0, qty+?) WHERE id=?', [diff, lotId]);
+      run(db, 'UPDATE lots SET qty=qty+? WHERE id=?', [diff, lotId]);
+    } else if (diff < 0) {
+      // Write-off: draw down FEFO-first (earliest expiry, then opening lot) so a
+      // reduction bigger than any single lot is spread across lots instead of being
+      // silently dropped once the opening lot alone hits its MAX(0,…) floor.
+      let need = -diff;
+      const lots = db.selectObjects(
+        'SELECT * FROM lots WHERE asset_sku=? AND qty>0 ORDER BY CASE WHEN expiry_date IS NULL THEN 1 ELSE 0 END, expiry_date, received_ts',
+        [a.sku],
+      );
+      for (const l of lots) {
+        if (need <= 0) break;
+        const take = Math.min(Number(l.qty), need);
+        run(db, 'UPDATE lots SET qty=qty-? WHERE id=?', [take, l.id]);
+        need -= take;
+      }
     }
     const qty = Number(db.selectValue('SELECT COALESCE(SUM(qty),0) FROM lots WHERE asset_sku=?', [a.sku]));
     run(db, 'UPDATE assets SET qty=?, version=?, updated_at=? WHERE id=?', [qty, patch.version ?? Number(a.version ?? 1) + 1, now(), id]);
@@ -542,6 +558,8 @@ export function applyAck(db: Sqlite, a: { ulid: string; status: string; message?
     withTx(db, () => {
       run(db, "UPDATE outbox SET status='FAILED', last_error=? WHERE ulid=?", [a.message ?? a.status, a.ulid]);
       run(db, "UPDATE transactions SET sync_status='FAILED' WHERE outbox_ulid=?", [a.ulid]);
+      // A permanently-rejected frame must stop circulating via DTN mesh/QR mules too.
+      run(db, 'DELETE FROM dtn_bundles WHERE bundle_id=?', [a.ulid]);
     });
   }
   return true;
