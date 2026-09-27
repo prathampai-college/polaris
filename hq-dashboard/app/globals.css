@@ -2,15 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700;800&display=swap');
-
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 body {
-  @apply bg-[#060A13] text-white antialiased selection:bg-teal-400/30 selection:text-teal-100;
-  font-family: 'Instrument Sans', system-ui, -apple-system, sans-serif;
+  @apply bg-canvas text-ink antialiased selection:bg-cobalt/20;
 }
 
 .mono {
@@ -18,41 +15,39 @@ body {
 }
 
 .display {
-  font-family: 'Space Grotesk', sans-serif;
+  font-family: 'Instrument Serif', serif;
 }
 
-.glass {
-  @apply bg-[#0B132B]/80 backdrop-blur-xl border border-white/[0.08];
-}
-
+/* Tactical-brutalist card: hard edges, hairline border, flat white surface — no glass/blur/glow. */
 .card {
-  @apply bg-[#0C152E] border border-white/[0.08] rounded-2xl transition-all;
+  @apply bg-surface border border-structure transition-colors;
 }
-
-.card-glow {
-  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.10), 0 12px 36px rgba(0, 0, 0, 0.55);
-}
-
-.eyebrow { @apply text-[11px] font-mono tracking-[0.08em] font-bold; }
-.pill { @apply inline-flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-full font-bold border; }
-.pill-live { @apply bg-emerald-500/15 text-emerald-300 border-emerald-500/25; }
-.pill-stale { @apply bg-amber-500/15 text-amber-300 border-amber-500/25; }
-.pill-critical { @apply bg-red-500/15 text-red-300 border-red-500/25; }
-.pill-ai { @apply bg-teal-400/10 text-teal-300 border-teal-400/25; }
-.dot-live { @apply w-2 h-2 rounded-full bg-emerald-400 animate-pulse; }
 
 .card-hover {
-  @apply hover:border-teal-400/40 hover:bg-[#10283A];
+  @apply hover:border-cobalt;
 }
+
+.eyebrow { @apply text-[11px] font-mono tracking-[0.08em] font-bold text-slate; }
+
+.pill { @apply inline-flex items-center gap-1.5 text-[10px] px-2 py-0.5 font-bold border; }
+.pill-live { @apply bg-cobalt/10 text-cobalt border-cobalt/30; }
+.pill-stale { @apply bg-amber-100 text-amber-700 border-amber-300; }
+.pill-critical { @apply bg-flare/10 text-flare border-flare/30; }
+.pill-ai { @apply bg-phosphor/10 text-cyan-700 border-phosphor/30; }
+.dot-live { @apply w-2 h-2 bg-cobalt animate-pulse; }
 
 .scroll-thin::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 .scroll-thin::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
-  border-radius: 999px;
+  background: #101928;
 }
-.scroll-thin::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.28);
+.scroll-thin::-webkit-scrollbar-track {
+  background: #EEF2F6;
 }
+
+/* survey/tick-mark ground texture, matches website */
+.tickgrid { background-image: linear-gradient(rgba(16,25,40,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(16,25,40,.08) 1px, transparent 1px); background-size: 40px 40px; }
+
+.caret::after { content: '▊'; animation: blink 1.1s steps(2) infinite; color: #0047FF; }
