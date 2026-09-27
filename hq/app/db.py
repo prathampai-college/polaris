@@ -1,4 +1,4 @@
-import os, sqlite3, pathlib, json, datetime, threading, logging
+import os, sqlite3, pathlib, json, datetime, threading, logging, hashlib
 
 logger = logging.getLogger("polaris.hq.db")
 
@@ -15,6 +15,22 @@ USE_PG = DATABASE_URL.startswith("postgresql")
 def q(sql: str) -> str:
     """The one PG/SQLite placeholder helper: write `?`, get `%s` on Postgres."""
     return sql.replace("?", "%s") if USE_PG else sql
+
+def audit_hash(prev_hash: str, id: str, actor_id, action, entity, before, after, ts) -> str:
+    payload = "|".join("" if x is None else str(x) for x in (prev_hash, id, actor_id, action, entity, before, after, ts))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+def write_audit(cur, id, actor_id, action, entity, before, after, ts):
+    """The one place that inserts into audit_log — chains each row's hash to the
+    previous row's, so /audit/verify can detect a row that was edited or deleted
+    out from under the log. Ordered by ts: good enough to catch tampering in a
+    single-writer demo, not a substitute for a real append-only ledger under
+    heavy concurrent writes (ties on ts within the same millisecond aren't
+    ordered deterministically)."""
+    prev = cur.execute(q("SELECT hash FROM audit_log ORDER BY ts DESC LIMIT 1")).fetchone()
+    prev_hash = (prev[0] if prev else None) or "GENESIS"
+    h = audit_hash(prev_hash, id, actor_id, action, entity, before, after, ts)
+    cur.execute(q("INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts, hash) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (id, actor_id, action, entity, before, after, ts, h))
 
 def _find_file(*subpaths):
     for sub in subpaths:
@@ -113,6 +129,7 @@ _MIGRATIONS = [
     ("field_sorties", "buddy_personnel_id", "TEXT"),
     ("personnel", "program", "TEXT DEFAULT 'BOTH'"),
     ("indents", "vessel_imo", "TEXT"),
+    ("audit_log", "hash", "TEXT"),
 ]
 
 def _pg_schema_sql():

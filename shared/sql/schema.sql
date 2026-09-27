@@ -89,7 +89,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
   entity TEXT,
   before TEXT,
   after TEXT,
-  ts TEXT
+  ts TEXT,
+  hash TEXT
 );
 
 -- Sync plumbing (same DB, WAL guarantees atomicity)

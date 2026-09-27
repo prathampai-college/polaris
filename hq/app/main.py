@@ -6,7 +6,7 @@ from typing import Any, Dict
 import os, logging, time, uuid, asyncio, hmac, json as _json
 from contextlib import asynccontextmanager, contextmanager
 
-from .db import init_db, get_conn, release_conn, USE_PG, utc_now, q
+from .db import init_db, get_conn, release_conn, USE_PG, utc_now, q, write_audit, audit_hash
 from .dtn import ingest_bundle
 from .sync_apply import Conflict, NotFound, Rejected, apply_frame
 from .forecast import load_forecast_model, physics_pred, predict_total
@@ -221,15 +221,21 @@ async def auth_login(body: LoginRequest, request: Request):
     if requested not in valid_roles:
         requested = "FIELD_OP"
 
-    # Elevated roles require authorized device prefix or admin credentials
+    # Elevated roles require authorized device prefix or admin credentials.
+    # The device-id-prefix path is a documented demo shortcut (docs/API.md) that
+    # the HQ dashboard's own PIN login depends on by default — it always sends
+    # device_id="HQ-COMMAND-..." and role="NCPOR_ADMIN". A real deployment that
+    # wants elevation gated on ADMIN_KEY alone should set DISABLE_DEMO_ELEVATION=1
+    # (and give the dashboard/tablets a real admin PIN to log in with).
     if requested in ("STATION_LEAD", "DISPATCH", "HQ_LOGISTICS", "NCPOR_ADMIN"):
         admin_secret = os.getenv("ADMIN_KEY") or os.getenv("ADMIN_PIN")
+        demo_elevation_disabled = os.getenv("DISABLE_DEMO_ELEVATION", "").lower() in ("1", "true", "yes")
         is_admin_auth = False
         if admin_secret and body.pin == admin_secret:
             is_admin_auth = True
-        elif any(body.device_id.startswith(pfx) for pfx in ("NCPOR-ADMIN-", "HQ-COMMAND-", "TEST-HQ")):
+        elif not demo_elevation_disabled and any(body.device_id.startswith(pfx) for pfx in ("NCPOR-ADMIN-", "HQ-COMMAND-", "TEST-HQ")):
             is_admin_auth = True
-        elif requested in ("STATION_LEAD", "DISPATCH") and any(body.device_id.startswith(pfx) for pfx in ("LEAD-", "STATION-LEAD-")):
+        elif not demo_elevation_disabled and requested in ("STATION_LEAD", "DISPATCH") and any(body.device_id.startswith(pfx) for pfx in ("LEAD-", "STATION-LEAD-")):
             is_admin_auth = True
 
         if not is_admin_auth:
@@ -255,6 +261,20 @@ def list_assets():
 def list_audit(limit: int=50):
     limit = max(1, min(limit, 200))
     return _fetch_all("SELECT * FROM audit_log ORDER BY ts DESC LIMIT ?", (limit,))
+
+@app.get("/audit/verify")
+def verify_audit_chain(limit: int = 1000):
+    """Recompute the hash chain (see db.write_audit) and report the first broken
+    link, if any — an edited or deleted row breaks every hash after it."""
+    limit = max(1, min(limit, 20000))
+    rows = _fetch_all("SELECT * FROM audit_log ORDER BY ts LIMIT ?", (limit,))
+    prev_hash = "GENESIS"
+    for i, r in enumerate(rows):
+        expected = audit_hash(prev_hash, r["id"], r["actor_id"], r["action"], r["entity"], r["before"], r["after"], r["ts"])
+        if r.get("hash") != expected:
+            return {"verified": False, "checked": i, "total": len(rows), "broken_at": r["id"], "broken_ts": r["ts"]}
+        prev_hash = r["hash"]
+    return {"verified": True, "checked": len(rows), "total": len(rows)}
 
 @app.get("/indents")
 def list_indents(station_id: str = None):
@@ -286,7 +306,7 @@ def create_indent(body: IndentCreate):
         iid=str(uuid.uuid4())[:8]+"-"+body.asset_id
     with _sync_txn() as cur:
         cur.execute(q("INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, body.station_id, body.asset_id, body.qty_requested, body.urgency, body.status, body.created_by, now, None))
-        cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (iid, body.created_by, "INDENT_CREATE_HQ", "indents", None, str(body.model_dump()), now))
+        write_audit(cur, iid, body.created_by, "INDENT_CREATE_HQ", "indents", None, str(body.model_dump()), now)
     notify_gateway(body.station_id, "indents", iid, "UPSERT", {
         "id": iid,
         "station_id": body.station_id,
@@ -324,7 +344,7 @@ async def patch_indent(indent_id: str, body: IndentPatch, user: dict = Depends(r
             cur.execute(q("UPDATE indents SET status=?, vessel_imo=? WHERE id=?"), (body.status, body.vessel_imo, indent_id))
         else:
             cur.execute(q("UPDATE indents SET status=? WHERE id=?"), (body.status, indent_id))
-        cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (indent_id+body.status, body.actor_id, f"INDENT_{body.status}", "indents", str({"status":cur_status}), str({"status":body.status, "vessel_imo": body.vessel_imo}), now))
+        write_audit(cur, indent_id+body.status, body.actor_id, f"INDENT_{body.status}", "indents", str({"status":cur_status}), str({"status":body.status, "vessel_imo": body.vessel_imo}), now)
     notify_gateway(station_id, "indents", indent_id, "STATUS_CHANGE", {
         "id": indent_id,
         "status": body.status,
@@ -461,7 +481,7 @@ def _auto_indent(station_id: str, asset_id: str, qty_needed: float, creator: str
         iid = str(uuid.uuid4())[:8] + suffix
     with _sync_txn() as cur:
         cur.execute(q("INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, station_id, asset_id, qty_needed, "CRITICAL", "DRAFT", creator, now, None))
-        cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (iid, creator, audit_action, "indents", None, audit_detail, now))
+        write_audit(cur, iid, creator, audit_action, "indents", None, audit_detail, now)
     notify_gateway(station_id, "indents", iid, "UPSERT", {
         "id": iid, "station_id": station_id, "asset_id": asset_id,
         "qty_requested": qty_needed, "urgency": "CRITICAL", "status": "DRAFT",
@@ -699,7 +719,7 @@ async def create_sortie(body: SortieCreate, request: Request):
             cur.execute(q("UPDATE personnel SET status='FIELD_SORTIE' WHERE id=?"), (body.buddy_personnel_id,))
         # audit solo override
         if not body.buddy_personnel_id and body.solo_override:
-            cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (f"SOLO-{uuid.uuid4().hex[:8]}", body.lead_personnel_id, "SORTIE_SOLO_OVERRIDE", "field_sorties", None, sortie_id, now))
+            write_audit(cur, f"SOLO-{uuid.uuid4().hex[:8]}", body.lead_personnel_id, "SORTIE_SOLO_OVERRIDE", "field_sorties", None, sortie_id, now)
     notify_gateway(body.station_id, "field_sorties", sortie_id, "UPSERT", {"id": sortie_id, "station_id": body.station_id, "lead_personnel_id": body.lead_personnel_id, "buddy_personnel_id": body.buddy_personnel_id, "destination": body.destination, "departure_time": dep_time, "expected_return_time": body.expected_return_time, "safety_status": body.safety_status})
     return {"status": "ok", "id": sortie_id}
 
@@ -792,7 +812,7 @@ def trigger_sos(body: EmergencyCreate):
     em_id = body.id or f"SOS-{uuid.uuid4().hex[:8]}"
     with _sync_txn() as cur:
         cur.execute(q("INSERT INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord, status_entered_ts) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=excluded.status, status_entered_ts=excluded.status_entered_ts"), (em_id, body.station_id, body.type, body.reported_by, body.status, now, body.location_coord, now))
-        cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?)"), (str(uuid.uuid4())[:8], body.reported_by, f"EMERGENCY_SOS_{body.type}", "emergencies", None, em_id, now))
+        write_audit(cur, str(uuid.uuid4())[:8], body.reported_by, f"EMERGENCY_SOS_{body.type}", "emergencies", None, em_id, now)
     data = {"id": em_id, "station_id": body.station_id, "type": body.type, "reported_by": body.reported_by, "status": body.status, "ts": now, "location_coord": body.location_coord, "status_entered_ts": now}
     notify_gateway(body.station_id, "emergencies", em_id, "STATUS_CHANGE", data)
     # SOS auto-reserve: medical distress locks O2 + trauma kit via urgent indent (soft reserve)
@@ -930,7 +950,7 @@ def create_expedition(body: ExpeditionCreate):
     now = utc_now()
     with _sync_txn() as cur:
         cur.execute(q("INSERT INTO expeditions (id, program, name, season, status, created_by, created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=excluded.status"), (eid, body.program, body.name, body.season, body.status, body.created_by, now))
-        cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (f"EXP-{uuid.uuid4().hex[:8]}", body.created_by, f"EXPEDITION_{body.status}", "expeditions", None, eid, now))
+        write_audit(cur, f"EXP-{uuid.uuid4().hex[:8]}", body.created_by, f"EXPEDITION_{body.status}", "expeditions", None, eid, now)
     return {"status": "ok", "id": eid}
 
 @app.patch("/expeditions/{expedition_id}")
@@ -1096,7 +1116,7 @@ def advance_manifest(expedition_id: str, manifest_id: str, patch: dict):
     params += [manifest_id]
     with _sync_txn() as cur:
         cur.execute(q(f"UPDATE manifests SET {updates} WHERE id=?"), tuple(params))
-        cur.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (f"MAN-{uuid.uuid4().hex[:8]}", patch.get("actor_id", "HQ"), f"MANIFEST_{stage}", "manifests", row["stage"], stage, utc_now()))
+        write_audit(cur, f"MAN-{uuid.uuid4().hex[:8]}", patch.get("actor_id", "HQ"), f"MANIFEST_{stage}", "manifests", row["stage"], stage, utc_now())
     return {"status": "ok", "id": manifest_id, "stage": stage}
 
 @app.get("/expeditions/{expedition_id}/cost")
@@ -1246,7 +1266,7 @@ def check_overdue():
             continue
         with _sync_txn() as cur2:
             cur2.execute(q("UPDATE field_sorties SET safety_status='OVERDUE' WHERE id=? AND safety_status='ACTIVE'"), (r["id"],))
-            cur2.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (r["id"][:8], "AUTO-WATCHDOG", "SORTIE_OVERDUE", "field_sorties", "ACTIVE", "OVERDUE", now))
+            write_audit(cur2, r["id"][:8], "AUTO-WATCHDOG", "SORTIE_OVERDUE", "field_sorties", "ACTIVE", "OVERDUE", now)
         marked.append(r["id"])
         if late_min >= 30:
             em_id = f"SOS-{r['id'][-8:]}"
@@ -1285,7 +1305,7 @@ def check_triage_sla():
                 if elapsed > due:
                     bid = f"BR-{em['id']}-{cur}"
                     with _sync_txn() as cur2:
-                        cur2.execute(q("INSERT INTO audit_log VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (bid[:8] + cur[:3], "AUTO-WATCHDOG", "TRIAGE_SLA_BREACH", "emergencies", cur, to_status, now))
+                        write_audit(cur2, bid[:8] + cur[:3], "AUTO-WATCHDOG", "TRIAGE_SLA_BREACH", "emergencies", cur, to_status, now)
             except Exception:
                 continue
     except Exception as e:

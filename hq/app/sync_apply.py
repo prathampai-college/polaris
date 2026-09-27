@@ -9,7 +9,7 @@ import json
 
 from ._vc import compare_vc, merge_vc
 from .config import ALLOWED
-from .db import USE_PG, utc_now, q
+from .db import USE_PG, utc_now, q, write_audit
 
 ASSET_OPS = {"UPSERT", "CONSUME", "IN", "OUT", "ADJUST"}
 
@@ -61,7 +61,7 @@ def _ack_state(cur, device_id: str, ulid: str, server_version=None):
 
 
 def _audit(cur, ulid, device_id, action, entity, before, after, now):
-    cur.execute(q("INSERT INTO audit_log (id, actor_id, action, entity, before, after, ts) VALUES (?,?,?,?,?,?,?)"), (ulid, device_id, action, entity, before, after, now))
+    write_audit(cur, ulid, device_id, action, entity, before, after, now)
 
 
 def apply_frame(cur, *, ulid: str, device_id: str, entity: str, entity_id: str, op: str, patch: dict, vector_clock=None, ts=None):
