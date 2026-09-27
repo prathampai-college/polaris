@@ -45,10 +45,10 @@ export function SourceBadge({
   if (kind === 'live')
     return <span className={`pill pill-live ${className}`}><span className="dot-live" />{liveLabel}{age ? ` · ${age}` : ''}</span>;
   if (kind === 'stale_cache')
-    return <span className={`pill pill-stale ${className}`}><span className="w-2 h-2 rounded-full bg-amber-400" />STALE{age ? ` · ${age}` : ''}</span>;
+    return <span className={`pill pill-stale ${className}`}><span className="h-2 w-2 bg-amber-500" />STALE{age ? ` · ${age}` : ''}</span>;
   if (kind === 'sim')
-    return <span className={`pill border-cyan-400/25 bg-cyan-500/10 text-cyan-300 ${className}`} title="Simulated sensor — no hardware">SIM-LIDAR{age ? ` · ${age}` : ''}</span>;
+    return <span className={`pill pill-ai ${className}`} title="Simulated sensor — illustrative, not measured hardware">SIM-LIDAR{age ? ` · ${age}` : ''}</span>;
   if (kind === 'offline')
-    return <span className={`pill border-white/15 bg-white/5 text-white/50 ${className}`}>OFFLINE{age ? ` · last ${age}` : ''}</span>;
+    return <span className={`pill border-structure/40 bg-canvas text-slate ${className}`}>OFFLINE{age ? ` · last ${age}` : ''}</span>;
   return <span className={`pill pill-stale ${className}`}>MOCK SCHEDULE</span>;
 }

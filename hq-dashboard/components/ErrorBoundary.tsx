@@ -18,12 +18,12 @@ export class ErrorBoundary extends React.Component<Props, State> {
   render() {
     if (this.state.error) {
       return (
-        <div className="rounded-2xl border border-red-500/25 bg-red-950/20 p-4 text-center space-y-2">
-          <div className="text-xs font-bold text-red-300">{this.props.label ?? 'View'} crashed — app is safe</div>
-          <div className="text-[11px] font-mono text-white/40 truncate">{this.state.error}</div>
+        <div className="border border-flare/40 bg-flare/5 p-4 text-center space-y-2">
+          <div className="text-xs font-bold text-flare">{this.props.label ?? 'View'} crashed — app is safe</div>
+          <div className="truncate font-mono text-[11px] text-slate">{this.state.error}</div>
           <button
             onClick={() => this.setState({ error: null })}
-            className="px-3.5 py-1.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-white text-xs font-bold transition"
+            className="border border-structure bg-cobalt px-3.5 py-1.5 font-mono text-xs font-bold text-white hover:bg-structure"
           >
             Retry
           </button>
