@@ -201,7 +201,7 @@ console.log(`   HQ indent final status=${finalInd.find(i=>i.id===indentId).statu
 console.log('\n7) HQ dashboard data checks...');
 const overview=await (await fetch(`http://localhost:${HQ_PORT}/stations/overview`)).json();
 console.log('   overview', overview.map(s=>`${s.name}: ${s.containers}c ${s.assets}SKUs low=${s.critical_low} indents=${s.open_indents} forecast ${s.days_to_stockout}d CI ${s.forecast_ci}` ).join(' | '));
-const audit=await (await fetch(`http://localhost:${HQ_PORT}/audit?limit=5`)).json();
+const audit=await (await fetch(`http://localhost:${HQ_PORT}/audit?limit=5`,{headers:{Authorization:`Bearer ${hqToken}`}})).json();
 console.log('   audit tail', audit.slice(0,3).map(a=>a.action).join(', '));
 console.log('   rbac', await (await fetch(`http://localhost:${HQ_PORT}/rbac/me`)).json());
 const rbacOk=await (await fetch(`http://localhost:${HQ_PORT}/rbac/me`)).json();

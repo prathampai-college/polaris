@@ -174,9 +174,8 @@ async def _post_telemetry_internal(station_id: str, payload: dict):
             import httpx
             async with httpx.AsyncClient(timeout=5.0) as client:
                 hdrs = {"Content-Type": "application/json"}
-                psk = os.getenv("PSK_HEX", os.getenv("SECRET_KEY", ""))
-                if psk:
-                    hdrs["X-PSK"] = psk
+                # same key the HQ auth gate checks; never the JWT signer
+                hdrs["X-PSK"] = os.getenv("INTERNAL_PSK_HEX") or os.getenv("PSK_HEX") or "a" * 64
                 url = f"{HQ_INTERNAL_URL}/telemetry"
                 body = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(), "station_id": station_id,
                         "temp_outside": payload["temp_outside"], "wind_speed": payload["wind_speed"],

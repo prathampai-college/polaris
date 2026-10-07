@@ -45,6 +45,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   }
   if (res.status === 401) {
     clearToken();
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('polaris:unauthorized'));
     throw new ApiError(401, 'session expired');
   }
   if (!res.ok) {

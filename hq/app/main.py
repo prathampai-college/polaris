@@ -10,8 +10,10 @@ from .db import init_db, get_conn, release_conn, USE_PG, utc_now, q, write_audit
 from .dtn import ingest_bundle
 from .sync_apply import Conflict, NotFound, Rejected, apply_frame
 from .forecast import load_forecast_model, physics_pred, predict_total
-from .config import ALLOWED, SECRET_KEY, TOKEN_EXPIRY_DAYS, STATION_PINS
-from .auth import sign_jwt, get_current_user, require_role
+from .config import ALLOWED, SECRET_KEY, TOKEN_EXPIRY_DAYS, STATION_PINS, PRODUCTION
+from .auth import sign_jwt, get_current_user, require_role, has_role
+from starlette.middleware.base import BaseHTTPMiddleware
+from contextvars import ContextVar
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("polaris.hq")
@@ -126,6 +128,57 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(title="POLARIS HQ — NCPOR Command", version="0.1.0", docs_url="/docs", redoc_url="/redoc", lifespan=lifespan)
+# --- auth gate -------------------------------------------------------------
+# Every write needs a JWT (or, for machine paths, the wire PSK). Reads stay open
+# except personal data and the audit log. Registered before CORS so 401/403
+# responses still carry CORS headers for the dashboard.
+_current_user: ContextVar[dict | None] = ContextVar("polaris_user", default=None)
+_PSK_PATHS = ("/sync/", "/dtn/", "/telemetry")   # gateway, DTN relays, weather poller
+_OPEN_WRITES = {"/auth/login"}
+_PRIVATE_READS = ("/personnel", "/audit", "/overrides")
+# (method or "*", path prefix, minimum role) — first match wins; default FIELD_OP
+_ROLE_RULES = (
+    ("*", "/expeditions", "HQ_LOGISTICS"),
+    ("*", "/vessels/poll", "HQ_LOGISTICS"),
+    ("*", "/sorties/check-overdue", "DISPATCH"),
+    ("PATCH", "/indents/", "STATION_LEAD"),
+)
+
+
+def _psk_ok(request: Request) -> bool:
+    got = request.headers.get("x-psk", "")
+    want = os.getenv("INTERNAL_PSK_HEX") or os.getenv("PSK_HEX") or "a" * 64
+    return bool(got) and hmac.compare_digest(got, want)
+
+
+def _actor(fallback: str | None) -> str | None:
+    """Audit identity comes from the verified token, never the request body."""
+    u = _current_user.get()
+    return (u.get("sub") or u.get("device_id")) if u else fallback
+
+
+async def _auth_gate(request: Request, call_next):
+    path, method = request.url.path, request.method
+    user = await get_current_user(request)
+    token = _current_user.set(user)
+    try:
+        if method in ("GET", "HEAD", "OPTIONS"):
+            if path.startswith(_PRIVATE_READS) and not user:
+                return JSONResponse(status_code=401, content={"detail": "login required"})
+            return await call_next(request)
+        if path in _OPEN_WRITES or (path.startswith(_PSK_PATHS) and _psk_ok(request)):
+            return await call_next(request)
+        if not user:
+            return JSONResponse(status_code=401, content={"detail": "missing or invalid authorization token"})
+        need = next((r for m, pfx, r in _ROLE_RULES if (m == "*" or m == method) and path.startswith(pfx)), "FIELD_OP")
+        if not has_role(user.get("role", "VIEWER"), need):
+            return JSONResponse(status_code=403, content={"detail": f"requires {need} or higher"})
+        return await call_next(request)
+    finally:
+        _current_user.reset(token)
+
+
+app.add_middleware(BaseHTTPMiddleware, dispatch=_auth_gate)
 app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"], allow_credentials=False)
 
 @app.middleware("http")
@@ -229,7 +282,7 @@ async def auth_login(body: LoginRequest, request: Request):
     # (and give the dashboard/tablets a real admin PIN to log in with).
     if requested in ("STATION_LEAD", "DISPATCH", "HQ_LOGISTICS", "NCPOR_ADMIN"):
         admin_secret = os.getenv("ADMIN_KEY") or os.getenv("ADMIN_PIN")
-        demo_elevation_disabled = os.getenv("DISABLE_DEMO_ELEVATION", "").lower() in ("1", "true", "yes")
+        demo_elevation_disabled = PRODUCTION or os.getenv("DISABLE_DEMO_ELEVATION", "").lower() in ("1", "true", "yes")
         is_admin_auth = False
         if admin_secret and body.pin == admin_secret:
             is_admin_auth = True
@@ -305,8 +358,8 @@ def create_indent(body: IndentCreate):
     except Exception:
         iid=str(uuid.uuid4())[:8]+"-"+body.asset_id
     with _sync_txn() as cur:
-        cur.execute(q("INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, body.station_id, body.asset_id, body.qty_requested, body.urgency, body.status, body.created_by, now, None))
-        write_audit(cur, iid, body.created_by, "INDENT_CREATE_HQ", "indents", None, str(body.model_dump()), now)
+        cur.execute(q("INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, body.station_id, body.asset_id, body.qty_requested, body.urgency, body.status, _actor(body.created_by), now, None))
+        write_audit(cur, iid, _actor(body.created_by), "INDENT_CREATE_HQ", "indents", None, str(body.model_dump()), now)
     notify_gateway(body.station_id, "indents", iid, "UPSERT", {
         "id": iid,
         "station_id": body.station_id,
@@ -314,7 +367,7 @@ def create_indent(body: IndentCreate):
         "qty_requested": body.qty_requested,
         "urgency": body.urgency,
         "status": body.status,
-        "created_by": body.created_by,
+        "created_by": _actor(body.created_by),
         "created_at": now
     })
     return {"id": iid, "status": body.status}
@@ -344,7 +397,7 @@ async def patch_indent(indent_id: str, body: IndentPatch, user: dict = Depends(r
             cur.execute(q("UPDATE indents SET status=?, vessel_imo=? WHERE id=?"), (body.status, body.vessel_imo, indent_id))
         else:
             cur.execute(q("UPDATE indents SET status=? WHERE id=?"), (body.status, indent_id))
-        write_audit(cur, f"{indent_id}-{body.status}-{now}", body.actor_id, f"INDENT_{body.status}", "indents", str({"status":cur_status}), str({"status":body.status, "vessel_imo": body.vessel_imo}), now)
+        write_audit(cur, f"{indent_id}-{body.status}-{now}", _actor(body.actor_id), f"INDENT_{body.status}", "indents", str({"status":cur_status}), str({"status":body.status, "vessel_imo": body.vessel_imo}), now)
     notify_gateway(station_id, "indents", indent_id, "STATUS_CHANGE", {
         "id": indent_id,
         "status": body.status,
@@ -849,7 +902,7 @@ def update_emergency(emergency_id: str, patch: dict):
             cur.execute(q("UPDATE emergencies SET status=?, status_entered_ts=? WHERE id=?"), (status, now2, emergency_id))
     # decision audit: resolving/acking a CRITICAL distress is a logged decision
     try:
-        actor = patch.get("actor_id", "HQ_COMMAND")
+        actor = _actor(patch.get("actor_id", "HQ_COMMAND"))
         now = utc_now()
         oid = f"OVR-{uuid.uuid4().hex[:8]}"
         st = _fetch_one("SELECT station_id FROM emergencies WHERE id=?", (emergency_id,))
@@ -949,8 +1002,8 @@ def create_expedition(body: ExpeditionCreate):
     eid = body.id or f"EXP-{uuid.uuid4().hex[:8]}"
     now = utc_now()
     with _sync_txn() as cur:
-        cur.execute(q("INSERT INTO expeditions (id, program, name, season, status, created_by, created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=excluded.status"), (eid, body.program, body.name, body.season, body.status, body.created_by, now))
-        write_audit(cur, f"EXP-{uuid.uuid4().hex[:8]}", body.created_by, f"EXPEDITION_{body.status}", "expeditions", None, eid, now)
+        cur.execute(q("INSERT INTO expeditions (id, program, name, season, status, created_by, created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET status=excluded.status"), (eid, body.program, body.name, body.season, body.status, _actor(body.created_by), now))
+        write_audit(cur, f"EXP-{uuid.uuid4().hex[:8]}", _actor(body.created_by), f"EXPEDITION_{body.status}", "expeditions", None, eid, now)
     return {"status": "ok", "id": eid}
 
 @app.patch("/expeditions/{expedition_id}")
@@ -1096,9 +1149,11 @@ def advance_manifest(expedition_id: str, manifest_id: str, patch: dict):
             raise HTTPException(400, "COLD item requires ColdStore container — use override_temp with STATION_LEAD")
         if tz == "HAZMAT" and ctype != "Hazmat" and not patch.get("override_temp"):
             raise HTTPException(400, "HAZMAT item requires Hazmat container — use override_temp with STATION_LEAD")
-        if patch.get("override_temp"):
-            # require STATION_LEAD+ (checked via auth header if present, else allow but audit)
-            pass
+        if patch.get("override_temp") and ((tz == "COLD" and ctype != "ColdStore") or (tz == "HAZMAT" and ctype != "Hazmat")):
+            # The auth gate's HQ_LOGISTICS floor on /expeditions/* already outranks
+            # STATION_LEAD; record who forced the mismatch.
+            with _sync_txn() as c:
+                write_audit(c, f"TMPOVR-{uuid.uuid4().hex}", _actor("HQ"), "MANIFEST_TEMP_OVERRIDE", "manifests", tz, str(ctype), utc_now())
     updates = "stage=?"
     params: list = [stage]
     if patch.get("container_id") is not None:
@@ -1116,7 +1171,7 @@ def advance_manifest(expedition_id: str, manifest_id: str, patch: dict):
     params += [manifest_id]
     with _sync_txn() as cur:
         cur.execute(q(f"UPDATE manifests SET {updates} WHERE id=?"), tuple(params))
-        write_audit(cur, f"MAN-{uuid.uuid4().hex[:8]}", patch.get("actor_id", "HQ"), f"MANIFEST_{stage}", "manifests", row["stage"], stage, utc_now())
+        write_audit(cur, f"MAN-{uuid.uuid4().hex[:8]}", _actor(patch.get("actor_id", "HQ")), f"MANIFEST_{stage}", "manifests", row["stage"], stage, utc_now())
     return {"status": "ok", "id": manifest_id, "stage": stage}
 
 @app.get("/expeditions/{expedition_id}/cost")

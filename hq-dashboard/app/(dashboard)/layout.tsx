@@ -1,5 +1,6 @@
 'use client';
 import Link from 'next/link';
+import { useState } from 'react';
 import { DashboardProvider, useDashboard } from '../../lib/context';
 import { Topbar } from '../../components/nav/Topbar';
 import { SidebarNav } from '../../components/nav/Sidebar';
@@ -36,6 +37,40 @@ function EmergencyBanner() {
   );
 }
 
+function LoginGate() {
+  const { login, selectedStation, stationName } = useDashboard();
+  const [pin, setPin] = useState('');
+  return (
+    <form
+      onSubmit={(e) => { e.preventDefault(); login(pin); }}
+      className="mx-auto mt-16 max-w-sm space-y-4 border border-structure bg-surface p-6"
+    >
+      <h1 className="text-lg font-black text-ink">HQ sign-in required</h1>
+      <p className="text-sm text-slate">
+        Every action here is written to the audit log under your identity. Sign in to view and act on {stationName || selectedStation}.
+      </p>
+      <label htmlFor="gate-pin" className="block font-mono text-xs font-bold text-ink">Access PIN</label>
+      <input
+        id="gate-pin"
+        type="password"
+        autoFocus
+        value={pin}
+        onChange={(e) => setPin(e.target.value)}
+        className="h-11 w-full border border-structure bg-canvas px-3 text-sm focus:outline-none focus:border-cobalt"
+      />
+      <button type="submit" className="h-11 w-full border border-structure bg-cobalt font-mono text-sm font-bold text-white hover:bg-structure">
+        Sign in
+      </button>
+    </form>
+  );
+}
+
+function Gated({ children }: { children: React.ReactNode }) {
+  const { authReady, loggedIn } = useDashboard();
+  if (!authReady) return null;
+  return loggedIn ? <>{children}</> : <LoginGate />;
+}
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <DashboardProvider>
@@ -49,7 +84,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <SidebarNav />
             </div>
           </aside>
-          <main className="min-w-0 flex-1 space-y-4 pb-16">{children}</main>
+          <main className="min-w-0 flex-1 space-y-4 pb-16"><Gated>{children}</Gated></main>
         </div>
       </div>
     </DashboardProvider>

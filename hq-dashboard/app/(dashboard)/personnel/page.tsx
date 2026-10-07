@@ -116,7 +116,7 @@ export default function PersonnelPage() {
                         </button>
                       )}
                       <button
-                        onClick={() => resolveEmergencyHQ(em.id)}
+                        onClick={() => confirm(`Mark ${em.id} RESOLVED? This closes the incident for every station.`) && resolveEmergencyHQ(em.id)}
                         className="px-3.5 py-1.5 border border-structure bg-ink font-mono text-xs font-bold text-canvas hover:bg-cobalt"
                       >
                         Resolved ✓

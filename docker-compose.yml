@@ -41,6 +41,8 @@ services:
       DATABASE_URL: postgresql://polaris:polaris@db:5432/polaris
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3001}"
       SECRET_KEY: "${SECRET_KEY:-}"
+      POLARIS_ENV: "${POLARIS_ENV:-}"
+      STATION_PINS_JSON: "${STATION_PINS_JSON:-}"
       PSK_HEX: "${PSK_HEX:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
       TOKEN_EXPIRY_HOURS: "${TOKEN_EXPIRY_HOURS:-8}"
       TELEMETRY_SOURCE: "${TELEMETRY_SOURCE:-both}"
@@ -82,6 +84,7 @@ services:
     environment:
       HQ_URL: http://hq:8000
       PSK_HEX: "${PSK_HEX:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+      POLARIS_ENV: "${POLARIS_ENV:-}"
     depends_on:
       hq:
         condition: service_healthy

@@ -98,7 +98,7 @@ export default function ForecastPage() {
             <div className="p-4 bg-ink border border-structure space-y-1 text-canvas">
               <div className="eyebrow text-canvas/60">Days to zero fuel</div>
               <div className="text-2xl font-black">{forecast.days_to_stockout} <span className="text-xs font-normal text-canvas/60">days</span></div>
-              <div className="text-[11px] text-canvas/50 font-mono">95% CI: {forecast.ci[0]}–{forecast.ci[1]} days</div>
+              <div className="text-[11px] text-canvas/50 font-mono">±15% band (placeholder, not a CI): {forecast.ci[0]}–{forecast.ci[1]} days</div>
             </div>
           </div>
         )}

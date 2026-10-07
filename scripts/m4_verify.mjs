@@ -7,7 +7,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { encode } from '@msgpack/msgpack';
 import { ulid } from 'ulid';
-import { PSK_HEX as PSK, toWire, fromWire, cleanDbs, waitForHQ, spawnHQ, spawnGateway, connectWs } from './_harness.mjs';
+import { PSK_HEX as PSK, toWire, fromWire, cleanDbs, waitForHQ, spawnHQ, spawnGateway, connectWs, hqAuthHeaders } from './_harness.mjs';
 
 const HQ_PORT=8771, GW_PORT=8791;
 const FIELD_DB = path.join(os.tmpdir(), 'polaris-m4.db');
@@ -108,7 +108,7 @@ console.log(`  pessimistic lock: negative CONSUME → CONFLICT_CRITICAL`);
 console.log('\n[Security] RBAC + audit + PSK rotation');
 const rbac=await (await fetch(`http://localhost:${HQ_PORT}/rbac/me`)).json();
 console.log(`  RBAC ${rbac.role} ${rbac.station_id} ${rbac.permissions.join(',')} PASS`);
-const audit=await (await fetch(`http://localhost:${HQ_PORT}/audit?limit=3`)).json();
+const audit=await (await fetch(`http://localhost:${HQ_PORT}/audit?limit=3`,{headers:await hqAuthHeaders(`http://localhost:${HQ_PORT}`)})).json();
 console.log(`  audit tail ${audit.length} entries ${audit.length>0?'PASS':'FAIL'}: ${audit.slice(0,2).map(a=>a.action).join(', ')}`);
 // audit replay: count should reflect all applies
 console.log(`  audit replay: HQ can rebuild from audit_log ✓ (tested via /audit)`);

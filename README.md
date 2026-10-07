@@ -220,7 +220,7 @@ website/       standalone Vite marketing site (own README)
 
 ## Known limits
 
-- Most HQ endpoints are **unauthenticated**. Only 5 routes plus the solo-sortie branch check roles.
+- HQ writes need a JWT (or `X-PSK` on `/sync`, `/dtn`, `/telemetry`), but tokens are **not station-scoped** and logins are per station PIN, not per person. Set `POLARIS_ENV=production` to refuse demo secrets.
 - There is a **single shared PSK**. No per-device keys or rotation.
 - The DTN "mesh" is a same-origin `BroadcastChannel`. There is **no radio transport**; hand-off between devices is by QR or text.
 - Tablets need a **secure context** for the camera, OPFS and WebCrypto.

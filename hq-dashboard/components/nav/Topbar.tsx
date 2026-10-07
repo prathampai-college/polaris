@@ -36,6 +36,7 @@ export function Topbar() {
           <select
             value={selectedStation}
             onChange={(e) => setSelectedStation(e.target.value)}
+            aria-label="Station"
             className="h-9 border border-structure bg-surface px-2.5 font-mono text-xs font-semibold text-ink focus:outline-none focus:border-cobalt"
           >
             {STATIONS.map((s) => (
@@ -63,6 +64,7 @@ export function Topbar() {
                 onChange={(e) => setPin(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && login(pin)}
                 placeholder="PIN"
+                aria-label="Access PIN"
                 className="h-9 w-20 border border-structure bg-surface px-2.5 text-xs focus:outline-none focus:border-cobalt"
               />
               <button onClick={() => login(pin)} className="h-9 border border-structure bg-cobalt px-3.5 font-mono text-xs font-bold text-white hover:bg-structure">

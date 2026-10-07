@@ -100,8 +100,8 @@ def test_sortie_solo_override_requires_station_lead():
     # No auth at all -> must be rejected, not silently accepted (regression test for the
     # missing `await` on await_auth() that made this path always 403 regardless of role,
     # and would equally have hidden a bug that let it always succeed).
-    r = client.post("/sorties", json=solo_payload)
-    assert r.status_code == 403, r.text
+    r = TestClient(app, headers={"Authorization": ""}).post("/sorties", json=solo_payload)
+    assert r.status_code in (401, 403), r.text
 
     from hq.app.auth import sign_jwt
     from hq.app.config import SECRET_KEY, TOKEN_EXPIRY_DAYS

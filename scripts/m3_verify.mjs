@@ -3,7 +3,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import fs from 'node:fs';
 import path from 'node:path';
-import { cleanDbs, waitForHQ, spawnHQ } from './_harness.mjs';
+import { cleanDbs, waitForHQ, spawnHQ, PSK_HEX } from './_harness.mjs';
 const HQ_PORT=8772;
 const HQ_DB=path.resolve('hq/app/hq.db');
 cleanDbs([HQ_DB, HQ_DB+'-wal', HQ_DB+'-shm']);
@@ -15,7 +15,7 @@ const hq=spawnHQ(HQ_PORT);
 await waitForHQ(HQ_PORT);
 const calm=await (await fetch(`http://localhost:${HQ_PORT}/forecast/ST-BHARATI`)).json();
 console.log(` calm baseline ${calm.days_to_stockout}d CI ${calm.ci} expect >20d ${calm.days_to_stockout>20?'PASS':'FAIL'} used_model ${calm.used_model}`);
-await fetch(`http://localhost:${HQ_PORT}/telemetry`,{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ts:new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-38, wind_speed:22, pressure:960, dg_load:0.9})});
+await fetch(`http://localhost:${HQ_PORT}/telemetry`,{method:'POST', headers:{'Content-Type':'application/json','X-PSK':PSK_HEX}, body:JSON.stringify({ts:new Date().toISOString(), station_id:'ST-BHARATI', temp_outside:-38, wind_speed:22, pressure:960, dg_load:0.9})});
 await sleep(500);
 const storm=await (await fetch(`http://localhost:${HQ_PORT}/forecast/ST-BHARATI`)).json();
 console.log(` blizzard ${storm.days_to_stockout}d CI ${storm.ci} expect ~18d ${Math.round(storm.days_to_stockout)===18?'PASS':'FAIL'} pure physics ${storm.pure_physics_days}d`);

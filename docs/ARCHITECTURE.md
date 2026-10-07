@@ -131,7 +131,7 @@ check_and_escalate(): ≤20 d → CRITICAL indent · ≤60 d → MEDIUM watch ·
 | Wire | AES-GCM with a 32-byte `PSK_HEX` (the GCM tag gives integrity; the CRC32 is framing only). `MAX_WIRE_SIZE` is 2048 B. The gateway validates frames with zod. | TLS on the WS link is up to the deployment |
 | Keys | **One shared PSK** for the gateway and all tablets. A tablet is provisioned in Comms (paste or QR, stored in the worker's `kv` table, only a 4-hex fingerprint shown). An unprovisioned tablet runs on the flagged dev key. | Per-device keys, rotation |
 | Gateway HTTP | `/dtn/exchange` and `/internal/broadcast_delta` require `X-PSK`, compared with `timingSafeEqual`. The body cap is 512 KB. | — |
-| HQ auth | JWT (HS256, 8 h). Elevated roles need an approved device-ID prefix or `ADMIN_KEY`. | **Most HQ endpoints are unauthenticated.** Only 5 routes plus the `POST /sorties` solo branch check roles. `/sync/ingest` and `/dtn/*` on HQ are open, so HQ must not be exposed beyond the gateway network. |
+| HQ auth | An auth gate on every write: JWT (HS256, 8 h) with a role floor per path (`FIELD_OP` default, `HQ_LOGISTICS` for expeditions/vessel polls, `DISPATCH` for the watchdog trigger, `STATION_LEAD` for indent transitions). Machine paths (`/sync/*`, `/dtn/*`, `/telemetry`) also accept `X-PSK`. `/personnel`, `/audit` and `/overrides` reads need a token. Audit actor comes from the token, not the request body. `POLARIS_ENV=production` refuses to boot on demo secrets/PINs and disables device-prefix elevation. | Station scoping (a token for one station can still write another station's rows); per-user accounts (logins are per station PIN) |
 | Field at rest | OPFS (origin-private) plus OS disk encryption. PIN stored only as a salted PBKDF2 hash. | SQLCipher |
 | Browser | The camera, OPFS and WebCrypto need a **secure context** (HTTPS or localhost). On plain http to a LAN IP they are unavailable and the app shows INSECURE HTTP. | — |
 
@@ -149,7 +149,7 @@ check_and_escalate(): ≤20 d → CRITICAL indent · ≤60 d → MEDIUM watch ·
 
 ## Known limits
 
-- Most HQ endpoints are unauthenticated.
+- HQ writes are authenticated, but not station-scoped: logins are per station PIN, not per person.
 - A single shared PSK. No per-device keys.
 - The DTN "mesh" is a same-origin `BroadcastChannel`. There is no radio transport. Hand-off between devices is by QR or text.
 - Locate's LiDAR/camera positioning is simulated (`field/lib/sensors/`) and only visible in drill mode.

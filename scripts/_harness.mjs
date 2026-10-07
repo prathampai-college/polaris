@@ -23,3 +23,6 @@ export function spawnHQ(port, extraEnv={}){ return spawn('python', ['-m','uvicor
 export async function spawnGateway(gwPort, hqPort, psk=PSK_HEX){ const gw=spawn('node', ['sync-gateway/dist/gateway.js'], { env:{...process.env, HQ_URL:`http://localhost:${hqPort}`, GATEWAY_PORT:String(gwPort), PSK_HEX:psk}, stdio:['ignore','pipe','pipe'] }); await sleep(800); return gw; }
 
 export async function connectWs(gwPort){ const ws=new WebSocket(`ws://localhost:${gwPort}`); await new Promise((res, rej)=>{ ws.on('open', res); ws.on('error', rej); setTimeout(()=>rej(new Error('ws timeout')),5000); }); return ws; }
+
+/** HQ writes need a JWT. Demo-elevated admin login (HQ-COMMAND- device prefix). */
+export async function hqAuthHeaders(base){ const r=await fetch(`${base}/auth/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:'HQ-COMMAND-VERIFY',pin:'BHARATI-2024',station_id:'ST-BHARATI',role:'NCPOR_ADMIN'})}); if(!r.ok) throw new Error(`HQ login failed ${r.status}`); const {token}=await r.json(); return {'Content-Type':'application/json', Authorization:`Bearer ${token}`}; }

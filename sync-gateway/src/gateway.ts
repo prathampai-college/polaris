@@ -12,6 +12,10 @@ const PSK_HEX = process.env.PSK_HEX || 'a'.repeat(64);
 if (!/^[0-9a-fA-F]{64}$/.test(PSK_HEX)) {
   console.warn('[polaris-gateway] WARNING: PSK_HEX must be 64 hex chars (32B). Using fallback is insecure for production.');
 }
+if (process.env.POLARIS_ENV === 'production' && (!/^[0-9a-fA-F]{64}$/.test(PSK_HEX) || PSK_HEX === 'a'.repeat(64))) {
+  console.error('[polaris-gateway] POLARIS_ENV=production: refusing to start on a missing/demo PSK_HEX');
+  process.exit(1);
+}
 
 function log(level: string, msg: string, extra: Record<string, unknown> = {}) {
   const ts = new Date().toISOString();
@@ -111,7 +115,7 @@ const server = http.createServer(async (req, res) => {
       const bundles = Array.isArray(body.bundles) ? body.bundles : [body.bundle || body];
       const hqRes = await fetch(`${HQ_URL}/dtn/ingest_bulk`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-PSK': process.env.INTERNAL_PSK_HEX || PSK_HEX },
         body: JSON.stringify({ bundles }),
         signal: AbortSignal.timeout(10000),
       });
@@ -166,7 +170,7 @@ const server = http.createServer(async (req, res) => {
 const wss = new WebSocketServer({ server, maxPayload: 64 * 1024 });
 
 server.listen(PORT, () => {
-  log('info', 'listening', { port: PORT, hq: HQ_URL, psk: PSK_HEX.slice(0, 8) });
+  log('info', 'listening', { port: PORT, hq: HQ_URL, devKey: PSK_HEX === 'a'.repeat(64) });
 });
 
 for (const sig of ['SIGTERM', 'SIGINT'] as const) {
@@ -309,7 +313,7 @@ async function forward(ws: WebSocket, f: Record<string, unknown>, t0: number) {
   try {
     const res = await fetch(`${HQ_URL}/sync/ingest`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-PSK': process.env.INTERNAL_PSK_HEX || PSK_HEX },
       body: JSON.stringify(f),
       signal: AbortSignal.timeout(10000),
     });

@@ -139,7 +139,7 @@ The field sets `bundleId` to the outbox ULID, so a write sent over both WS and D
 
 ### `POST /dtn/exchange` (HQ)
 
-Takes `{bundles:[…]}` (or a single `bundle`) and returns `{results}`, using the same path. The HQ route itself is unauthenticated; the gateway's route of the same name requires `X-PSK`.
+Takes `{bundles:[…]}` (or a single `bundle`) and returns `{results}`, using the same path. Both the HQ route and the gateway's route of the same name require `X-PSK` (or, on HQ, a JWT).
 
 ### Other sync reads
 

@@ -18,6 +18,7 @@ type DashboardState = {
   setSelectedStation: (id: string) => void;
   stationName: string;
   loggedIn: boolean;
+  authReady: boolean;
   role: string | null;
   login: (pin: string) => Promise<boolean>;
   logout: () => void;
@@ -40,6 +41,7 @@ export function useDashboard(): DashboardState {
 export function DashboardProvider({ children }: { children: ReactNode }) {
   const [selectedStation, setSelectedStation] = useState('ST-BHARATI');
   const [loggedIn, setLoggedIn] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
   const [role, setRole] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [tele, setTele] = useState<Telemetry>(null);
@@ -67,6 +69,11 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       setLoggedIn(true);
       setRole(getRole(stored));
     }
+    setAuthReady(true);
+    // any 401 from HQ (expired/rotated key) drops back to the login gate
+    const onUnauthorized = () => { setLoggedIn(false); setRole(null); };
+    window.addEventListener('polaris:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('polaris:unauthorized', onUnauthorized);
   }, []);
 
   const pushToast = useCallback((msg: string) => {
@@ -179,6 +186,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     setSelectedStation,
     stationName,
     loggedIn,
+    authReady,
     role,
     login,
     logout,
