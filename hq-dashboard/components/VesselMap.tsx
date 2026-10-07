@@ -27,11 +27,11 @@ export function VesselMap({ stationId = 'ST-BHARATI' }: { stationId?: string }) 
     let cancelled = false;
     async function load() {
       try {
-        setLoading(true);
+        // loading starts true; re-polls keep the map mounted (no 15s flicker)
         const r = await fetch(`${HQ}/vessels?station_id=${stationId}`);
         if (!r.ok) throw new Error(`${r.status}`);
         const data = await r.json();
-        if (!cancelled) setVessels(Array.isArray(data) ? data : []);
+        if (!cancelled) { setVessels(Array.isArray(data) ? data : []); setError(null); }
       } catch (e: any) {
         if (!cancelled) setError(e.message);
       } finally {

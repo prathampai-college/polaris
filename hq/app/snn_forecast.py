@@ -79,30 +79,31 @@ def _linear_proxy_residual(rate, dg_load, crew):
     return residual
 
 
-_last_feats = None
-_last_residual = None
+# Event-gate memory per station: one shared slot let Maitri reuse Bharati's residual.
+_last_feats: dict = {}
+_last_residual: dict = {}
 _EVENT_THRESH = 0.12
 
 
 def predict_snn_total(temp_out, wind, pressure, crew, dg_load, station_id=None):
-    global _last_feats, _last_residual
     _load_snn()
     feats = np.array([temp_out, wind, pressure, crew, dg_load], dtype=np.float32)
     mean = _SCALER_SNN["mean"]; scale = _SCALER_SNN["scale"]
     norm = (feats - mean) / scale
     # event gating
     active = True
-    if _last_feats is not None:
-        last_norm = (_last_feats - mean) / scale
+    prev = _last_feats.get(station_id)
+    if prev is not None:
+        last_norm = (prev - mean) / scale
         delta = float(np.mean(np.abs(norm - last_norm)))
         if delta < _EVENT_THRESH:
             active = False
-    _last_feats = feats.copy()
+    _last_feats[station_id] = feats.copy()
     # physics
     from .forecast import physics_pred
     phys = physics_pred(temp_out, wind, pressure, station_id)
     if not active:
-        cached = _last_residual if _last_residual is not None else 0.0
+        cached = _last_residual.get(station_id, 0.0)
         return phys, cached, phys + cached, False, 0
     if _LAYERS is not None:
         residual, spike_count = _lif_forward(norm.astype(np.float32))
@@ -118,7 +119,7 @@ def predict_snn_total(temp_out, wind, pressure, crew, dg_load, station_id=None):
         rate = spikes.mean(axis=0)
         residual = _linear_proxy_residual(rate, dg_load, crew)
         spike_count = int(spikes.sum())
-    _last_residual = residual
+    _last_residual[station_id] = residual
     total = phys + residual
     return phys, residual, total, True, spike_count
 
@@ -134,6 +135,5 @@ def snn_energy_stats(spike_count, active):
 
 
 def reset_snn():
-    global _last_feats, _last_residual
-    _last_feats = None
-    _last_residual = None
+    _last_feats.clear()
+    _last_residual.clear()

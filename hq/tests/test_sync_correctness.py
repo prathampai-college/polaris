@@ -103,3 +103,28 @@ def test_indent_sync_cannot_skip_hq_approval():
     r = client.post("/sync/ingest", json=frame("indents", iid, {"status": "RECEIVED"}))
     assert r.status_code == 400
     assert one("SELECT status FROM indents WHERE id=?", (iid,)) == ("DRAFT",)
+
+
+def test_concurrent_consumes_both_count():
+    # Two tablets each consume 5 from the same lot while offline. Absolute-qty
+    # frames made the second overwrite the first (100 -> 95); deltas must give 90.
+    lid = f"LOT-CC-{str(ULID())[-6:]}"
+    sku = one("SELECT sku FROM assets WHERE id='A2'")[0]
+    client.post("/sync/ingest", json=frame("lots", lid, {"asset_sku": sku, "lot_code": lid, "qty": 100}))
+    total0 = one("SELECT qty FROM assets WHERE id='A2'")[0]
+    for dev in ("TAB-A", "TAB-B"):
+        f = frame("lots", lid, {"asset_sku": sku, "lot_code": lid, "qty": 95, "delta": -5}); f["device_id"] = dev
+        assert client.post("/sync/ingest", json=f).json()["status"] == "APPLIED"
+        f = frame("assets", "A2", {"qty": total0 - 5, "delta": -5}, op="CONSUME", vc={dev: 1}); f["device_id"] = dev
+        assert client.post("/sync/ingest", json=f).json()["status"] == "APPLIED"
+    assert one("SELECT qty FROM lots WHERE id=?", (lid,))[0] == 90
+    assert one("SELECT qty FROM assets WHERE id='A2'")[0] == total0 - 10
+    # replaying the same ULID is still exactly-once
+    f = frame("lots", lid, {"asset_sku": sku, "lot_code": lid, "delta": -5}, uid=str(ULID()))
+    client.post("/sync/ingest", json=f); client.post("/sync/ingest", json=f)
+    assert one("SELECT qty FROM lots WHERE id=?", (lid,))[0] == 85
+    # a delta that would drive the lot negative is rejected, not clamped
+    r = client.post("/sync/ingest", json=frame("lots", lid, {"asset_sku": sku, "lot_code": lid, "delta": -1000}))
+    assert r.json()["status"] == "CONFLICT_CRITICAL" or r.status_code == 409, r.text
+    assert one("SELECT qty FROM lots WHERE id=?", (lid,))[0] == 85
+    get_conn().execute("DELETE FROM lots WHERE id=?", (lid,))

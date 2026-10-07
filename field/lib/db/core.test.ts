@@ -91,6 +91,7 @@ assert.throws(() => mutations.setPersonnelStatus(db, ctx, { id: 'PER-BHA-01', st
 // SOS never invents a location
 assert.throws(() => mutations.raiseSOS(db, ctx, { type: 'SOS_MEDICAL', location: '  ' }), /Location required/);
 const sos = mutations.raiseSOS(db, ctx, { type: 'SOS_MEDICAL', location: 'LOCATION UNKNOWN' });
+assert.equal(nextFrames(db, 1)[0].entity, 'emergencies', 'SOS frame jumps the stock backlog');
 assert.equal(mutations.advanceEmergency(db, ctx, { id: sos.id, assignee: 'PER-BHA-03' }).status, 'ACK');
 assert.equal(mutations.advanceEmergency(db, ctx, { id: sos.id }).status, 'RESPONDING');
 assert.equal(mutations.advanceEmergency(db, ctx, { id: sos.id }).status, 'RESOLVED');

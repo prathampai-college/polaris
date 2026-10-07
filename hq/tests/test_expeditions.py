@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from ulid import ULID
 from hq.app.main import app
 from hq.app import db as _db
-from hq.app.db import init_db
+from hq.app.db import init_db, get_conn
 init_db()
 client = TestClient(app)
 
@@ -107,3 +107,24 @@ def test_sync_new_entities():
     u = "01" + uuid.uuid4().hex[:24].upper()
     r = client.post("/sync/ingest", json={"ulid": u, "device_id": "TAB-TEST", "entity": "manifests", "entity_id": "MAN-SYNC-01", "op": "UPSERT", "patch": {"expedition_id": "EXP-ANT-46", "destination_station": "ST-MAITRI", "description": "sync test", "qty": 2, "unit": "pcs", "stage": "GOA"}, "base_version": 0, "ts": "2026-01-01T00:00:00"})
     assert r.status_code == 200 and r.json()["status"] == "APPLIED"
+
+def test_watchdog_escalates_on_later_tick():
+    # Regression: the first tick flips ACTIVE->OVERDUE; the 30-min auto-SOS must
+    # still fire on a later tick (previously only ACTIVE rows were scanned).
+    import datetime as dt
+    _reset()
+    now = dt.datetime.now(dt.timezone.utc)
+    iso = lambda d: d.isoformat().replace("+00:00", "Z")
+    r = client.post("/sorties", json={"id": "SORTIE-WD-02", "station_id": "ST-BHARATI", "lead_personnel_id": "PER-BHA-04", "buddy_personnel_id": "PER-BHA-05", "destination": "Ridge 2", "departure_time": iso(now - dt.timedelta(hours=2)), "expected_return_time": iso(now - dt.timedelta(minutes=5)), "safety_status": "ACTIVE"})
+    assert r.status_code == 200, r.text
+    r = client.post("/sorties/check-overdue").json()
+    assert "SORTIE-WD-02" in r["marked_overdue"] and not any("WD-02" in s for s in r["auto_sos"])
+    conn = get_conn()
+    conn.execute("UPDATE field_sorties SET expected_return_time=? WHERE id='SORTIE-WD-02'", (iso(now - dt.timedelta(minutes=35)),))
+    conn.commit()
+    r = client.post("/sorties/check-overdue").json()
+    assert "SORTIE-WD-02" not in r["marked_overdue"]
+    assert any(s.endswith("SORTIE-WD-02"[-8:]) for s in r["auto_sos"])
+    # third tick: sortie is now EMERGENCY, nothing new raised
+    r = client.post("/sorties/check-overdue").json()
+    assert not any(s.endswith("SORTIE-WD-02"[-8:]) for s in r["auto_sos"])

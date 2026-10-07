@@ -32,3 +32,11 @@ def test_encoder_scaler_matches_training():
     j = json.loads(p.read_text())
     assert list(map(float, MEAN)) == list(map(float, j["mean"]))
     assert list(map(float, SCALE)) == list(map(float, j["scale"]))
+
+
+def test_event_gate_is_per_station():
+    # Bharati's cached residual must not leak into a first Maitri prediction.
+    reset_snn()
+    predict_snn_total(-20, 10, 990, 24, 0.6, "ST-BHARATI")
+    *_, active, _ = predict_snn_total(-20, 10, 990, 24, 0.6, "ST-MAITRI")
+    assert active, "first call for a new station must run, not reuse another station's gate"

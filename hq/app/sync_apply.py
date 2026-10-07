@@ -96,6 +96,13 @@ def apply_frame(cur, *, ulid: str, device_id: str, entity: str, entity_id: str, 
     if exists and entity == "indents" and "status" in fields and fields["status"] != exists[0] and fields["status"] not in ALLOWED.get(exists[0], []):
         # Same state machine as PATCH /indents — a tablet can't skip HQ approval/dispatch.
         raise Rejected(f"invalid indent transition {exists[0]}->{fields['status']}")
+    if exists and entity == "lots" and _is_num(patch.get("delta")):
+        # Delta frame: add, don't overwrite — concurrent consumes from two tablets
+        # on the same lot must both count. ULID dedupe above keeps it exactly-once.
+        fields.pop("qty", None)
+        cur.execute(q("UPDATE lots SET qty=qty+? WHERE id=?"), (patch["delta"], entity_id))
+        if float(cur.execute(q("SELECT qty FROM lots WHERE id=?"), (entity_id,)).fetchone()[0]) < 0:
+            raise Conflict({"status": "CONFLICT_CRITICAL", "server_version": 0, "message": f"lot {entity_id} would go negative, rejected"})
     if exists:
         # Only columns present in the patch — a status-only patch must never
         # clobber name/role/expiry with defaults (old COALESCE(default, …) bug).
@@ -142,6 +149,8 @@ def _apply_asset(cur, ulid, device_id, entity_id, op, patch, vector_clock, ts, n
     if not row:
         raise NotFound(f"asset {entity_id} not found")
     qty, version, existing_vc, existing_ts = row[0], row[1] or 1, _loads(row[2]), row[3] or ""
+    if op in ("CONSUME", "IN", "OUT", "ADJUST") and _is_num(patch.get("delta")):
+        return _apply_asset_delta(cur, ulid, device_id, entity_id, op, patch, vector_clock, now, qty, version, existing_vc)
     # Field frames carry the resulting absolute qty for every op (CONSUME/IN/OUT/
     # ADJUST included) — previously only UPSERT was applied and the rest ACKed
     # APPLIED without touching stock.
@@ -161,6 +170,27 @@ def _apply_asset(cur, ulid, device_id, entity_id, op, patch, vector_clock, ts, n
     if new_qty is not None and float(new_qty) < 0:
         raise Conflict({"status": "CONFLICT_CRITICAL", "server_version": version, "message": "would go negative, rejected"})
     merged = json.dumps(merge_vc(existing_vc, remote_vc))
+    cur.execute(q("UPDATE assets SET qty=?, version=?, updated_at=?, vector_clock=? WHERE id=?"), (new_qty, new_version, now, merged, entity_id))
+    _audit(cur, ulid, device_id, f"SYNC_{op}", "assets", json.dumps({"qty": qty, "version": version}), json.dumps(patch), now)
+    _ack_state(cur, device_id, ulid, new_version)
+    return {"status": "APPLIED", "server_version": new_version}
+
+
+def _is_num(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _apply_asset_delta(cur, ulid, device_id, entity_id, op, patch, vector_clock, now, qty, version, existing_vc):
+    """Movement frames commute: no LWW, every delta counts once (ULID dedupe).
+    When HQ tracks lots for the SKU the total is derived from them (the lot delta
+    frames queued just before this one already moved it); otherwise add the delta."""
+    sku = cur.execute(q("SELECT sku FROM assets WHERE id=?"), (entity_id,)).fetchone()[0]
+    lot_total = cur.execute(q("SELECT SUM(qty) FROM lots WHERE asset_sku=?"), (sku,)).fetchone()[0]
+    new_qty = float(lot_total) if lot_total is not None else float(qty or 0) + float(patch["delta"])
+    if new_qty < 0:
+        raise Conflict({"status": "CONFLICT_CRITICAL", "server_version": version, "message": "would go negative, rejected"})
+    new_version = version + 1
+    merged = json.dumps(merge_vc(existing_vc, _loads(vector_clock)))
     cur.execute(q("UPDATE assets SET qty=?, version=?, updated_at=?, vector_clock=? WHERE id=?"), (new_qty, new_version, now, merged, entity_id))
     _audit(cur, ulid, device_id, f"SYNC_{op}", "assets", json.dumps({"qty": qty, "version": version}), json.dumps(patch), now)
     _ack_state(cur, device_id, ulid, new_version)

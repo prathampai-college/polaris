@@ -48,7 +48,7 @@ def _find_file(*subpaths):
 _schema_file = _find_file("shared/sql/schema.sql", "sql/schema.sql", "schema.sql")
 SCHEMA_SQL = _schema_file.read_text(encoding="utf-8") if _schema_file and _schema_file.exists() else ""
 
-HQ_DB_PATH = pathlib.Path(__file__).parent / "hq.db"
+HQ_DB_PATH = pathlib.Path(os.getenv("HQ_DB_PATH") or pathlib.Path(__file__).parent / "hq.db")
 
 def _load_seed():
     p = _find_file("shared/seed.json", "seed.json")

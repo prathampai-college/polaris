@@ -6,7 +6,7 @@ console.log('=== Watchdog + Triage Verify ===');
 
 // 1. overdue sortie -> marked + auto SOS
 const sid = 'SORTIE-VF-' + Date.now().toString(36).toUpperCase();
-let res = await fetch(`${HQ}/sorties`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: sid, station_id: 'ST-BHARATI', lead_personnel_id: 'PER-BHA-01', destination: 'Verify Ridge', expected_return_time: '2020-01-01T01:00:00', safety_status: 'ACTIVE' }) });
+let res = await fetch(`${HQ}/sorties`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: sid, station_id: 'ST-BHARATI', lead_personnel_id: 'PER-BHA-04', buddy_personnel_id: 'PER-BHA-05', destination: 'Verify Ridge', expected_return_time: '2020-01-01T01:00:00', safety_status: 'ACTIVE' }) });
 if (!res.ok) throw new Error('sortie create failed');
 let chk = await fetch(`${HQ}/sorties/check-overdue`, { method: 'POST' }).then(j);
 if (!chk.marked_overdue?.includes(sid)) throw new Error('watchdog did not mark OVERDUE');

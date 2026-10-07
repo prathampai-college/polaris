@@ -198,6 +198,8 @@ export function recordTx(db: Sqlite, ctx: Ctx, o: { assetId: string; type: TxTyp
     if (!asset) throw new Error(`Asset ${o.assetId} not found`);
     const ts = now();
     const vc = { ...(safeJson(asset.vector_clock)), [ctx.deviceId]: (safeJson(asset.vector_clock)[ctx.deviceId] ?? 0) + 1 };
+    // Frames carry `delta` so HQ adds rather than overwrites: two tablets consuming
+    // from the same lot offline must both count (absolute qty would lose one).
     const lotFrames: Row[] = [];
 
     if (delta < 0) {
@@ -219,7 +221,7 @@ export function recordTx(db: Sqlite, ctx: Ctx, o: { assetId: string; type: TxTyp
         if (!gate(l)) continue;
         const take = Math.min(Number(l.qty), need);
         run(db, 'UPDATE lots SET qty=qty-? WHERE id=?', [take, l.id]);
-        lotFrames.push({ id: l.id, patch: { asset_sku: asset.sku, lot_code: l.lot_code, qty: Number(l.qty) - take } });
+        lotFrames.push({ id: l.id, patch: { asset_sku: asset.sku, lot_code: l.lot_code, qty: Number(l.qty) - take, delta: -take } });
         need -= take;
       }
     } else if (o.type === 'ADJUST') {
@@ -227,7 +229,7 @@ export function recordTx(db: Sqlite, ctx: Ctx, o: { assetId: string; type: TxTyp
       const lotId = ensureOpeningLot(db, asset);
       run(db, 'UPDATE lots SET qty=qty+? WHERE id=?', [delta, lotId]);
       const l = one(db, 'SELECT * FROM lots WHERE id=?', [lotId])!;
-      lotFrames.push({ id: lotId, patch: { asset_sku: asset.sku, lot_code: l.lot_code, qty: l.qty } });
+      lotFrames.push({ id: lotId, patch: { asset_sku: asset.sku, lot_code: l.lot_code, qty: l.qty, delta } });
     } else {
       const lotId = ulid();
       const lotCode = `${asset.sku}-L-${lotId.slice(-6)}`;
@@ -240,7 +242,7 @@ export function recordTx(db: Sqlite, ctx: Ctx, o: { assetId: string; type: TxTyp
     const version = Number(asset.version ?? 1) + 1;
     run(db, 'UPDATE assets SET qty=?, version=?, updated_at=?, vector_clock=? WHERE id=?', [newQty, version, ts, JSON.stringify(vc), o.assetId]);
     for (const f of lotFrames) queue(db, ctx, { entity: 'lots', entityId: f.id, op: 'UPSERT', patch: f.patch });
-    const obx = queue(db, ctx, { entity: 'assets', entityId: o.assetId, op: o.type, patch: { qty: newQty, version, updated_at: ts }, baseVersion: asset.version, vc });
+    const obx = queue(db, ctx, { entity: 'assets', entityId: o.assetId, op: o.type, patch: { qty: newQty, delta, version, updated_at: ts }, baseVersion: asset.version, vc });
     run(db, 'INSERT INTO transactions (id, asset_id, type, qty_delta, actor_id, ts, sync_status, outbox_ulid, drill) VALUES (?,?,?,?,?,?,?,?,?)',
       [ulid(), o.assetId, o.type, delta, ctx.actorId, ts, 'PENDING', obx, ctx.drill ? 1 : 0]);
     audit(db, ctx, o.overrideExpired ? `${o.type}_OVERRIDE_EXPIRED` : o.type, 'assets', { qty: asset.qty }, { qty: newQty, delta, reason: o.reason ?? null });
@@ -528,12 +530,13 @@ function applyAssetDown(db: Sqlite, id: string, patch: Row): boolean {
 
 export const RESEND_AFTER_MS = 15_000;
 
+// SOS first: an emergency must never wait behind a stock-movement backlog.
 export function nextFrames(db: Sqlite, limit: number) {
   const t = now();
   const stale = new Date(Date.now() - RESEND_AFTER_MS).toISOString();
   return db.selectObjects(
     `SELECT * FROM outbox WHERE (status IN ('PENDING','BUNDLED') OR (status='SENT' AND sent_at < ?))
-     AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at LIMIT ?`, [stale, t, limit],
+     AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY (entity='emergencies') DESC, created_at LIMIT ?`, [stale, t, limit],
   ).map((r): Row => ({ ...r, patch: safeDecode(r.patch) ?? {} }));
 }
 
@@ -567,7 +570,7 @@ export function applyAck(db: Sqlite, a: { ulid: string; status: string; message?
 
 /** Offline: take DTN custody of every unsent row. Bundle id == outbox ULID so HQ dedupes across channels. */
 export function bundleOffline(db: Sqlite, stationId: string): Row[] {
-  const rows = db.selectObjects("SELECT * FROM outbox WHERE status IN ('PENDING','SENT') ORDER BY created_at LIMIT 50");
+  const rows = db.selectObjects("SELECT * FROM outbox WHERE status IN ('PENDING','SENT') ORDER BY (entity='emergencies') DESC, created_at LIMIT 50");
   const out: Row[] = [];
   for (const r of rows) {
     const bundle = {

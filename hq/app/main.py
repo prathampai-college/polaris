@@ -344,7 +344,7 @@ async def patch_indent(indent_id: str, body: IndentPatch, user: dict = Depends(r
             cur.execute(q("UPDATE indents SET status=?, vessel_imo=? WHERE id=?"), (body.status, body.vessel_imo, indent_id))
         else:
             cur.execute(q("UPDATE indents SET status=? WHERE id=?"), (body.status, indent_id))
-        write_audit(cur, indent_id+body.status, body.actor_id, f"INDENT_{body.status}", "indents", str({"status":cur_status}), str({"status":body.status, "vessel_imo": body.vessel_imo}), now)
+        write_audit(cur, f"{indent_id}-{body.status}-{now}", body.actor_id, f"INDENT_{body.status}", "indents", str({"status":cur_status}), str({"status":body.status, "vessel_imo": body.vessel_imo}), now)
     notify_gateway(station_id, "indents", indent_id, "STATUS_CHANGE", {
         "id": indent_id,
         "status": body.status,
@@ -1247,7 +1247,7 @@ def list_overrides(station_id: str | None = None, limit: int = 50):
 @app.post("/sorties/check-overdue")
 def check_overdue():
     now = utc_now()
-    rows = _fetch_all("SELECT id, station_id, lead_personnel_id, destination, expected_return_time FROM field_sorties WHERE safety_status='ACTIVE'")
+    rows = _fetch_all("SELECT id, station_id, lead_personnel_id, destination, expected_return_time FROM field_sorties WHERE safety_status IN ('ACTIVE','OVERDUE')")
     marked: list = []
     auto_sos: list = []
     for r in rows:
@@ -1264,16 +1264,21 @@ def check_overdue():
             continue
         if late_min <= 0:
             continue
+        # OVERDUE rows stay in the scan so the 30-min auto-SOS still fires on a
+        # later tick; only the ACTIVE->OVERDUE flip is audited.
         with _sync_txn() as cur2:
-            cur2.execute(q("UPDATE field_sorties SET safety_status='OVERDUE' WHERE id=? AND safety_status='ACTIVE'"), (r["id"],))
-            write_audit(cur2, r["id"][:8], "AUTO-WATCHDOG", "SORTIE_OVERDUE", "field_sorties", "ACTIVE", "OVERDUE", now)
-        marked.append(r["id"])
+            flipped = cur2.execute(q("UPDATE field_sorties SET safety_status='OVERDUE' WHERE id=? AND safety_status='ACTIVE'"), (r["id"],)).rowcount
+            if flipped:
+                write_audit(cur2, f"OVD-{r['id']}", "AUTO-WATCHDOG", "SORTIE_OVERDUE", "field_sorties", "ACTIVE", "OVERDUE", now)
+        if flipped:
+            marked.append(r["id"])
         if late_min >= 30:
             em_id = f"SOS-{r['id'][-8:]}"
             ex = _fetch_one("SELECT id FROM emergencies WHERE id=?", (em_id,))
             if not ex:
                 with _sync_txn() as cur3:
                     cur3.execute(q("INSERT INTO emergencies (id, station_id, type, reported_by, status, ts, location_coord, sortie_id, status_entered_ts) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (em_id, r["station_id"], "SOS_WHITEOUT", "AUTO-WATCHDOG", "ACTIVE", now, r["destination"], r["id"], now))
+                    cur3.execute(q("UPDATE field_sorties SET safety_status='EMERGENCY' WHERE id=?"), (r["id"],))
                 auto_sos.append(em_id)
                 notify_gateway(r["station_id"], "emergencies", em_id, "STATUS_CHANGE", {"id": em_id, "type": "SOS_WHITEOUT", "sortie_id": r["id"]})
     return {"marked_overdue": marked, "auto_sos": auto_sos, "checked_at": now}
@@ -1305,7 +1310,7 @@ def check_triage_sla():
                 if elapsed > due:
                     bid = f"BR-{em['id']}-{cur}"
                     with _sync_txn() as cur2:
-                        write_audit(cur2, bid[:8] + cur[:3], "AUTO-WATCHDOG", "TRIAGE_SLA_BREACH", "emergencies", cur, to_status, now)
+                        write_audit(cur2, bid, "AUTO-WATCHDOG", "TRIAGE_SLA_BREACH", "emergencies", cur, to_status, now)
             except Exception:
                 continue
     except Exception as e:

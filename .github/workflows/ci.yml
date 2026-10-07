@@ -93,6 +93,11 @@ jobs:
       - run: node scripts/m3_verify.mjs
       - run: node scripts/m4_verify.mjs
       - run: node scripts/m5_verify.mjs
+      - name: watchdog + triage verify (live HQ)
+        run: |
+          python -m uvicorn hq.app.main:app --port 8000 &
+          for i in $(seq 1 30); do curl -sf localhost:8000/health && break; sleep 1; done
+          node scripts/watchdog_verify.mjs
 
   docker:
     runs-on: ubuntu-latest
