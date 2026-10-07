@@ -12,6 +12,36 @@ import { Segmented, Toggle } from '../../../components/ui/field';
 import { ago, cn } from '../../../lib/utils';
 import { LINK, LinkPanel, DtnPanel, type Bundle, type Tone } from './panels';
 
+const RATES = [
+  { value: '0', label: 'Full' }, { value: '50', label: '50k' }, { value: '20', label: '20k' }, { value: '9.6', label: '9.6k' }, { value: '2.4', label: '2.4k' },
+];
+const LOSSES = [{ value: '0', label: '0%' }, { value: '5', label: '5%' }, { value: '20', label: '20%' }];
+
+/** Drill: shape this tablet's uplink like a polar satellite link and watch the
+ *  ledger drain, frames resend after loss, and HQ still converge. */
+function LinkSimulator() {
+  const { sync, toast } = useField();
+  const sim = sync.sim;
+  const set = async (kbps: number, loss: number) => {
+    try { await db.simulateLink(kbps, loss); } catch (e) { toast((e as Error).message, 'alert'); }
+  };
+  const drainS = sim?.kbps ? Math.ceil(sim.queuedBytes / (sim.kbps * 125)) : null;
+  return (
+    <div className="space-y-2 border-t border-structure pt-3">
+      <div className="font-medium text-ink">Link simulator</div>
+      <Segmented label="Uplink bandwidth (kbps)" value={String(sim?.kbps ?? 0)} onChange={(v) => set(Number(v), sim?.lossPct ?? 0)} options={RATES} />
+      <Segmented label="Packet loss" value={String(sim?.lossPct ?? 0)} onChange={(v) => set(sim?.kbps ?? 0, Number(v))} options={LOSSES} />
+      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-xs text-slate" aria-live="polite">
+        <dt>Sent</dt><dd className="text-ink">{((sim?.sentBytes ?? 0) / 1024).toFixed(1)} KB</dd>
+        <dt>Lost in transit</dt><dd className="text-ink">{sim?.dropped ?? 0} frames (resent)</dd>
+        <dt>Queue</dt><dd className="text-ink">{((sim?.queuedBytes ?? 0) / 1024).toFixed(1)} KB</dd>
+        <dt>Drain at this rate</dt><dd className="text-ink">{drainS == null ? '—' : drainS < 90 ? `~${drainS} s` : `~${Math.ceil(drainS / 60)} min`}</dd>
+      </dl>
+      <p className="text-xs text-slate">Shapes frames this tablet sends. SOS still goes first. Simulated, this tablet only.</p>
+    </div>
+  );
+}
+
 type Frame = {
   ulid: string; entity: string; entity_id: string; op: string; status: 'PENDING' | 'SENT' | 'BUNDLED' | 'FAILED' | 'ACKED';
   retry_count: number; created_at: string; last_error: string | null; patch: Record<string, unknown> | null;
@@ -221,6 +251,7 @@ export default function CommsPage() {
               <CardHeader eyebrow="Drill" />
               <CardContent className="space-y-2">
                 <Toggle checked={sync.link === 'cut'} onChange={cut} label="Cut satellite link" description="Simulated on this tablet only — the gateway and HQ keep running. Watch changes move to DTN custody." />
+                <LinkSimulator />
               </CardContent>
             </Card>
           )}

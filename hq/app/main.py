@@ -1207,29 +1207,41 @@ def expedition_cost(expedition_id: str):
     total = leg_cost + manifest_cost
     return {"expedition_id": expedition_id, "program": ex["program"], "legs": len(legs), "leg_cost_inr": round(leg_cost, 2), "manifest_weight_kg": round(total_w, 2), "manifest_cost_inr": round(manifest_cost, 2), "total_inr": round(total, 2), "cost_source": "freight_rates base_cost + weight*cost_per_kg"}
 
+# ponytail: payload per container type from ISO 668 20ft norms; add a capacity
+# column to `containers` when real per-unit tare/payload figures exist.
+CONTAINER_PAYLOAD_KG = {"ISO_20ft": 28000.0, "ColdStore": 27000.0, "Hazmat": 28000.0}
+
 @app.post("/expeditions/{expedition_id}/auto-pack")
 def auto_pack(expedition_id: str):
+    """First-fit decreasing by weight. COLD needs ColdStore and HAZMAT needs
+    Hazmat (never a fallback, that's a safety breach); ambient goes in a general
+    ISO box. Weight already assigned to a container counts against it."""
     rows = _fetch_all("SELECT * FROM manifests WHERE expedition_id=? AND (container_id IS NULL OR container_id='')", (expedition_id,))
     conts = _fetch_all("SELECT c.id, c.station_id, c.type FROM containers c ORDER BY c.id")
+    used = {r["container_id"]: float(r["kg"] or 0) for r in _fetch_all("SELECT container_id, SUM(COALESCE(weight_kg,0)) kg FROM manifests WHERE container_id IS NOT NULL AND container_id<>'' GROUP BY container_id")}
+    free = {c["id"]: CONTAINER_PAYLOAD_KG.get(c["type"], 28000.0) - used.get(c["id"], 0.0) for c in conts}
     placements: list = []
     warnings: list = []
-    pool: dict = {}
-    for c in conts:
-        pool.setdefault(c["station_id"], []).append(c)
-    for m in rows:
-        dest = m["destination_station"]
+    kg = lambda m: float(m["weight_kg"] or 0)  # line total, as in /cost
+    for m in sorted(rows, key=kg, reverse=True):
         want = "ColdStore" if m["temp_zone"] == "COLD" else ("Hazmat" if (m["temp_zone"] == "HAZMAT" or m["hazmat_class"]) else "ISO_20ft")
-        cands = [c for c in pool.get(dest, []) if c["type"] == want] or [c for c in pool.get(dest, [])]
+        cands = [c for c in conts if c["station_id"] == m["destination_station"] and c["type"] == want]
         if not cands:
-            warnings.append(f"{m['labelling_code']}: no {want} container at {dest}")
+            warnings.append(f"{m['labelling_code']}: no {want} container at {m['destination_station']}")
             continue
-        chosen = cands[0]
-        if m["temp_zone"] == "COLD" and chosen["type"] != "ColdStore":
-            warnings.append(f"{m['labelling_code']}: cold item without ColdStore at {dest}")
+        chosen = next((c for c in cands if free[c["id"]] >= kg(m)), None)
+        if not chosen:
+            warnings.append(f"{m['labelling_code']}: {kg(m):.0f} kg does not fit any {want} at {m['destination_station']} (max free {max(free[c['id']] for c in cands):.0f} kg)")
+            continue
+        free[chosen["id"]] -= kg(m)
+        placements.append({"manifest_id": m["id"], "labelling_code": m["labelling_code"], "container_id": chosen["id"], "kg": kg(m)})
+    if placements:
         with _sync_txn() as cur:
-            cur.execute(q("UPDATE manifests SET container_id=? WHERE id=?"), (chosen["id"], m["id"]))
-        placements.append({"manifest_id": m["id"], "labelling_code": m["labelling_code"], "container_id": chosen["id"]})
-    return {"placements": placements, "warnings": warnings, "count": len(placements)}
+            for p in placements:
+                cur.execute(q("UPDATE manifests SET container_id=? WHERE id=?"), (p["container_id"], p["manifest_id"]))
+    touched = {p["container_id"] for p in placements}
+    utilisation = {cid: round(100 * (1 - free[cid] / CONTAINER_PAYLOAD_KG.get(next(c["type"] for c in conts if c["id"] == cid), 28000.0)), 1) for cid in touched}
+    return {"placements": placements, "warnings": warnings, "count": len(placements), "utilisation_pct": utilisation}
 
 @app.get("/expeditions/{expedition_id}/readiness")
 def expedition_readiness(expedition_id: str):
@@ -1561,6 +1573,41 @@ def ingest(frame: DeltaFrame, request: Request):
     if notify:
         notify_gateway(*notify)
     return ack
+
+@app.get("/stations/link-health")
+def stations_link_health():
+    """Is each station reachable, and how is it talking to us? Merges the
+    gateway's live view (tablets connected, last frame) with DTN arrivals."""
+    import datetime as _dt, httpx
+    gw, gw_ok = {}, False
+    try:
+        r = httpx.get(f"{GATEWAY_INTERNAL_URL}/internal/status", headers={"X-PSK": os.getenv("INTERNAL_PSK_HEX") or os.getenv("PSK_HEX") or "a" * 64}, timeout=2.0)
+        gw, gw_ok = (r.json().get("stations") or {}), r.is_success
+    except Exception as e:
+        logger.info(f"link-health: gateway unreachable: {e}")
+    now = _dt.datetime.now(_dt.timezone.utc)
+    since = (now - _dt.timedelta(hours=24)).isoformat()
+    parse = lambda t: _dt.datetime.fromisoformat(str(t).replace("Z", "+00:00")).replace(tzinfo=_dt.timezone.utc) if t else None
+    out = []
+    for st in _fetch_all("SELECT id, name FROM stations ORDER BY id"):
+        g = gw.get(st["id"]) or {}
+        dtn = _fetch_one("SELECT COUNT(*) n, MAX(created_at) last FROM dtn_bundles WHERE dst_station=? AND created_at>=?", (st["id"], since)) or {}
+        last_dtn = (_fetch_one("SELECT MAX(created_at) last FROM dtn_bundles WHERE dst_station=?", (st["id"],)) or {}).get("last")
+        contacts = [t for t in (parse(g.get("lastFrameAt")), parse(g.get("lastSeenAt")), parse(last_dtn)) if t]
+        last_contact = max(contacts) if contacts else None
+        quiet = round((now - last_contact).total_seconds() / 60) if last_contact else None
+        if g.get("tablets"):
+            status = "LIVE"
+        elif quiet is not None and quiet < 60:
+            status = "STORE_FWD" if last_dtn and parse(last_dtn) == last_contact else "QUIET"
+        else:
+            status = "SILENT" if gw_ok or last_contact else "UNKNOWN"
+        out.append({"station_id": st["id"], "name": st["name"], "status": status, "tablets_connected": g.get("tablets", 0),
+                    "last_frame_at": g.get("lastFrameAt"), "frames_since_gateway_start": g.get("frames", 0),
+                    "dtn_bundles_24h": dtn.get("n", 0), "last_dtn_at": last_dtn,
+                    "last_contact_at": last_contact.isoformat() if last_contact else None, "quiet_minutes": quiet,
+                    "open_sos": (_fetch_one("SELECT COUNT(*) n FROM emergencies WHERE station_id=? AND status<>'RESOLVED'", (st["id"],)) or {}).get("n", 0)})
+    return {"gateway_reachable": gw_ok, "stations": out, "checked_at": now.isoformat()}
 
 @app.get("/sync/changes")
 def sync_changes(station_id: str, since: int = 0, limit: int = 500):

@@ -76,7 +76,7 @@ export default function MusterPage() {
   const station = session!.stationId;
   const personnel = useLiveQuery(() => db.listPersonnel(), ['personnel'], [station]).data;
   const sorties = useLiveQuery(() => db.listSorties(), ['field_sorties', 'personnel'], [station]).data;
-  const emergencies = useLiveQuery(() => db.listEmergencies(), ['emergencies', 'personnel'], [station]).data;
+  const emergencies = useLiveQuery(() => db.listEmergencies(), ['emergencies', 'personnel', 'outbox'], [station]).data;
 
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 30_000); return () => clearInterval(t); }, []);
@@ -213,6 +213,14 @@ function EmergencyCard({ e, now, responders, sortie }: { e: Row; now: number; re
           <div className="min-w-0">
             <div className="font-display text-2xl leading-tight text-ink">{label}</div>
             <div className="text-sm text-slate">{e.location_coord ?? '—'}{sortie ? ` · sortie to ${sortie.destination ?? 'unrecorded destination'}` : ''}</div>
+            {/* Did HQ actually get it? The person who raised it needs to know whether to keep trying other channels. */}
+            <div role="status" className={cn('mt-1 font-mono text-xs font-semibold', Number(e.hq_pending) > 0 ? 'text-flare' : 'text-cobalt')}>
+              {Number(e.hq_pending) > 0
+                ? 'NOT YET AT HQ — queued; goes out on the next link or DTN hand-off'
+                : e.hq_received_at
+                  ? `HQ RECEIVED ${ago(e.hq_received_at, now)}`
+                  : 'RAISED BY HQ'}
+            </div>
           </div>
           <Badge variant="critical"><Siren size={12} aria-hidden />{e.status}</Badge>
         </div>

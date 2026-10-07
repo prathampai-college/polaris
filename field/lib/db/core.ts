@@ -160,7 +160,10 @@ export const queries = {
      LEFT JOIN personnel l ON l.id=s.lead_personnel_id LEFT JOIN personnel b ON b.id=s.buddy_personnel_id
      WHERE s.station_id=? ORDER BY s.departure_time DESC LIMIT 50`, [ctx.stationId]),
   listEmergencies: (db: Sqlite, ctx: Ctx) => db.selectObjects(
-    `SELECT e.*, p.name AS assignee_name FROM emergencies e LEFT JOIN personnel p ON p.id=e.assignee
+    `SELECT e.*, p.name AS assignee_name,
+       (SELECT MIN(o.acked_at) FROM outbox o WHERE o.entity='emergencies' AND o.entity_id=e.id AND o.status='ACKED') AS hq_received_at,
+       (SELECT COUNT(*) FROM outbox o WHERE o.entity='emergencies' AND o.entity_id=e.id AND o.status IN ('PENDING','SENT','BUNDLED')) AS hq_pending
+     FROM emergencies e LEFT JOIN personnel p ON p.id=e.assignee
      WHERE e.station_id=? ORDER BY e.status='RESOLVED', e.ts DESC LIMIT 50`, [ctx.stationId]),
   listExpeditions: (db: Sqlite, _ctx: Ctx) => db.selectObjects('SELECT * FROM expeditions ORDER BY season DESC, name'),
   listManifests: (db: Sqlite, ctx: Ctx) => db.selectObjects(

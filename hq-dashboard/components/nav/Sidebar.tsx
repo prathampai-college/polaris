@@ -1,12 +1,13 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Activity, Box, Boxes, FileClock, FileText, Grid2x2, Map, ScrollText, Thermometer, Users } from 'lucide-react';
+import { Activity, Box, Boxes, FileClock, FileText, Grid2x2, Map, Radio, ScrollText, Thermometer, Users } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 const NAV = [
   { href: '/', label: 'Fleet Overview', desc: '3 polar stations', Icon: Grid2x2 },
   { href: '/command', label: 'Command Timeline', desc: 'Cross-station events', Icon: ScrollText },
+  { href: '/link-health', label: 'Link Health', desc: 'Who HQ can hear', Icon: Radio },
   { href: '/expeditions', label: 'Expedition Planner', desc: 'ISEA + Himadri programs', Icon: FileText },
   { href: '/forecast', label: 'Thermo AI Forecast', desc: 'Physics + ML model', Icon: Thermometer },
   { href: '/personnel', label: 'Personnel & Safety', desc: 'Roster, sorties, SOS', Icon: Users },

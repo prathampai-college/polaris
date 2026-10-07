@@ -128,3 +128,19 @@ def test_watchdog_escalates_on_later_tick():
     # third tick: sortie is now EMERGENCY, nothing new raised
     r = client.post("/sorties/check-overdue").json()
     assert not any(s.endswith("SORTIE-WD-02"[-8:]) for s in r["auto_sos"])
+
+
+def test_auto_pack_respects_capacity_and_zones():
+    eid = client.post("/expeditions", json={"program": "ANTARCTIC", "name": "pack test"}).json()["id"]
+    def man(desc, kg, zone="AMBIENT", hz=None):
+        return client.post(f"/expeditions/{eid}/manifests", json={"destination_station": "ST-MAITRI", "description": desc, "qty": 1, "unit": "pcs", "weight_kg": kg, "temp_zone": zone, "hazmat_class": hz}).json()["labelling_code"]
+    big, mid, small = man("genset", 20000), man("fuel bladder", 9000), man("spares", 500)
+    cold = man("vaccines", 40, "COLD")
+    hz = man("solvent", 200, "HAZMAT", "3")  # Maitri has no Hazmat container
+    r = client.post(f"/expeditions/{eid}/auto-pack").json()
+    placed = {p["labelling_code"]: p["container_id"] for p in r["placements"]}
+    assert placed[big] == "C4" and placed[small] == "C4", r   # 20.5 t fits the 28 t ISO box
+    assert mid not in placed, "9 t on top of 20.5 t must not overfill C4"
+    assert placed[cold] == "C5", "cold goes to the ColdStore, never a general box"
+    assert hz not in placed and any("Hazmat" in w for w in r["warnings"])
+    assert r["utilisation_pct"]["C4"] <= 100

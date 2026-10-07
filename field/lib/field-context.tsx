@@ -47,7 +47,7 @@ export function FieldProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [prefs, setPrefsState] = useState<Prefs>(DEFAULT_PREFS);
   const [storage, setStorage] = useState<Storage>({ state: 'booting' });
-  const [sync, setSync] = useState<SyncInfo>({ link: 'offline', devKey: true, keyFp: null, lastError: null, lastPushAt: null });
+  const [sync, setSync] = useState<SyncInfo>({ link: 'offline', devKey: true, keyFp: null, lastError: null, lastPushAt: null, sim: { kbps: 0, lossPct: 0, sentBytes: 0, dropped: 0, queuedBytes: 0 } });
   const [urls, setUrls] = useState<Urls | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [assetId, openAsset] = useState<string | null>(null);

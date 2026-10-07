@@ -58,6 +58,16 @@ interface ClientMeta {
 }
 
 const clients = new Map<WebSocket, ClientMeta>();
+// Per-station link view for HQ's health board (in memory: resets on restart).
+const stationSeen = new Map<string, { lastSeenAt: string; lastFrameAt: string | null; frames: number }>();
+function touchStation(stationId: string | undefined, frame: boolean) {
+  if (!stationId) return;
+  const now = new Date().toISOString();
+  const s = stationSeen.get(stationId) ?? { lastSeenAt: now, lastFrameAt: null, frames: 0 };
+  s.lastSeenAt = now;
+  if (frame) { s.lastFrameAt = now; s.frames++; }
+  stationSeen.set(stationId, s);
+}
 
 function broadcastDownstream(delta: DownstreamDeltaFrame): number {
   const wire = toWire(delta, PSK_HEX);
@@ -104,6 +114,18 @@ const server = http.createServer(async (req, res) => {
       ts: new Date().toISOString(),
     }));
     return;
+  }
+
+  if (req.method === 'GET' && req.url === '/internal/status') {
+    if (!pskOk(req)) return sendJson(res, 401, { error: 'invalid psk' });
+    const stations: Record<string, unknown> = {};
+    for (const [id, s] of stationSeen) stations[id] = { ...s, tablets: 0 };
+    for (const m of clients.values()) {
+      if (!m.stationId) continue;
+      const s = (stations[m.stationId] ??= { lastSeenAt: null, lastFrameAt: null, frames: 0, tablets: 0 }) as { tablets: number };
+      s.tablets++;
+    }
+    return sendJson(res, 200, { stations, ts: new Date().toISOString() });
   }
 
   // DTN exchange: a mule device posts bundles it carried in. Authenticated —
@@ -239,6 +261,7 @@ wss.on('connection', (ws: WebSocket) => {
       if (meta) {
         meta.deviceId = initFrame.device_id;
         meta.stationId = initFrame.station_id;
+        touchStation(initFrame.station_id, false);
       }
       log('info', 'sync init handshake', { device: initFrame.device_id, station: initFrame.station_id });
 
@@ -327,6 +350,7 @@ const interval = setInterval(() => {
 wss.on('close', () => clearInterval(interval));
 
 async function forward(ws: WebSocket, f: Record<string, unknown>, t0: number) {
+  touchStation(clients.get(ws)?.stationId, true);
   let status: number | null = null;
   let body: Record<string, unknown> = {};
   try {

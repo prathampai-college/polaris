@@ -33,7 +33,23 @@ export function SosSheet() {
     return out;
   }, [sorties, map]);
 
-  const reset = () => { setType(null); setLocation(''); setSortieId(null); };
+  const reset = () => { setType(null); setLocation(''); setSortieId(null); setGps(null); };
+  const [gps, setGps] = useState<string | null>(null);
+
+  // A GPS fix beats any description for a rescue team. Needs a secure context and
+  // sky view; whiteout or indoors may time out, so it never blocks transmitting.
+  function takeGpsFix() {
+    if (!('geolocation' in navigator)) { setGps('GPS not available on this device'); return; }
+    setGps('Getting GPS fix…');
+    navigator.geolocation.getCurrentPosition(
+      ({ coords: c }) => {
+        const label = `GPS ${Math.abs(c.latitude).toFixed(5)}°${c.latitude < 0 ? 'S' : 'N'} ${Math.abs(c.longitude).toFixed(5)}°${c.longitude < 0 ? 'W' : 'E'} ±${Math.round(c.accuracy)} m`;
+        setLocation(label); setSortieId(null); setGps(null);
+      },
+      (err) => setGps(`No GPS fix (${err.message || 'denied'}) — pick a place or describe it`),
+      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 60_000 },
+    );
+  }
 
   async function transmit() {
     if (!type || !location.trim()) return;
@@ -78,6 +94,10 @@ export function SosSheet() {
           <div>
             <div className="eyebrow mb-2">2 · Where</div>
             <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={takeGpsFix}
+                className={cn('min-h-tap border border-cobalt px-3 font-mono text-sm font-semibold', location.startsWith('GPS ') ? 'bg-cobalt text-white' : 'bg-surface text-cobalt')}>
+                {location.startsWith('GPS ') ? location : 'Use GPS fix'}
+              </button>
               {places.map((p) => (
                 <button key={p.label} type="button" onClick={() => { setLocation(p.label); setSortieId(p.sortieId ?? null); }}
                   className={cn('min-h-tap border border-structure px-3 text-left text-sm', location === p.label ? 'bg-ink text-canvas' : 'bg-surface text-ink hover:border-cobalt')}>
@@ -89,8 +109,9 @@ export function SosSheet() {
                 {UNKNOWN}
               </button>
             </div>
+            {gps && <p role="status" className="mt-2 text-sm text-slate">{gps}</p>}
             <Field label="Or describe it" className="mt-3" hint="Landmark, bearing/distance from base, grid ref…">
-              {(id) => <Input id={id} value={location === UNKNOWN || places.some((p) => p.label === location) ? '' : location} onChange={(e) => { setLocation(e.target.value); setSortieId(null); }} placeholder="e.g. 2 km NE of Bharati, near fuel farm" />}
+              {(id) => <Input id={id} value={location === UNKNOWN || location.startsWith('GPS ') || places.some((p) => p.label === location) ? '' : location} onChange={(e) => { setLocation(e.target.value); setSortieId(null); }} placeholder="e.g. 2 km NE of Bharati, near fuel farm" />}
             </Field>
           </div>
 

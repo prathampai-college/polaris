@@ -84,3 +84,18 @@ def test_dtn_expired_bundle():
     }
     r = client.post("/dtn/ingest_bulk", json={"bundles": [bundle]})
     assert r.json()["results"][0]["status"] == "EXPIRED"
+
+
+def test_link_health_reports_store_and_forward():
+    import datetime as dt
+    from ulid import ULID
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    b = {"bundleId": str(ULID()), "src": "TAB-LH", "dstStation": "ST-HIMADRI", "ttlSec": 86400, "createdAt": now, "custody": True,
+         "payload": {"entity": "personnel", "entity_id": "PER-HIM-01", "op": "UPSERT", "patch": {"status": "ON_STATION"}}}
+    from fastapi.testclient import TestClient
+    from hq.app.main import app
+    c = TestClient(app)
+    c.post("/dtn/ingest_bulk", json={"bundles": [b]})
+    h = c.get("/stations/link-health").json()
+    him = next(s for s in h["stations"] if s["station_id"] == "ST-HIMADRI")
+    assert him["dtn_bundles_24h"] >= 1 and him["status"] == "STORE_FWD", him

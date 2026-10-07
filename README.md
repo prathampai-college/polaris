@@ -15,11 +15,12 @@
 
 | Need | How POLARIS handles it |
 |------|------------------------|
-| **Expedition planning** | ANTARCTIC and ARCTIC expeditions, voyage legs (route, dates and vessel overlap validated), manifest import, auto-pack stowage, readiness and cost (HQ dashboard + API). |
+| **Expedition planning** | ANTARCTIC and ARCTIC expeditions, voyage legs (route, dates and vessel overlap validated), manifest import, weight-aware auto-pack (first-fit decreasing; cold and hazmat never fall back to a general box), readiness and cost (HQ dashboard + API). |
 | **Cargo tracking** | Manifest custody GOA → MUMBAI → CAPETOWN → VESSEL → STATION → CRATE, with customs and biosecurity gates at HQ. The tablet's Cargo screen advances stages and prints QR labels. |
 | **Inventory** | Lot-level stock with earliest-expiry-first (FEFO) consumption on the tablet. Expired stock is blocked for CONSUME unless a station lead overrides it. Bulk CSV import at HQ. |
+| **Link health** | The HQ dashboard shows which stations HQ can hear right now: live tablets, last contact, DTN arrivals, and open SOS at stations that are not reachable live. In drill mode the tablet's Comms screen can shape its uplink (50 → 2.4 kbps, packet loss) to show the ledger draining over a polar link. |
 | **Personnel movement** | Station rosters and a muster board. Sorties need a buddy; a solo sortie needs a STATION_LEAD override and is audited. The HQ watchdog flags overdue sorties and auto-raises an SOS once one is 30 minutes late. |
-| **Emergency response** | Hold-to-transmit SOS with a required location, logged on the tablet first. Triage runs ACTIVE → ACK → RESPONDING → RESOLVED, with SLA timers at HQ. Other tablets at the station are alerted when the SOS reaches HQ. |
+| **Emergency response** | Hold-to-transmit SOS with a required location (one-tap GPS fix when the device has one), logged on the tablet first and sent ahead of any queued stock traffic. The tablet shows whether HQ has received it. Triage runs ACTIVE → ACK → RESPONDING → RESOLVED, with SLA timers at HQ. Other tablets at the station are alerted when the SOS reaches HQ. |
 
 ---
 

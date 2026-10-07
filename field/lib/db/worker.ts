@@ -13,13 +13,17 @@ import {
 export const DEV_PSK = 'a'.repeat(64);
 export type Link = 'offline' | 'connecting' | 'live' | 'key_mismatch' | 'cut';
 // keyFp = last 4 hex of the provisioned key (for eyeball checks); the key itself never leaves the worker.
-export interface SyncInfo { link: Link; devKey: boolean; keyFp: string | null; lastError: string | null; lastPushAt: string | null }
+/** Drill-only link shaping: kbps 0 = unshaped. Applied to upstream frames on this tablet. */
+export interface LinkSim { kbps: number; lossPct: number; sentBytes: number; dropped: number; queuedBytes: number }
+export interface SyncInfo { link: Link; devKey: boolean; keyFp: string | null; lastError: string | null; lastPushAt: string | null; sim: LinkSim }
 
 // Typed via Worker's interface: pulling in lib.webworker clashes with the app's lib.dom.
 const scope = self as unknown as Worker;
 let db: Sqlite;
 let session: { ctx: Ctx; gatewayUrl: string } | null = null;
-const info: SyncInfo = { link: 'offline', devKey: true, keyFp: null, lastError: null, lastPushAt: null };
+const info: SyncInfo = { link: 'offline', devKey: true, keyFp: null, lastError: null, lastPushAt: null, sim: { kbps: 0, lossPct: 0, sentBytes: 0, dropped: 0, queuedBytes: 0 } };
+let simBudget = 0;
+let simLastTick = Date.now();
 const refreshKeyInfo = () => { const k = kvGet(db, 'psk'); info.devKey = k === null; info.keyFp = k ? k.slice(-4) : null; };
 
 const emit = (msg: Row) => scope.postMessage(msg);
@@ -88,6 +92,14 @@ const extra = {
     return { link: info.link };
   },
   syncNow: (_db: Sqlite, _ctx: Ctx) => { void tick(); return true; },
+  /** Drill: shape this tablet's uplink to a satellite-like bandwidth and loss. */
+  simulateLink(_db: Sqlite, _ctx: Ctx, kbps: number, lossPct: number) {
+    info.sim = { kbps: Math.max(0, kbps), lossPct: Math.min(90, Math.max(0, lossPct)), sentBytes: 0, dropped: 0, queuedBytes: info.sim.queuedBytes };
+    simBudget = 0;
+    simLastTick = Date.now();
+    emit({ type: 'sync', info: { ...info } });
+    return info.sim;
+  },
   exportBundles: (_db: Sqlite, ctx: Ctx) => exportOwnBundles(db, ctx.deviceId).map(toB64),
   importBundles(_db: Sqlite, ctx: Ctx, list: string[]) {
     let saved = 0;
@@ -247,13 +259,26 @@ async function tick() {
   try {
     if (ws && ws.readyState === WebSocket.OPEN && info.link === 'live') {
       const rows = nextFrames(db, BATCH);
+      // Link simulator: refill a byte budget at kbps; a frame that doesn't fit waits for the next tick.
+      const t = Date.now();
+      simBudget = info.sim.kbps ? Math.min(simBudget + info.sim.kbps * 125 * ((t - simLastTick) / 1000), info.sim.kbps * 125 * 4) : Infinity;
+      simLastTick = t;
       for (const r of rows) {
         const frame: Row = { ulid: r.ulid, device_id: r.device_id, entity: r.entity, entity_id: r.entity_id, op: r.op, patch: r.patch, base_version: Number(r.base_version ?? 0), ts: r.created_at };
         if (r.vector_clock) frame.vector_clock = JSON.parse(r.vector_clock);
         const wire = await toWire(frame, psk());
         if (wire.length > MAX_WIRE_SIZE) { applyAck(db, { ulid: r.ulid, status: 'FAILED', message: `frame ${wire.length}B exceeds ${MAX_WIRE_SIZE}B link budget` }); continue; }
-        ws.send(wire);
+        if (wire.length > simBudget) break;
+        simBudget -= wire.length;
+        // simulated loss: the frame "left" but never arrives; the 15 s resend recovers it
+        if (info.sim.lossPct && Math.random() * 100 < info.sim.lossPct) info.sim.dropped++;
+        else ws.send(wire);
+        info.sim.sentBytes += wire.length;
         markSent(db, r.ulid);
+      }
+      if (info.sim.kbps) {
+        info.sim.queuedBytes = Number(db.selectValue("SELECT COALESCE(SUM(LENGTH(patch)) + COUNT(*) * 120, 0) FROM outbox WHERE status IN ('PENDING','SENT','BUNDLED')"));
+        emit({ type: 'sync', info: { ...info } });
       }
       if (rows.length) changed('outbox');
       const inFlight = Number(db.selectValue("SELECT COUNT(*) FROM outbox WHERE status='SENT'"));
