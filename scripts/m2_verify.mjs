@@ -12,7 +12,7 @@ import { PSK_HEX, toWire, fromWire, cleanDbs, waitForHQ, spawnHQ, spawnGateway, 
 const HQ_PORT=8766;
 const GW_PORT=8788;
 const FIELD_DB = path.join(os.tmpdir(), 'polaris-field-m2.db');
-const HQ_DB = path.resolve('hq/app/hq.db');
+const HQ_DB = path.join(os.tmpdir(), 'polaris-m2-hq.db'); // never touch the dev hq/app/hq.db
 cleanDbs([FIELD_DB, HQ_DB, HQ_DB+'-wal', HQ_DB+'-shm']);
 const schema=fs.readFileSync('shared/sql/schema.sql','utf8');
 console.log('=== M2 VERIFY: Core Logistics ===');
@@ -117,7 +117,7 @@ console.log('   indent exists?', !!fd2.prepare('SELECT 1 FROM indents WHERE id=?
 fd2.close();
 
 console.log('\n4) Start HQ + Gateway, drain outbox over ws (msgpack+CRC+AES)...');
-const hqProc=spawnHQ(HQ_PORT, { GATEWAY_URL:`http://localhost:${GW_PORT}`, GATEWAY_INTERNAL_URL:`http://localhost:${GW_PORT}` });
+const hqProc=spawnHQ(HQ_PORT, { HQ_DB_PATH: HQ_DB, GATEWAY_URL:`http://localhost:${GW_PORT}`, GATEWAY_INTERNAL_URL:`http://localhost:${GW_PORT}` });
 console.log('   HQ ready', await waitForHQ(HQ_PORT));
 
 // Login as STATION_LEAD for indent approval

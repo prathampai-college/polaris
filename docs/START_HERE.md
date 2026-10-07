@@ -58,16 +58,16 @@ Plus `ai/` (trains the small forecasting models), `scripts/` (end-to-end test sc
 This is the most important flow in the project. A station worker uses 5 litres of diesel:
 
 1. **Tablet UI** — the worker opens the diesel item and taps *Consume −5 L* ([field/components/shell/AssetSheet.tsx](../field/components/shell/AssetSheet.tsx)).
-2. **Local database** — the UI calls `db.recordTx(...)`. That runs inside a Web Worker which owns an SQLite database stored on the tablet ([field/lib/db/core.ts](../field/lib/db/core.ts), function `recordTx`). In one transaction it takes 5 L from the oldest lot, updates the asset to 4195 L, records a transaction, and adds **outbox rows** (one for the lot, one for the asset). The screen updates immediately — no network needed.
+2. **Local database** — the UI calls `db.recordTx(...)`. That runs inside a Web Worker which owns an SQLite database stored on the tablet ([field/lib/db/core.ts](../field/lib/db/core.ts), function `recordTx`). In one transaction it takes 5 L from the oldest lot, updates the asset to 4195 L, records a transaction, and adds **outbox rows** (one for the lot, one for the asset). Each carries the change itself (`delta: -5`), not just the new total, so if another tablet also used diesel offline HQ counts both. The screen updates immediately — no network needed.
 3. **Sync engine** — every 2 seconds the worker looks at the outbox ([field/lib/db/worker.ts](../field/lib/db/worker.ts), function `tick`).
-   - **Link up:** it encrypts each frame and sends it over a WebSocket to the gateway.
-   - **Link down:** it copies the frames into DTN bundles and waits. Nothing is lost.
-4. **Gateway** — decrypts and checks the frame, forwards it to HQ `POST /sync/ingest`, and sends HQ's answer back to the tablet as an ACK ([sync-gateway/src/gateway.ts](../sync-gateway/src/gateway.ts)).
-5. **HQ** — `apply_frame` ([hq/app/sync_apply.py](../hq/app/sync_apply.py)) checks the ULID was not seen before, then updates the asset in Postgres and writes an audit row.
+   - **Link up:** it encrypts each frame and sends it over a WebSocket to the gateway. Emergencies always go first.
+   - **Link down** (or silently dead — no reply for 45 s): it copies the frames into DTN bundles and waits. Nothing is lost.
+4. **Gateway** — decrypts and checks the frame, forwards it to HQ `POST /sync/ingest` (authenticated with the `X-PSK` header), and sends HQ's answer back to the tablet as an ACK ([sync-gateway/src/gateway.ts](../sync-gateway/src/gateway.ts)).
+5. **HQ** — `apply_frame` ([hq/app/sync_apply.py](../hq/app/sync_apply.py)) checks the ULID was not seen before, adds the −5 L to the lot and the asset in Postgres, writes an audit row, and pushes the new total back to the station's tablets.
 6. **Back on the tablet** — the ACK marks the outbox row `ACKED`; the item's history shows "At HQ".
 7. **HQ dashboard** — the next time someone opens Inventory, it reads the new quantity from HQ.
 
-The reverse direction (HQ → tablet) works like this: when something changes at HQ that tablets care about, HQ calls the gateway's `/internal/broadcast_delta`, the gateway pushes a `DOWNSTREAM_DELTA` frame to connected tablets, and the tablet applies it — **unless** the tablet still has its own unsynced change to the same record (then the tablet's version wins and will reach HQ shortly).
+The reverse direction (HQ → tablet) works like this: when something changes at HQ that tablets care about, HQ writes it to its `change_log` (numbered, in order), then calls the gateway's `/internal/broadcast_delta`; the gateway pushes a `DOWNSTREAM_DELTA` frame to connected tablets, and the tablet applies it — **unless** the tablet still has its own unsynced change to the same record (then the tablet's version wins for now, and HQ's change is replayed once the tablet's edit is acknowledged). A tablet that was offline asks for everything after the last number it saw when it reconnects, so nothing HQ did while it was away is lost.
 
 ## 5. "I need to change X — where do I look?"
 
@@ -81,6 +81,8 @@ The reverse direction (HQ → tablet) works like this: when something changes at
 | Change retry/offline behaviour | `field/lib/db/worker.ts` (sync engine) |
 | Add or change an HQ API endpoint | `hq/app/main.py` (find the route with Ctrl+F on the path) |
 | Change how HQ applies a synced change | `hq/app/sync_apply.py` |
+| Change who may call an HQ endpoint | `_ROLE_RULES` / `_PRIVATE_READS` / `_PSK_PATHS` in `hq/app/main.py` (the auth gate), tests in `hq/tests/test_auth_gate.py` |
+| Push something new from HQ to tablets | call `notify_gateway(...)` in `hq/app/main.py` (it logs the change for offline tablets too) |
 | Change the database tables | `shared/sql/schema.sql` (HQ) **and** `SCHEMA_SQL` in `field/lib/db/core.ts` (tablet) |
 | Change seed data (stations, stock) | `shared/src/seed.ts` (tablet) and `shared/seed.json` / `hq/app/db.py` (HQ) |
 | Change fuel forecasting | `hq/app/forecast.py`, `hq/app/snn_forecast.py`, models in `ai/` |
@@ -96,14 +98,20 @@ Everything at once (needs Docker Desktop):
 docker compose up -d --build --wait
 ```
 
-Then open the tablet at http://localhost:3000 (PIN for Bharati: `BHARATI-2024`) and the HQ dashboard at http://localhost:3001. HQ's API docs are at http://localhost:8000/docs.
+Then open the tablet at http://localhost:3000 (PIN for Bharati: `BHARATI-2024`) and the HQ dashboard at http://localhost:3001 (sign in with the same PIN — every page is behind the login). HQ's API docs are at http://localhost:8000/docs.
+
+These are demo secrets. For a real deployment set `POLARIS_ENV=production` plus your own `SECRET_KEY`, `PSK_HEX` and `STATION_PINS_JSON` in `.env` — HQ and the gateway refuse to start on the demo ones.
 
 To work on one part without Docker, see "Run locally" in that part's guide.
 
-Run the tests before you push:
+Run the tests and lint before you push (CI runs the same):
 
 ```bash
 python -m pytest hq/tests -q
+```
+
+```bash
+ruff check .
 ```
 
 ```bash
@@ -114,11 +122,19 @@ node field/lib/db/core.test.ts
 npm --prefix sync-gateway test
 ```
 
+```bash
+npm run verify
+```
+
+The last one runs the end-to-end scripts m1–m5; each starts its own HQ (and gateway) on a temp database, so nothing needs to be running.
+
 ## 7. Rules the whole codebase follows
 
 - **Offline first.** The tablet never waits for the network to show a result. Every write goes to the local DB and the outbox first.
 - **Never fake data.** If a value is missing, show `—` and say why. Simulators only appear in drill mode.
 - **One way to apply a change at HQ.** Every synced write goes through `apply_frame`. Don't add a second path.
+- **Every HQ write is authenticated, and the audit log names the token, not the request.** Use `_actor(...)` for `created_by`/`actor_id`; never trust a name from the body.
+- **Stock moves as deltas.** Send the change (`delta`), not only the new total, so concurrent movements both count.
 - **Same palette everywhere.** Colours are tokens (`canvas`, `ink`, `cobalt`, `flare`…), never raw hex in components. `flare` (orange) is only for alerts.
 - **Big touch targets.** Tablet controls use `min-h-tap` (44 px, 56 px in glove mode).
 

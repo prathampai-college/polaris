@@ -35,16 +35,16 @@ Why a worker? Browsers only allow durable SQLite storage (OPFS) inside a worker.
 | `app/(field)/indents/` | **Indents** — request resupply from HQ, mark deliveries received |
 | `app/(field)/expeditions/` | **Cargo** — incoming expedition cargo and printable crate labels |
 | `app/(field)/locate/` | **Locate** — store plan and 3D view of containers and crates |
-| `app/(field)/comms/` | **Comms** — sync status, failed frames, sync key, DTN bundles |
+| `app/(field)/comms/` | **Comms** — sync status, failed frames, sync key, DTN bundles; in drill mode, cut-link and the **link simulator** |
 | `app/(field)/settings/` | **Settings** — theme, glove mode, drill mode, sign-out, wipe |
 | `app/api/config/route.ts` | Tells the tablet where HQ and the gateway are (read from env at runtime) |
-| `components/shell/` | Pieces of the shell: `CommsStrip` (top status bar), `Nav`, `SosSheet`, `AssetSheet`, `Banners`, `Toaster`, `ScanWedge` |
+| `components/shell/` | Pieces of the shell: `CommsStrip` (top status bar), `Nav`, `SosSheet` (incl. the GPS fix button), `AssetSheet`, `Banners`, `Toaster`, `ScanWedge` |
 | `components/ui/` | Reusable building blocks: `Button`, `Card`, `Badge`, `Dialog`, `Sheet`, `Field`/`Input`/`Stepper`, `HoldButton` |
 | `components/Container3D.tsx` | The 3D store view (react-three-fiber) |
 | `components/QrScanner.tsx` | Camera barcode scanner |
 | `lib/db/core.ts` | **The heart.** Database schema, seed data, every query and every write, sync bookkeeping |
 | `lib/db/worker.ts` | Starts SQLite, answers calls from pages, runs the sync engine |
-| `lib/db/client.ts` | `db` object pages use + the `useLiveQuery` hook |
+| `lib/db/client.ts` | `db` object pages use + the `useLiveQuery` hook. Calls time out after 20 s and fail fast if the worker dies |
 | `lib/db/core.test.ts` | Test for core.ts, runs in plain Node |
 | `lib/field-context.tsx` | App-wide state: session, preferences, sync status, toasts. Use via `useField()` |
 | `lib/session.ts` | Login, logout, offline unlock |
@@ -82,7 +82,7 @@ You never pass the station or device id — the worker adds them from the signed
 2. Call it from a page as `db.yourFunction()`. TypeScript picks up the type automatically.
 
 **A new write** (e.g. "mark crate inspected"):
-1. Add a function to `mutations` in `lib/db/core.ts`. Inside `withTx(...)`: change the local tables, call `queue(...)` to add an outbox frame, call `audit(...)`.
+1. Add a function to `mutations` in `lib/db/core.ts`. Inside `withTx(...)`: change the local tables, call `queue(...)` to add an outbox frame, call `audit(...)`. If it moves stock, put the signed change in the patch as `delta` (see `recordTx`) — HQ adds deltas, so two tablets' movements both count.
 2. Add the function name and the tables it touches to `TOUCH` in `lib/db/worker.ts`, so screens refresh.
 3. Make sure HQ knows the entity and its columns (`ENTITIES` in `hq/app/sync_apply.py`).
 4. Add a line to `lib/db/core.test.ts`.
@@ -103,6 +103,15 @@ Every outbox row has a status:
 
 If HQ is just busy, it answers `RETRY` and the row goes back to `PENDING` with a growing wait.
 
+A few rules that matter in the field:
+
+- **SOS goes first.** Emergency frames jump the queue, live and offline.
+- **Silent link drops are caught.** If frames are in flight and nothing comes back for 45 s, the worker gives up on the socket, reconnects (with a randomised delay) and starts bundling.
+- **HQ → tablet catches up.** Every HQ change has a sequence number. The tablet remembers the last one it applied (`kv` key `down_seq`) and on reconnect asks the gateway for everything after it. A per-row table `down_seq` means an older change never overwrites a newer one. If you have unsent edits on a row, HQ's change waits and is replayed once your edits are acknowledged.
+- **Did HQ get my SOS?** Each emergency card on Muster says `NOT YET AT HQ`, `HQ RECEIVED …` or `RAISED BY HQ`.
+
+**Demoing a bad link:** turn on drill mode in Settings, then Comms → Drill → **Link simulator**. Pick 2.4 kbps and 20 % loss, make a few stock changes, and watch the queue drain, lost frames get resent, and the SOS still go first.
+
 ## Things that confuse people
 
 - **It only works on `https://` or `localhost`.** Browsers switch off OPFS storage, the camera and encryption on plain `http://` LAN addresses. The top bar shows `INSECURE HTTP` when that happens.
@@ -111,6 +120,7 @@ If HQ is just busy, it answers `RETRY` and the row goes back to `PENDING` with a
 - **The seed lives in two places.** Tablet: `shared/src/seed.ts`. HQ: `shared/seed.json`. Keep ids identical (e.g. opening lot `LOT-<sku>-0`).
 - **The service worker only runs in production builds** (`next build && next start`), never in `next dev`.
 - **`KEY MISMATCH`** means the tablet's sync key differs from the gateway's. Fix it in Comms → Provision key.
+- **GPS needs a secure context and sky view.** `next.config.mjs` allows `geolocation=(self)`. Indoors or in a whiteout the fix may time out; the SOS still sends with a picked or typed location.
 
 ## Run locally
 

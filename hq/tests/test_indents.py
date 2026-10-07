@@ -18,7 +18,7 @@ def _clean_indent():
 
 def _get_token():
     r = client.post("/auth/login", json={"device_id":"TEST-HQ","pin":"BHARATI-2024","station_id":"ST-BHARATI"})
-    data = r.json()
+    assert r.status_code == 200, r.text
     # Override to STATION_LEAD for testing approve/dispatch
     from hq.app.auth import sign_jwt
     from hq.app.config import SECRET_KEY, TOKEN_EXPIRY_DAYS
@@ -77,3 +77,18 @@ def test_audit_immutable():
 def test_rbac():
     r = client.get("/rbac/me")
     assert r.json()["role"] in ["FIELD_OP","STATION_LEAD","NCPOR_ADMIN","VIEWER"]
+
+
+def test_watch_indent_escalates_to_critical():
+    # Regression: an open two-month WATCH draft used to block the CRITICAL
+    # auto-indent forever once the forecast worsened.
+    from hq.app import main
+    from hq.app.db import get_conn
+    conn = get_conn()
+    aid = conn.execute("SELECT a.id FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id='ST-HIMADRI' LIMIT 1").fetchone()[0]
+    conn.execute("DELETE FROM indents WHERE asset_id=? AND station_id='ST-HIMADRI'", (aid,)); conn.commit()
+    now = main.utc_now()
+    main._auto_indent("ST-HIMADRI", aid, 250, "FORECAST_60D", "INDENT_AUTO_WATCH", "watch 45d", "-60d", now, urgency="MEDIUM")
+    main._auto_indent("ST-HIMADRI", aid, 500, "FORECAST_AUTO", "INDENT_AUTO_CRITICAL", "forecast 15d", "-auto", now)
+    rows = conn.execute("SELECT urgency, qty_requested, created_by FROM indents WHERE asset_id=? AND station_id='ST-HIMADRI'", (aid,)).fetchall()
+    assert [tuple(r) for r in rows] == [("CRITICAL", 500, "FORECAST_AUTO")], rows

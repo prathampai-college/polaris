@@ -23,7 +23,7 @@ All screens are real routes under `app/(field)/`. They share the shell in `app/(
 | `/indents` | Indents | Create DRAFT indents. Receive DISPATCHED ones (sets RECEIVED and books the stock IN). Approval and dispatch happen at HQ. Can pull indents from HQ. |
 | `/expeditions` | Cargo | Manifests for this station with custody stages GOA → MUMBAI → CAPETOWN → VESSEL → STATION → CRATE (`lib/db/stages.ts`). Can advance a stage, print a QR label (100 × 70 mm, `qrcode-generator`) and pull plans from HQ. |
 | `/locate` | Locate | 2D store plan (containers by bay, crates by expiry state) and a 3D twin (`components/Container3D.tsx`, React Three Fiber). Drill mode adds a simulated LiDAR/camera fix panel (`lib/sensors/`). It is labelled simulated, and it posts to `/tracking/update` only when you switch that on. |
-| `/comms` | Comms | Link state, custody ledger, outbox frame list (retry, retry all, or discard FAILED frames, audited), PSK provisioning (paste or scan QR, fingerprint shown), DTN bundle hand-off (QR / text export and import), "pull stock from HQ" (`GET /assets`, filtered to this station). Drill mode adds "cut satellite link". |
+| `/comms` | Comms | Link state, custody ledger, outbox frame list (retry, retry all, or discard FAILED frames, audited), PSK provisioning (paste or scan QR, fingerprint shown), DTN bundle hand-off (QR / text export and import), "pull stock from HQ" (`GET /assets`, filtered to this station). Drill mode adds "cut satellite link" and the link simulator (50 / 20 / 9.6 / 2.4 kbps, 0 / 5 / 20 % loss, with bytes sent, frames lost, queue and drain time). |
 | `/settings` | Settings | Theme (Day / Glare or Polar Night), glove mode (56 px touch targets), larger text, drill mode, lock or forget sign-in, and a hold-to-wipe of local data (reseeds the register). |
 | `/login` | — | Station, device ID, PIN and role. |
 
@@ -51,14 +51,18 @@ The UI kit is in `components/ui/` (button, card, badge, dialog, sheet, tabs, fie
 Rules in `core.ts`:
 
 - **FEFO:** CONSUME / OUT draw from lots with the earliest expiry first. Only CONSUME is blocked on expired stock, unless the override is set (audited as `*_OVERRIDE_EXPIRED`). IN creates a new lot. A positive ADJUST folds into the opening lot. `assets.qty` is always the sum of the asset's lots.
-- **Outbox frames:** each asset write queues `lots` UPSERT frames plus one `assets` frame. The assets frame carries the resulting absolute `qty`, the version and a vector clock. Other entities (indents, personnel, field_sorties, emergencies, manifests) queue UPSERT patches that contain only the changed fields.
-- **Downstream apply** (`applyDownstream`): if this tablet still has unsynced frames (PENDING / SENT / BUNDLED) for that entity row, local wins and the row is skipped. Otherwise the server wins. An asset `qty` from HQ is treated as absolute and reconciled by correcting the opening lot.
+- **Outbox frames:** each asset write queues `lots` UPSERT frames plus one `assets` frame. Stock movements carry the signed change as `delta` on both the lot and the asset frame (HQ adds it, so concurrent movements on two tablets both count); the asset frame also carries the resulting `qty`, the version and a vector clock. Other entities (indents, personnel, field_sorties, emergencies, manifests) queue UPSERT patches that contain only the changed fields.
+- **Downstream apply** (`applyDownstreamDelta` → `applyDownstream`): if this tablet still has unsynced frames (PENDING / SENT / BUNDLED) for that entity row, the delta is `held` (local wins for now). If the row's last applied HQ `seq` (table `down_seq`) is ≥ the delta's, it is `stale` and ignored. Otherwise the server wins. An asset `qty` from HQ is treated as absolute and reconciled into the lots FEFO-first.
+- **Outbox order:** emergencies first, then oldest first, for both the live send and DTN bundling.
 - **ACK state machine** (`applyAck`): PENDING → SENT (resent if no ACK within 15 s, `RESEND_AFTER_MS`) → ACKED. ACKED is terminal, and a late FAILED or RETRY never downgrades it. RETRY returns the frame to PENDING with exponential backoff (2 s × 2ⁿ, capped at 120 s). FAILED is permanent until you retry or discard it in Comms. When offline, unsent rows become BUNDLED.
 - **DTN:** `bundleOffline` wraps each PENDING / SENT row in a bundle whose `bundleId` is the outbox ULID, so HQ dedupes a write that arrives over both WS and DTN. The TTL is 7 days.
 
 Sync engine (in `worker.ts`):
 
-- It connects to the gateway and sends an encrypted `SYNC_INIT`. On `SYNC_INIT_RESP` it applies the station's indents.
+- It connects to the gateway and sends an encrypted `SYNC_INIT` with `since_seq` (the resume cursor, `kv['down_seq']`). The gateway replays every HQ change after it (`replay: true`), then `SYNC_INIT_RESP` with the station's indents and `caught_up_to`. The cursor never moves past a held delta; once the outbox drains, the worker resends `SYNC_INIT` so held changes apply.
+- Dead link: frames in flight and nothing received for 45 s → reconnect and fall back to bundling. Reconnect backoff 3 s → 30 s with 0.5–1.5× jitter.
+- On boot it calls `navigator.storage.persist()`. Page → worker RPC calls time out after 20 s and fail at once if the worker dies.
+- SOS: one-tap GPS fix (`navigator.geolocation`, 15 s timeout) or a picked/typed place; emergency cards show `NOT YET AT HQ`, `HQ RECEIVED …` or `RAISED BY HQ`.
 - Every 2 s it sends up to 8 due frames (`toWire`: msgpack, then AES-GCM with the PSK, then CRC32). A frame over `MAX_WIRE_SIZE` (2048 B) is marked FAILED locally.
 - If the link is down, it bundles instead and posts each bundle on `BroadcastChannel('polaris-mule')`, where other same-origin tabs take custody.
 - Every 30 s, bundles held for *other* devices are forwarded to the gateway's `POST /dtn/exchange` with `X-PSK`. The tablet's own BUNDLED rows are resent over the WebSocket when the link returns.

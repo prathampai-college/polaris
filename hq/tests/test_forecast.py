@@ -14,7 +14,7 @@ def _clean():
         conn.execute("DELETE FROM indents WHERE created_by='FORECAST_AUTO'")
         conn.execute("DELETE FROM dedupe WHERE ulid LIKE '01TEST%'")
         conn.commit()
-    except: pass
+    except Exception: pass
 
 def test_forecast_baseline_42():
     _clean()

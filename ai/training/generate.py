@@ -46,4 +46,4 @@ import pandas as pd
 try:
     df=pd.read_csv(OUT)
     print(df.describe().to_string())
-except: pass
+except Exception: pass

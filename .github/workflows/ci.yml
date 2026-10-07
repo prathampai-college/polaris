@@ -53,6 +53,8 @@ jobs:
       # collection (never during collection — see hq/tests/test_ingest.py),
       # then run only the hq submodule suite.
       - run: rm -f hq/app/hq.db hq/app/hq.db-wal hq/app/hq.db-shm
+      - name: Python lint (ruff, config in ruff.toml)
+        run: ruff check .
       - run: pytest hq/tests -v
       - run: python -m py_compile hq/app/main.py hq/app/db.py hq/app/forecast.py hq/app/snn_forecast.py hq/app/dtn.py hq/app/config.py hq/app/auth.py hq/app/telemetry_poller.py hq/app/vessel_poller.py
       - name: Check budgets (ONNX <2MB, synthetic CSV exists)

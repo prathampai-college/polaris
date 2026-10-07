@@ -25,10 +25,10 @@ def test_local_map_import():
     assert p.exists()
 
 def test_asset_positions_table():
-    from hq.app.db import init_db, get_conn
+    from hq.app.db import init_db
     init_db()
-    conn = get_conn()
-    cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='asset_positions'") if not str(get_conn).startswith("<") else None
+    tables = {r[0] for r in get_conn().execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    assert "asset_positions" in tables
     # not strict — just check schema contains
     import pathlib
     schema = (pathlib.Path(__file__).parent.parent.parent / "shared" / "sql" / "schema.sql").read_text()

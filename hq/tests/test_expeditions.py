@@ -3,7 +3,6 @@ import pathlib, sys, os
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent))
 os.environ.pop("DATABASE_URL", None)  # force SQLite fallback for CI
 from fastapi.testclient import TestClient
-from ulid import ULID
 from hq.app.main import app
 from hq.app import db as _db
 from hq.app.db import init_db, get_conn

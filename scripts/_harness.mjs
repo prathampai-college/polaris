@@ -18,7 +18,10 @@ export function cleanDbs(files){ for(const f of files) try{ fs.unlinkSync(f); }c
 
 export async function waitForHQ(port, tries=30){ for(let i=0;i<tries;i++){ await sleep(300); try{ const r=await fetch(`http://localhost:${port}/health`); if(r.ok) return await r.json(); }catch{} } throw new Error(`HQ :${port} failed to start`); }
 
-export function spawnHQ(port, extraEnv={}){ return spawn('python', ['-m','uvicorn','hq.app.main:app','--port',String(port),'--log-level','warning'], { env:{...process.env, ...extraEnv}, cwd:process.cwd(), stdio:['ignore','pipe','pipe'] }); }
+// Verify runs are deterministic by default: no live weather/AIS pollers (a real
+// reading landing mid-run changed forecasts and auto-indents). Override per call.
+const QUIET_POLLERS = { TELEMETRY_SOURCE:'sim', LIVE_WEATHER_ENABLED:'false', LIVE_AIS_ENABLED:'false', VESSEL_MODE:'mock' };
+export function spawnHQ(port, extraEnv={}){ return spawn('python', ['-m','uvicorn','hq.app.main:app','--port',String(port),'--log-level','warning'], { env:{...process.env, ...QUIET_POLLERS, ...extraEnv}, cwd:process.cwd(), stdio:['ignore','pipe','pipe'] }); }
 
 export async function spawnGateway(gwPort, hqPort, psk=PSK_HEX){ const gw=spawn('node', ['sync-gateway/dist/gateway.js'], { env:{...process.env, HQ_URL:`http://localhost:${hqPort}`, GATEWAY_PORT:String(gwPort), PSK_HEX:psk}, stdio:['ignore','pipe','pipe'] }); await sleep(800); return gw; }
 

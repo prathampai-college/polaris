@@ -1,7 +1,6 @@
 import pathlib, sys, os
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent))
 os.environ.pop("DATABASE_URL", None)  # force SQLite fallback for CI
-import tempfile
 from fastapi.testclient import TestClient
 
 # NOTE: never unlink hq.db at import/collection time — pytest imports all test
@@ -19,13 +18,13 @@ def _clean_ingest():
     try:
         conn.execute("DELETE FROM dedupe WHERE ulid LIKE '01TEST%'")
         conn.commit()
-    except: pass
+    except Exception: pass
     try:
         # isolate from prior runs (m1/m2 verifies merge VCs into the dev DB):
         # reset A1's clock so the frameless-VC test delta wins deterministically
         conn.execute("UPDATE assets SET vector_clock='{}', updated_at='2020-01-01T00:00:00' WHERE id='A1'")
         conn.commit()
-    except: pass
+    except Exception: pass
 
 def test_health():
     r = client.get("/health")
@@ -63,7 +62,7 @@ def test_pessimistic_lock_negative():
     from ulid import ULID
     uid=str(ULID())
     assets = client.get("/assets").json()
-    a1 = next(a for a in assets if a["id"]=="A1")
+    assert any(a["id"] == "A1" for a in assets)
     frame = {
         "ulid": uid,
         "device_id": "TEST-DEV-01",

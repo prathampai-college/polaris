@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager, contextmanager
 from .db import init_db, get_conn, release_conn, USE_PG, utc_now, q, write_audit, audit_hash
 from .dtn import ingest_bundle
 from .sync_apply import Conflict, NotFound, Rejected, apply_frame
-from .forecast import load_forecast_model, physics_pred, predict_total
+from .forecast import load_forecast_model, predict_total
 from .config import ALLOWED, SECRET_KEY, TOKEN_EXPIRY_DAYS, STATION_PINS, PRODUCTION
 from .auth import sign_jwt, get_current_user, require_role, has_role
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -51,13 +51,13 @@ _sse_subscribers: list[asyncio.Queue] = []
 async def _broadcast_telemetry(tele: dict):
     """Push telemetry event to all connected SSE clients."""
     dead = []
-    for q in _sse_subscribers:
+    for sub in _sse_subscribers:  # not `q`: that name is the SQL dialect helper
         try:
-            q.put_nowait(tele)
+            sub.put_nowait(tele)
         except asyncio.QueueFull:
-            dead.append(q)
-    for q in dead:
-        _sse_subscribers.remove(q)
+            dead.append(sub)
+    for sub in dead:
+        _sse_subscribers.remove(sub)
 
 GATEWAY_INTERNAL_URL = os.getenv("GATEWAY_INTERNAL_URL", os.getenv("GATEWAY_URL", "http://localhost:8787"))
 
@@ -537,9 +537,16 @@ async def telemetry_stream():
         "X-Accel-Buffering": "no",
     })
 
-def _auto_indent(station_id: str, asset_id: str, qty_needed: float, creator: str, audit_action: str, audit_detail: str, suffix: str, now: str):
-    exists = _fetch_one("SELECT 1 as c FROM indents WHERE asset_id=? AND station_id=? AND status IN ('DRAFT','APPROVED','DISPATCHED')", (asset_id, station_id))
+def _auto_indent(station_id: str, asset_id: str, qty_needed: float, creator: str, audit_action: str, audit_detail: str, suffix: str, now: str, urgency: str = "CRITICAL"):
+    exists = _fetch_one("SELECT id, created_by, status, urgency FROM indents WHERE asset_id=? AND station_id=? AND status IN ('DRAFT','APPROVED','DISPATCHED')", (asset_id, station_id))
     if exists:
+        # A two-month WATCH draft must not block the shortage from going
+        # CRITICAL when it worsens: escalate the open draft in place.
+        if urgency == "CRITICAL" and exists["created_by"] == "FORECAST_60D" and exists["status"] == "DRAFT":
+            with _sync_txn() as cur:
+                cur.execute(q("UPDATE indents SET urgency='CRITICAL', qty_requested=?, created_by=? WHERE id=?"), (qty_needed, creator, exists["id"]))
+                write_audit(cur, f"{exists['id']}-ESC-{now}", creator, "INDENT_ESCALATED_CRITICAL", "indents", exists["urgency"], audit_detail, now)
+            notify_gateway(station_id, "indents", exists["id"], "STATUS_CHANGE", {"id": exists["id"], "urgency": "CRITICAL", "qty_requested": qty_needed, "created_by": creator})
         return
     try:
         from ulid import ULID
@@ -547,11 +554,11 @@ def _auto_indent(station_id: str, asset_id: str, qty_needed: float, creator: str
     except Exception:
         iid = str(uuid.uuid4())[:8] + suffix
     with _sync_txn() as cur:
-        cur.execute(q("INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, station_id, asset_id, qty_needed, "CRITICAL", "DRAFT", creator, now, None))
+        cur.execute(q("INSERT INTO indents (id, station_id, asset_id, qty_requested, urgency, status, created_by, created_at, vessel_imo) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"), (iid, station_id, asset_id, qty_needed, urgency, "DRAFT", creator, now, None))
         write_audit(cur, iid, creator, audit_action, "indents", None, audit_detail, now)
     notify_gateway(station_id, "indents", iid, "UPSERT", {
         "id": iid, "station_id": station_id, "asset_id": asset_id,
-        "qty_requested": qty_needed, "urgency": "CRITICAL", "status": "DRAFT",
+        "qty_requested": qty_needed, "urgency": urgency, "status": "DRAFT",
         "created_by": creator, "created_at": now
     })
 
@@ -571,7 +578,7 @@ def check_and_escalate(station_id: str, tele):
         _auto_indent(station_id, asset_id, 500, "FORECAST_AUTO", "INDENT_AUTO_CRITICAL", f"forecast {days:.1f}d", "-auto", now)
     elif days <= 60:
         # Two-month rule: slow-building shortage flagged weeks out, not just at critical
-        _auto_indent(station_id, asset_id, 250, "FORECAST_60D", "INDENT_AUTO_WATCH", f"two-month watch {days:.1f}d", "-60d", now)
+        _auto_indent(station_id, asset_id, 250, "FORECAST_60D", "INDENT_AUTO_WATCH", f"two-month watch {days:.1f}d", "-60d", now, urgency="MEDIUM")
     # Phase 4: Acoustic Prognostics Escalation
     if getattr(tele, 'acoustic_anomaly', 0.0) > 0.90:
         row = _fetch_one("SELECT a.id FROM assets a JOIN crates cr ON a.crate_id=cr.id JOIN containers c ON cr.container_id=c.id WHERE c.station_id=? AND a.sku='SPARE-BRG-6205-007' LIMIT 1", (station_id,))
@@ -629,7 +636,7 @@ def get_physics(station_id: str):
         from .forecast import load_physics
         ph = load_physics()
         return {"station_id": station_id, "T_INSIDE": ph["T_INSIDE"], "BASE": ph["BASE"], "K1": ph["K1"], "K2": ph["K2"], "K3": ph["K3"], "source": "global_fallback"}
-    except Exception as e:
+    except Exception:
         raise HTTPException(404, f"physics not found for {station_id}")
 
 # --- Phase 4: Vessel tracking (AIS adaptive + mock fallback) ---
@@ -828,10 +835,6 @@ class EmergencyCreate(BaseModel):
 
 @app.get("/emergencies")
 def list_emergencies(station_id: str = None, active_only: bool = False):
-    sql = "SELECT e.*, s.due_minutes as sla_due_minutes FROM emergencies e LEFT JOIN triage_sla s ON s.from_status=e.status WHERE 1=1"
-    params: list = []
-    conditions: list = []
-    # note: we rebuild without alias for simple _fetch_all pagination, then enrich
     base_sql = "SELECT * FROM emergencies"
     bp: list = []
     bc: list = []

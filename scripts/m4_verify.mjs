@@ -11,7 +11,7 @@ import { PSK_HEX as PSK, toWire, fromWire, cleanDbs, waitForHQ, spawnHQ, spawnGa
 
 const HQ_PORT=8771, GW_PORT=8791;
 const FIELD_DB = path.join(os.tmpdir(), 'polaris-m4.db');
-const HQ_DB = path.resolve('hq/app/hq.db');
+const HQ_DB = path.join(os.tmpdir(), 'polaris-m4-hq.db'); // never touch the dev hq/app/hq.db
 cleanDbs([FIELD_DB, HQ_DB, HQ_DB+'-wal', HQ_DB+'-shm']);
 const schema=fs.readFileSync('shared/sql/schema.sql','utf8');
 console.log('=== M4 CHAOS HARNESS ===');
@@ -76,7 +76,7 @@ console.log(`  frame JSON vs msgpack saving ${(savingSum/frames.length).toFixed(
 
 // Start HQ + GW for Test 1
 console.log('\n[Test 1] Offline 5 writes → reconnect → HQ convergence + CRC + dedupe (20kbps throttle / 500ms / 5% loss)');
-const hq=spawnHQ(HQ_PORT);
+const hq=spawnHQ(HQ_PORT, { HQ_DB_PATH: HQ_DB });
 await waitForHQ(HQ_PORT);
 const gw=await spawnGateway(GW_PORT, HQ_PORT);
 const ws=await connectWs(GW_PORT);

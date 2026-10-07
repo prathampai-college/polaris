@@ -7,17 +7,17 @@
 
 | File | What's in it |
 |---|---|
-| `src/types.ts` | TypeScript types for rows and frames (`Asset`, `Indent`, `DeltaFrame`, `AckFrame`, …) |
+| `src/types.ts` | TypeScript types for rows and frames (`Asset`, `Indent`, `DeltaFrame`, `AckFrame`, `SyncInitFrame` with `since_seq`, `DownstreamDeltaFrame` with `seq`/`replay`, `SyncInitRespFrame` with `caught_up_to`, …) |
 | `src/schemas.ts` | zod schemas — runtime validation of the same shapes (the gateway uses `deltaFrameSchema`) |
 | `src/codec.ts` / `src/codec.web.ts` | Turn a frame into wire bytes and back: msgpack → AES-GCM encrypt → CRC32. `codec.ts` is for Node, `codec.web.ts` for browsers/workers |
 | `src/crc.ts`, `src/wire.ts` | CRC32 and the 2 KB frame size limit |
-| `src/dtn/bundle.ts` | DTN bundle format and base64 helpers (for QR hand-off) |
-| `src/dtn/vector_clock.ts` | Compare/merge vector clocks |
+| `src/dtn/bundle.ts` | DTN bundle format and base64 helpers. Used by `scripts/dtn_verify.mjs`; the tablet builds bundles in `field/lib/db/core.ts` |
+| `src/dtn/vector_clock.ts` | Compare/merge vector clocks (TypeScript mirror of `hq/app/_vc.py`; used by `dtn_verify.mjs`) |
 | `src/seed.ts` | Stations, containers, crates and starting stock the **tablet** seeds with |
 | `src/containers.ts` | Container and crate layout used by the 3D views |
 | `src/expiry.ts` | `isExpired`, `isExpiringSoon` (≤30 days), `expiryStatus` |
 | `src/local_map.ts` | Kalman filter + LiDAR/camera fusion maths (simulated tracking) |
-| `src/jwt.ts` | JWT helpers for TypeScript |
+| `src/jwt.ts` | JWT helpers for TypeScript (exported, not used by the apps: HQ signs tokens in Python) |
 | `src/physics.ts`, `src/physics.json` | Fuel-burn physics constants (also read by HQ) |
 | `src/snn-config.ts`, `src/url.ts` | SNN settings; ws→http URL conversion |
 | `sql/schema.sql` | **HQ's** database schema (Postgres + SQLite) |

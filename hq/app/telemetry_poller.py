@@ -137,7 +137,6 @@ async def _post_telemetry_internal(station_id: str, payload: dict):
         conn = get_conn()
         try:
             if USE_PG:
-                import psycopg
                 # reuse get_conn PG path
                 with conn:
                     with conn.cursor() as cur:

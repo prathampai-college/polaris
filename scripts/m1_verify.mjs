@@ -12,7 +12,7 @@ import { PSK_HEX, toWire, fromWire, cleanDbs, waitForHQ, spawnHQ, spawnGateway, 
 const HQ_PORT = 8765;
 const GW_PORT = 8787;
 const FIELD_DB = path.join(os.tmpdir(), 'polaris-field-test.db');
-const HQ_DB = path.resolve('hq/app/hq.db');
+const HQ_DB = path.join(os.tmpdir(), 'polaris-m1-hq.db'); // never touch the dev hq/app/hq.db
 
 cleanDbs([FIELD_DB, HQ_DB, HQ_DB+'-wal', HQ_DB+'-shm']);
 
@@ -83,7 +83,7 @@ console.log(`   outbox after reopen PENDING=${outboxAfter} (must survive)`);
 fieldDb2.close();
 
 console.log('3) start HQ FastAPI + Gateway ...');
-const hqProc=spawnHQ(HQ_PORT);
+const hqProc=spawnHQ(HQ_PORT, { HQ_DB_PATH: HQ_DB });
 hqProc.stdout.on('data', d=>process.stdout.write('[hq] '+d));
 hqProc.stderr.on('data', d=>process.stdout.write('[hq-err] '+d));
 console.log('   HQ ready', await waitForHQ(HQ_PORT));

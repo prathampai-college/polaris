@@ -16,7 +16,7 @@ npm --prefix hq-dashboard run dev     # http://localhost:3001
 Needs the HQ API reachable (`NEXT_PUBLIC_HQ_URL`, default `http://localhost:8000`) — see the repo-root `README.md` for the full stack (`docker compose up`).
 
 ## Routes
-Real App Router pages under `app/(dashboard)/`, sharing a persistent shell (`layout.tsx`: `Topbar` + `SidebarNav` + a global emergency-alert banner) instead of the old hash-tab single page:
+Real App Router pages under `app/(dashboard)/`, sharing a persistent shell (`layout.tsx`: `Topbar` + `SidebarNav` + a global emergency-alert banner) instead of the old hash-tab single page. Every page sits behind a sign-in gate (`LoginGate`); a `401` from HQ drops back to it:
 
 | Route | Page |
 |-------|------|
@@ -30,6 +30,7 @@ Real App Router pages under `app/(dashboard)/`, sharing a persistent shell (`lay
 | `/audit` | Append-only audit feed |
 | `/locate` | Local (non-GPS) position map |
 | `/command` | Unified command/timeline feed |
+| `/link-health` | Which stations HQ can hear: LIVE / STORE & FORWARD / QUIET / SILENT (`GET /stations/link-health`) |
 
 ## `lib/`
 - `api.ts` — single `HQ` URL resolver (falls back from a baked `localhost` value to `window.location.hostname` on LAN) + a typed `apiFetch`/`api` client that throws `ApiError` with real status/message instead of swallowing failures.

@@ -24,7 +24,6 @@ def test_lww_deterministic():
     b_vc={"B":1}
     assert compare_vc(a_vc,b_vc)=="concurrent"
     # later ts simulated: B wins
-    import datetime
     ta="2026-09-03T10:00:00Z"
     tb="2026-09-03T10:00:05Z"
     assert tb > ta

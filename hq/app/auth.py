@@ -1,6 +1,5 @@
 """JWT authentication for FastAPI — standalone Python implementation."""
 import os, time, hmac, hashlib, base64, json, logging
-from functools import wraps
 from typing import Optional
 from fastapi import HTTPException, Request
 

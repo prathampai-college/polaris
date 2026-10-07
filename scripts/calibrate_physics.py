@@ -10,7 +10,7 @@ Usage:
   DATABASE_URL=postgresql://... python scripts/calibrate_physics.py   # PG path
   python scripts/calibrate_physics.py   # SQLite fallback hq/app/hq.db
 """
-import os, sys, pathlib, argparse, datetime
+import os, pathlib, argparse
 
 STATIONS = ["ST-BHARATI", "ST-MAITRI", "ST-HIMADRI"]
 
