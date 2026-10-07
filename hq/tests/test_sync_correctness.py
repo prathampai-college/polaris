@@ -128,3 +128,21 @@ def test_concurrent_consumes_both_count():
     assert r.json()["status"] == "CONFLICT_CRITICAL" or r.status_code == 409, r.text
     assert one("SELECT qty FROM lots WHERE id=?", (lid,))[0] == 85
     get_conn().execute("DELETE FROM lots WHERE id=?", (lid,))
+
+
+def test_change_log_lets_offline_tablet_catch_up():
+    # HQ changes made while a tablet is offline are replayable by seq cursor.
+    start = client.get("/sync/changes", params={"station_id": "ST-MAITRI", "since": 0, "limit": 1000}).json()
+    cursor = start[-1]["seq"] if start else 0
+    eid = f"SOS-CL-{str(ULID())[-6:]}"
+    client.post("/emergency/sos", json={"id": eid, "station_id": "ST-MAITRI", "type": "SOS_MEDICAL", "reported_by": "T"})
+    client.post("/emergency/sos", json={"id": eid + "B", "station_id": "ST-BHARATI", "type": "SOS_MEDICAL", "reported_by": "T"})
+    rows = client.get("/sync/changes", params={"station_id": "ST-MAITRI", "since": cursor}).json()
+    assert [r["entity_id"] for r in rows if r["entity"] == "emergencies"] == [eid], "only this station's changes, after the cursor"
+    assert all(a["seq"] < b["seq"] for a, b in zip(rows, rows[1:]))
+    # asset movement broadcasts HQ's resulting row (covers APPLIED_LOCAL_WINS re-pull)
+    before = client.get("/sync/changes", params={"station_id": "ST-BHARATI", "since": 0, "limit": 1000}).json()
+    c0 = before[-1]["seq"] if before else 0
+    client.post("/sync/ingest", json=frame("assets", "A1", {"qty": 1, "delta": -1}, op="CONSUME", vc={"TEST-SYNC-01": 99}))
+    after = client.get("/sync/changes", params={"station_id": "ST-BHARATI", "since": c0}).json()
+    assert any(r["entity"] == "assets" and r["entity_id"] == "A1" for r in after)

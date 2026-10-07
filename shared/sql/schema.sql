@@ -121,6 +121,19 @@ CREATE TABLE IF NOT EXISTS dedupe (
   processed_at TEXT
 );
 
+-- Every downstream push, in order. Tablets replay from their last seq on
+-- reconnect so HQ changes made while they were offline are not lost.
+CREATE TABLE IF NOT EXISTS change_log (
+  seq INTEGER PRIMARY KEY,
+  station_id TEXT,
+  entity TEXT,
+  entity_id TEXT,
+  op TEXT,
+  patch TEXT,
+  ts TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_change_log_station ON change_log(station_id, seq);
+
 CREATE TABLE IF NOT EXISTS procurement_targets (
   sku TEXT PRIMARY KEY,
   target_qty REAL NOT NULL,

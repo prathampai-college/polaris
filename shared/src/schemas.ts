@@ -48,13 +48,16 @@ export const downstreamDeltaSchema = z.object({
   entity_id: z.string(),
   op: z.enum(['UPSERT', 'STATUS_CHANGE', 'DELETE']),
   patch: z.record(z.unknown()),
-  ts: z.string()
+  ts: z.string(),
+  seq: z.number().int().optional(),
+  replay: z.boolean().optional()
 });
 
 export const syncInitSchema = z.object({
   type: z.literal('SYNC_INIT'),
   device_id: z.string(),
   station_id: z.string(),
-  last_acked_ulid: z.string().nullable().optional()
+  last_acked_ulid: z.string().nullable().optional(),
+  since_seq: z.number().int().nonnegative().optional()
 });
 

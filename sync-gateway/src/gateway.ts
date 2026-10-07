@@ -151,6 +151,7 @@ const server = http.createServer(async (req, res) => {
         op: body.op || 'STATUS_CHANGE',
         patch: body.patch || {},
         ts: body.ts || new Date().toISOString(),
+        ...(typeof body.seq === 'number' ? { seq: body.seq } : {}),
       };
 
       const recipients = broadcastDownstream(deltaFrame);
@@ -243,9 +244,27 @@ wss.on('connection', (ws: WebSocket) => {
 
       const station = initFrame.station_id || 'ST-BHARATI';
       try {
+        // Catch-up: replay HQ changes the tablet missed while offline, oldest first.
+        let caughtUpTo: number | undefined;
+        if (typeof initFrame.since_seq === 'number') {
+          caughtUpTo = initFrame.since_seq;
+          for (let page = 0; page < 20 && ws.readyState === WebSocket.OPEN; page++) {
+            const r = await fetch(`${HQ_URL}/sync/changes?station_id=${encodeURIComponent(station)}&since=${caughtUpTo}&limit=500`,
+              { headers: { 'X-PSK': process.env.INTERNAL_PSK_HEX || PSK_HEX }, signal: AbortSignal.timeout(10_000) });
+            if (!r.ok) throw new Error(`HQ /sync/changes ${r.status}`);
+            const rows = (await r.json()) as Array<{ seq: number; station_id: string; entity: DownstreamDeltaFrame['entity']; entity_id: string; op: DownstreamDeltaFrame['op']; patch: Record<string, unknown>; ts: string }>;
+            for (const c of rows) {
+              const d: DownstreamDeltaFrame = { type: 'DOWNSTREAM_DELTA', ulid: ulid(), station_id: c.station_id, entity: c.entity, entity_id: c.entity_id, op: c.op, patch: c.patch, ts: c.ts, seq: c.seq, replay: true };
+              ws.send(toWire(d, PSK_HEX));
+              caughtUpTo = c.seq;
+            }
+            if (rows.length < 500) break;
+          }
+          log('info', 'sync init replay', { station, since: initFrame.since_seq, caughtUpTo });
+        }
         const hqRes = await fetch(`${HQ_URL}/indents?station_id=${encodeURIComponent(station)}`, { signal: AbortSignal.timeout(5000) });
         const indents = hqRes.ok ? await hqRes.json() : [];
-        const resp: SyncInitRespFrame = { type: 'SYNC_INIT_RESP', station_id: station, server_time: new Date().toISOString(), indents };
+        const resp: SyncInitRespFrame = { type: 'SYNC_INIT_RESP', station_id: station, server_time: new Date().toISOString(), indents, ...(caughtUpTo !== undefined ? { caught_up_to: caughtUpTo } : {}) };
         if (ws.readyState === WebSocket.OPEN) ws.send(toWire(resp, PSK_HEX));
         log('info', 'sync init responded', { station, indentsCount: indents.length });
       } catch (e: unknown) {

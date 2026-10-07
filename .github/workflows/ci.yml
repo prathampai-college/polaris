@@ -37,6 +37,7 @@ jobs:
       - run: npm --prefix shared run build
       - run: npm i --legacy-peer-deps --prefix field
       - run: npx --prefix field tsc -p field/tsconfig.json --noEmit
+      - run: npm --prefix field test
       - run: npm --prefix field run build
 
   hq:
@@ -98,6 +99,7 @@ jobs:
           python -m uvicorn hq.app.main:app --port 8000 &
           for i in $(seq 1 30); do curl -sf localhost:8000/health && break; sleep 1; done
           node scripts/watchdog_verify.mjs
+      - run: node scripts/catchup_verify.mjs
 
   docker:
     runs-on: ubuntu-latest

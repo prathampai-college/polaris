@@ -29,16 +29,27 @@ function boot(): Worker {
       if (m.ok) p?.resolve(m.result); else p?.reject(new Error(m.error));
       return;
     }
+    // a dead DB worker must fail every waiting call, not leave screens spinning
+    if (m.type === 'fatal') failAll(m.error);
     for (const l of listeners) l(m as WorkerEvent);
   };
+  worker.onerror = (e) => failAll(e.message || 'DB worker crashed');
   return worker;
 }
+
+function failAll(error: string) {
+  for (const p of pending.values()) p.reject(new Error(error));
+  pending.clear();
+}
+
+const RPC_TIMEOUT_MS = 20_000;
 
 /** Typed RPC into the DB worker: `db.recordTx({...})`. Session ctx is applied worker-side. */
 export const db = new Proxy({} as Api, {
   get: (_t, method: string) => (...args: unknown[]) => new Promise((resolve, reject) => {
     const id = ++seq;
-    pending.set(id, { resolve, reject });
+    const timer = setTimeout(() => { if (pending.delete(id)) reject(new Error(`DB call ${method} timed out`)); }, RPC_TIMEOUT_MS);
+    pending.set(id, { resolve: (v) => { clearTimeout(timer); resolve(v); }, reject: (e) => { clearTimeout(timer); reject(e); } });
     boot().postMessage({ type: 'call', id, method, args });
   }),
 });

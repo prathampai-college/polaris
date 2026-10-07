@@ -141,6 +141,9 @@ check_and_escalate(): ≤20 d → CRITICAL indent · ≤60 d → MEDIUM watch ·
 - **HQ down or slow:** the gateway answers RETRY and the tablet backs off. Nothing is dead-lettered.
 - **Wrong key:** the gateway sends a plaintext KEY_MISMATCH. The tablet stops showing LIVE, and the Brief links to Comms to provision the key.
 - **Replay or duplicate channel:** HQ returns `DEDUPED` and the tablet treats it as ACKED.
+- **Tablet offline while HQ changes things:** every downstream push is first written to HQ's `change_log` with a monotonic `seq`. On reconnect the tablet sends `SYNC_INIT{since_seq}` and the gateway replays what it missed, oldest first, then `SYNC_INIT_RESP{caught_up_to}`. A per-row seq guard (`down_seq`) stops an older replayed delta overwriting a newer live one. A delta held back by unsynced local edits freezes the cursor; once the outbox drains the tablet resyncs and it applies.
+- **Satellite drops silently (socket still "open"):** if frames are in flight and nothing is heard back for 45 s, the tablet declares the link dead, reconnects, and falls back to DTN bundling. Reconnect backoff is jittered.
+- **Concurrent stock movements on two tablets:** lot and asset frames carry `delta`; HQ adds rather than overwrites, so both count. ULID dedupe keeps each delta exactly-once.
 - **Bad bundle in a batch:** its SAVEPOINT is rolled back, that bundle is marked `FAILED`, and the rest apply.
 - **Stock would go negative at HQ:** `CONFLICT_CRITICAL`. The frame is FAILED and visible in Comms.
 - **OPFS unavailable (second tab, insecure context):** the database runs in `:memory:` and the UI shows EPHEMERAL · LOST ON RELOAD.

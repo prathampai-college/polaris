@@ -1,7 +1,7 @@
 // Run: node field/lib/db/core.test.ts   (Node ≥22.18 strips types natively)
 import assert from 'node:assert/strict';
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
-import { initSchema, seedIfEmpty, mutations, queries, applyAck, applyDownstream, bundleOffline, exportOwnBundles, nextFrames, markSent, type Sqlite } from './core.ts';
+import { initSchema, seedIfEmpty, mutations, queries, applyAck, applyDownstream, applyDownstreamDelta, bundleOffline, exportOwnBundles, nextFrames, markSent, type Sqlite } from './core.ts';
 
 const sqlite3 = await sqlite3InitModule();
 const db = new sqlite3.oo1.DB(':memory:', 'c') as unknown as Sqlite;
@@ -45,6 +45,16 @@ assert.equal(applyDownstream(db, 'personnel', 'PER-BHA-03', { status: 'ON_STATIO
 db.exec("UPDATE outbox SET status='ACKED' WHERE entity='personnel'");
 assert.equal(applyDownstream(db, 'personnel', 'PER-BHA-03', { status: 'EVACUATED' }), true);
 assert.deepEqual({ ...db.selectObjects("SELECT name, status FROM personnel WHERE id='PER-BHA-03'")[0] }, { name: 'Dr. Ananya Sen', status: 'EVACUATED' });
+
+// Seq guard: replayed + live deltas can interleave; an older seq never wins
+db.exec("UPDATE outbox SET status='ACKED' WHERE entity='personnel'");
+assert.equal(applyDownstreamDelta(db, 'personnel', 'PER-BHA-03', { status: 'ON_STATION' }, 20), 'applied');
+assert.equal(applyDownstreamDelta(db, 'personnel', 'PER-BHA-03', { status: 'EVACUATED' }, 19), 'stale');
+assert.equal(db.selectValue("SELECT status FROM personnel WHERE id='PER-BHA-03'"), 'ON_STATION');
+mutations.setPersonnelStatus(db, ctx, { id: 'PER-BHA-03', status: 'IN_TRANSIT' });
+assert.equal(applyDownstreamDelta(db, 'personnel', 'PER-BHA-03', { status: 'EVACUATED' }, 21), 'held', 'unsynced local edit holds the HQ change');
+db.exec("UPDATE outbox SET status='ACKED' WHERE entity='personnel'");
+assert.equal(applyDownstreamDelta(db, 'personnel', 'PER-BHA-03', { status: 'EVACUATED' }, 21), 'applied', 'replayed after drain, it applies');
 
 // HQ stock-take keeps lots summing to the asset qty
 db.exec("UPDATE outbox SET status='ACKED' WHERE entity_id='A2'");

@@ -135,6 +135,7 @@ _MIGRATIONS = [
 def _pg_schema_sql():
     # PRAGMA lines are SQLite-only; BLOB has no PG equivalent (use BYTEA).
     sql = "\n".join(l for l in SCHEMA_SQL.splitlines() if not l.strip().upper().startswith("PRAGMA"))
+    sql = sql.replace("seq INTEGER PRIMARY KEY", "seq BIGSERIAL PRIMARY KEY")
     return sql.replace(" BLOB", " BYTEA").replace("\tBLOB", "\tBYTEA")
 
 def _run_schema(execute_one, is_pg: bool):

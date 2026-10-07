@@ -5,7 +5,7 @@ import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
 import { encode, decode } from '@msgpack/msgpack';
 import { toWire, fromWire, MAX_WIRE_SIZE } from '@polaris/shared/codec.web';
 import {
-  initSchema, seedIfEmpty, kvGet, kvSet, queries, mutations, applyAck, applyDownstream,
+  initSchema, seedIfEmpty, kvGet, kvSet, queries, mutations, applyAck, applyDownstream, applyDownstreamDelta,
   nextFrames, markSent, bundleOffline, foreignBundles, saveForeignBundle, exportOwnBundles, dropBundle,
   type Ctx, type Sqlite, type Row,
 } from './core';
@@ -37,6 +37,8 @@ const ready = (async () => {
   const sqlite3 = await sqlite3InitModule();
   let storage: 'opfs' | 'memory' = 'memory';
   let reason: string | null = null;
+  // Ask the browser not to evict OPFS under storage pressure (months of field data live here).
+  try { await (navigator as any).storage?.persist?.(); } catch { /* unsupported: best effort */ }
   try {
     const pool = await (sqlite3 as any).installOpfsSAHPoolVfs({ name: 'polaris', initialCapacity: 6 });
     db = new pool.OpfsSAHPoolDb('/polaris.db');
@@ -140,6 +142,22 @@ let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let backoff = 3_000;
 let ticking = false;
+// Downstream resume cursor (HQ change_log seq, persisted in kv 'down_seq').
+// It only moves on replayed deltas or after the replay finished, and freezes
+// once a delta is held behind local unsynced edits, so the held change is
+// replayed again (resync once the outbox drains) instead of being lost.
+let replayDone = false;
+let cursorFrozen = false;
+let lastInboundAt = 0;
+const DEAD_LINK_MS = 45_000; // frames in flight but nothing heard back: the link is dead even if the socket says open
+const advanceCursor = (seq: number) => { if (seq > Number(kvGet(db, 'down_seq') ?? 0)) kvSet(db, 'down_seq', String(seq)); };
+
+async function sendInit(sock: WebSocket) {
+  if (!session) return;
+  replayDone = false;
+  cursorFrozen = false;
+  sock.send(await toWire({ type: 'SYNC_INIT', device_id: session.ctx.deviceId, station_id: session.ctx.stationId, since_seq: Number(kvGet(db, 'down_seq') ?? 0) }, psk()));
+}
 const BATCH = 8; // 8 frames / 2s tick = 240/min, well under HQ's 600/min/device limit
 
 function closeWs() {
@@ -165,7 +183,8 @@ function connect() {
   sock.onopen = async () => {
     if (ws !== sock || !session) return;
     backoff = 3_000;
-    sock.send(await toWire({ type: 'SYNC_INIT', device_id: session.ctx.deviceId, station_id: session.ctx.stationId }, psk()));
+    lastInboundAt = Date.now();
+    await sendInit(sock);
     setLink('live', null);
     void tick();
   };
@@ -183,11 +202,13 @@ function connect() {
 function scheduleRetry() {
   if (!session || info.link === 'cut') return;
   if (reconnectTimer) clearTimeout(reconnectTimer);
-  reconnectTimer = setTimeout(connect, backoff);
+  // jitter: a fleet of tablets that lost the same link must not reconnect in lockstep
+  reconnectTimer = setTimeout(connect, backoff * (0.5 + Math.random()));
   backoff = Math.min(30_000, backoff * 2);
 }
 
 async function onFrame(data: ArrayBuffer | string) {
+  lastInboundAt = Date.now();
   if (typeof data === 'string') {
     try { if (JSON.parse(data).type === 'KEY_MISMATCH') setLink('key_mismatch', 'Gateway rejected this tablet\'s sync key'); } catch { /* ignore */ }
     return;
@@ -196,14 +217,20 @@ async function onFrame(data: ArrayBuffer | string) {
   try { f = (await fromWire(new Uint8Array(data), psk())) as Row; } catch { return setLink('key_mismatch', 'Cannot decrypt gateway frames — key mismatch'); }
   if (info.link === 'key_mismatch') setLink('live', null);
   if (f.type === 'DOWNSTREAM_DELTA') {
-    if (applyDownstream(db, String(f.entity), String(f.entity_id), f.patch ?? {})) {
+    const seq = typeof f.seq === 'number' ? f.seq : undefined;
+    const r = applyDownstreamDelta(db, String(f.entity), String(f.entity_id), f.patch ?? {}, seq);
+    if (r === 'applied') {
       changed(String(f.entity));
       info.lastPushAt = new Date().toISOString();
       emit({ type: 'push', entity: f.entity, id: f.entity_id, patch: f.patch });
     }
+    if (r === 'held') cursorFrozen = true;
+    else if (seq != null && !cursorFrozen && (f.replay || replayDone)) advanceCursor(seq);
     return;
   }
   if (f.type === 'SYNC_INIT_RESP') {
+    if (!cursorFrozen && typeof f.caught_up_to === 'number') advanceCursor(f.caught_up_to);
+    replayDone = true;
     let n = 0;
     for (const r of (f.indents ?? []) as Row[]) if (applyDownstream(db, 'indents', String(r.id), r)) n++;
     if (n) changed('indents');
@@ -229,6 +256,13 @@ async function tick() {
         markSent(db, r.ulid);
       }
       if (rows.length) changed('outbox');
+      const inFlight = Number(db.selectValue("SELECT COUNT(*) FROM outbox WHERE status='SENT'"));
+      if (inFlight > 0 && Date.now() - lastInboundAt > DEAD_LINK_MS) {
+        setLink('offline', 'No reply from gateway in 45s — link presumed dead, switching to DTN store-and-forward');
+        reconnect(0);
+      } else if (cursorFrozen && replayDone && Number(db.selectValue("SELECT COUNT(*) FROM outbox WHERE status IN ('PENDING','SENT','BUNDLED')")) === 0) {
+        await sendInit(ws); // held HQ changes can apply now that local edits are acknowledged
+      }
     } else if (info.link !== 'connecting') {
       const made = bundleOffline(db, session.ctx.stationId);
       if (made.length) {

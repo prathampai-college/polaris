@@ -168,6 +168,10 @@ export interface DownstreamDeltaFrame {
   patch: Record<string, unknown>;
   ts: string;
   vector_clock?: VectorClock;
+  /** HQ change_log order; the tablet's resume cursor. */
+  seq?: number;
+  /** Sent as part of a SYNC_INIT catch-up replay rather than live. */
+  replay?: boolean;
 }
 
 export interface SyncInitFrame {
@@ -175,6 +179,8 @@ export interface SyncInitFrame {
   device_id: string;
   station_id: string;
   last_acked_ulid?: string | null;
+  /** Replay HQ changes after this change_log seq (0 = everything). */
+  since_seq?: number;
 }
 
 export interface SyncInitRespFrame {
@@ -182,6 +188,8 @@ export interface SyncInitRespFrame {
   station_id: string;
   server_time: string;
   indents: Indent[];
+  /** Highest change_log seq replayed (present when the tablet sent since_seq). */
+  caught_up_to?: number;
 }
 
 /** Plaintext (unencrypted) control frame: the gateway could not decrypt/CRC-verify

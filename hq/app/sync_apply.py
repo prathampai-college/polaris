@@ -86,7 +86,14 @@ def apply_frame(cur, *, ulid: str, device_id: str, entity: str, entity_id: str, 
         return {"status": "DEDUPED", "server_version": (r[0] if r and r[0] is not None else 0), "message": "duplicate ULID, already applied"}, None
 
     if entity == "assets":
-        return _apply_asset(cur, ulid, device_id, entity_id, op, patch, vector_clock, ts, now), None
+        ack = _apply_asset(cur, ulid, device_id, entity_id, op, patch, vector_clock, ts, now)
+        # Push HQ's resulting row back: other tablets see the movement, and on
+        # APPLIED_LOCAL_WINS the sender learns HQ kept its own (newer) value.
+        r = cur.execute(q("SELECT a.id, a.sku, a.qty, a.version, a.crate_id, c.station_id FROM assets a LEFT JOIN crates cr ON a.crate_id=cr.id LEFT JOIN containers c ON cr.container_id=c.id WHERE a.id=?"), (entity_id,)).fetchone()
+        notify = None
+        if r and r[5]:
+            notify = (r[5], "assets", entity_id, "UPSERT", {"id": r[0], "sku": r[1], "qty": r[2], "version": r[3], "crate_id": r[4]})
+        return ack, notify
 
     cols, required, defaults = ENTITIES[entity]
     fields = {k: patch[k] for k in cols if k in patch}

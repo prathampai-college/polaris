@@ -61,30 +61,44 @@ async def _broadcast_telemetry(tele: dict):
 
 GATEWAY_INTERNAL_URL = os.getenv("GATEWAY_INTERNAL_URL", os.getenv("GATEWAY_URL", "http://localhost:8787"))
 
-async def _notify_gateway_async(station_id: str, entity: str, entity_id: str, op: str, patch: dict):
+def _log_change(station_id: str, entity: str, entity_id: str, op: str, patch: dict) -> int | None:
+    """Append to change_log; the returned seq is the tablet's resume cursor."""
+    try:
+        with _sync_txn() as cur:
+            row = cur.execute(q("INSERT INTO change_log (station_id, entity, entity_id, op, patch, ts) VALUES (?,?,?,?,?,?) RETURNING seq"),
+                              (station_id, entity, entity_id, op, _json.dumps(patch, default=str), utc_now())).fetchone()
+            return int(row[0])
+    except Exception as e:
+        logger.error(f"change_log append failed {entity}/{entity_id}: {e}")
+        return None
+
+
+async def _notify_gateway_async(station_id: str, entity: str, entity_id: str, op: str, patch: dict, seq: int | None = None):
     """Async gateway push — never blocks event loop (httpx, 1s timeout)."""
     try:
         import httpx
         url = f"{GATEWAY_INTERNAL_URL}/internal/broadcast_delta"
         psk = os.getenv("PSK_HEX", "a" * 64)  # never leak SECRET_KEY (JWT signer) as the gateway PSK
         async with httpx.AsyncClient(timeout=1.0) as client:
-            await client.post(url, json={"station_id": station_id, "entity": entity, "entity_id": entity_id, "op": op, "patch": patch}, headers={"X-PSK": psk})
+            await client.post(url, json={"station_id": station_id, "entity": entity, "entity_id": entity_id, "op": op, "patch": patch, "seq": seq}, headers={"X-PSK": psk})
     except Exception as e:
         logger.warning(f"Gateway downstream push failed ({GATEWAY_INTERNAL_URL}): {e}")
 
 def notify_gateway(station_id: str, entity: str, entity_id: str, op: str, patch: dict):
-    """Fire-and-forget gateway notify — sync callers stay non-blocking."""
+    """Fire-and-forget gateway notify — sync callers stay non-blocking. The
+    change is logged first, so a tablet that misses the push catches up later."""
+    seq = _log_change(station_id, entity, entity_id, op, patch)
     try:
         loop = asyncio.get_running_loop()
         if loop.is_running():
-            loop.create_task(_notify_gateway_async(station_id, entity, entity_id, op, patch))
+            loop.create_task(_notify_gateway_async(station_id, entity, entity_id, op, patch, seq))
             return
     except RuntimeError:
         pass
     # no running loop (e.g. sync test) — run in background thread so request never blocks
     try:
         import threading
-        threading.Thread(target=lambda: asyncio.run(_notify_gateway_async(station_id, entity, entity_id, op, patch)), daemon=True).start()
+        threading.Thread(target=lambda: asyncio.run(_notify_gateway_async(station_id, entity, entity_id, op, patch, seq)), daemon=True).start()
     except Exception as e:
         logger.debug(f"Gateway notify thread ignored: {e}")
 
@@ -135,7 +149,7 @@ app = FastAPI(title="POLARIS HQ — NCPOR Command", version="0.1.0", docs_url="/
 _current_user: ContextVar[dict | None] = ContextVar("polaris_user", default=None)
 _PSK_PATHS = ("/sync/", "/dtn/", "/telemetry")   # gateway, DTN relays, weather poller
 _OPEN_WRITES = {"/auth/login"}
-_PRIVATE_READS = ("/personnel", "/audit", "/overrides")
+_PRIVATE_READS = ("/personnel", "/audit", "/overrides", "/sync/changes")
 # (method or "*", path prefix, minimum role) — first match wins; default FIELD_OP
 _ROLE_RULES = (
     ("*", "/expeditions", "HQ_LOGISTICS"),
@@ -163,7 +177,7 @@ async def _auth_gate(request: Request, call_next):
     token = _current_user.set(user)
     try:
         if method in ("GET", "HEAD", "OPTIONS"):
-            if path.startswith(_PRIVATE_READS) and not user:
+            if path.startswith(_PRIVATE_READS) and not user and not _psk_ok(request):
                 return JSONResponse(status_code=401, content={"detail": "login required"})
             return await call_next(request)
         if path in _OPEN_WRITES or (path.startswith(_PSK_PATHS) and _psk_ok(request)):
@@ -1547,6 +1561,15 @@ def ingest(frame: DeltaFrame, request: Request):
     if notify:
         notify_gateway(*notify)
     return ack
+
+@app.get("/sync/changes")
+def sync_changes(station_id: str, since: int = 0, limit: int = 500):
+    """Downstream changes after `since` for one station (plus fleet-wide 'ALL'), oldest first."""
+    limit = max(1, min(int(limit), 1000))
+    rows = _fetch_all("SELECT seq, station_id, entity, entity_id, op, patch, ts FROM change_log WHERE seq > ? AND station_id IN (?, 'ALL') ORDER BY seq LIMIT ?", (since, station_id, limit))
+    for r in rows:
+        r["patch"] = _json.loads(r["patch"] or "{}")
+    return rows
 
 def _ingest_bundles(bundles: list) -> list:
     results, notifies = [], []

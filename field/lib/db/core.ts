@@ -22,6 +22,7 @@ export type Row = Record<string, any>;
 export const SCHEMA_SQL = `
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS down_seq (entity TEXT, entity_id TEXT, seq INTEGER, PRIMARY KEY (entity, entity_id));
 CREATE TABLE IF NOT EXISTS stations (id TEXT PRIMARY KEY, name TEXT, location TEXT, winter_crew_count INTEGER);
 CREATE TABLE IF NOT EXISTS containers (id TEXT PRIMARY KEY, station_id TEXT REFERENCES stations(id), type TEXT, position_2d TEXT);
 CREATE TABLE IF NOT EXISTS crates (id TEXT PRIMARY KEY, container_id TEXT REFERENCES containers(id), coords TEXT, temp_zone TEXT);
@@ -454,6 +455,21 @@ const DOWN: Record<string, { cols: string[]; required: string[]; pk?: string }> 
  * the entity, local wins (they'll reach HQ and come back); otherwise the server wins.
  * Returns false when skipped. Never throws — one bad row must not block the rest.
  */
+/** One HQ downstream delta. `seq` is HQ's change_log order: replayed and live
+ *  deltas can interleave after a reconnect, so an older seq never overwrites a
+ *  newer one for the same row. 'held' = local unsynced edits win for now; the
+ *  caller must not advance its resume cursor past it. */
+export function applyDownstreamDelta(db: Sqlite, entity: string, id: string, patch: Row, seq?: number): 'applied' | 'held' | 'stale' | 'noop' {
+  if (Number(db.selectValue("SELECT COUNT(*) FROM outbox WHERE entity=? AND entity_id=? AND status IN ('PENDING','SENT','BUNDLED')", [entity, id])) > 0) return 'held';
+  if (seq != null) {
+    const last = db.selectValue('SELECT seq FROM down_seq WHERE entity=? AND entity_id=?', [entity, id]);
+    if (last != null && Number(last) >= seq) return 'stale';
+  }
+  const ok = applyDownstream(db, entity, id, patch);
+  if (seq != null) run(db, 'INSERT INTO down_seq (entity, entity_id, seq) VALUES (?,?,?) ON CONFLICT(entity, entity_id) DO UPDATE SET seq=excluded.seq', [entity, id, seq]);
+  return ok ? 'applied' : 'noop';
+}
+
 export function applyDownstream(db: Sqlite, entity: string, id: string, patch: Row): boolean {
   try {
     const unsynced = Number(db.selectValue("SELECT COUNT(*) FROM outbox WHERE entity=? AND entity_id=? AND status IN ('PENDING','SENT','BUNDLED')", [entity, id]));
